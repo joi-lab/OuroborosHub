@@ -43,6 +43,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
@@ -356,6 +357,10 @@ _UI_RENDER: Dict[str, Any] = {
             "target": "result",
             "route": "generate",
             "method": "POST",
+            "job": True,
+            "status_route": "status",
+            "interval_ms": 1500,
+            "max_ticks": 120,
             "submit_label": "Generate",
             "fields": [
                 {
@@ -376,7 +381,7 @@ _UI_RENDER: Dict[str, Any] = {
                         },
                         {
                             "value": "google/gemini-3.1-flash-image-preview",
-                            "label": "Nano Banana (Gemini 3.1 Flash)",
+                            "label": "Nano Banana 2 (Gemini 3.1 Flash)",
                         },
                         {
                             "value": "google/gemini-3-pro-image-preview",
@@ -425,6 +430,7 @@ _UI_RENDER: Dict[str, Any] = {
 
 def register(api: Any) -> None:
     """PluginAPI v1 entry point. Called exactly once per load."""
+    jobs: Dict[str, Dict[str, Any]] = {}
 
     def _resolve_api_key() -> str:
         try:
@@ -465,6 +471,36 @@ def register(api: Any) -> None:
             f"?image_id={urllib.parse.quote(image_id, safe='')}"
         )
 
+    def _generate_and_persist(api_key: str, state_dir: Path, prompt: Any, model: Any) -> Dict[str, Any]:
+        result = _generate_image(api_key, prompt, model)
+        if "error" in result:
+            return result
+        try:
+            out_path, image_id = _persist_image(
+                state_dir, result["mime"], result["image_bytes"], prompt
+            )
+        except OSError as exc:
+            return {"error": f"nanobanana: failed to write image: {exc}"}
+        return {
+            "image_url": _build_media_url(image_id),
+            "download_url": _build_download_url(image_id),
+            "image_id": image_id,
+            "file_size_bytes": out_path.stat().st_size,
+            "model": result["model"],
+            "text": result.get("text", ""),
+        }
+
+    async def _run_generate_job(job_id: str, api_key: str, state_dir: Path, prompt: Any, model: Any) -> None:
+        jobs[job_id]["status"] = "running"
+        try:
+            result = await asyncio.to_thread(_generate_and_persist, api_key, state_dir, prompt, model)
+            if "error" in result:
+                jobs[job_id] = {"status": "error", "error": result["error"]}
+            else:
+                jobs[job_id] = {"status": "done", "result": result}
+        except Exception as exc:
+            jobs[job_id] = {"status": "error", "error": f"{type(exc).__name__}: {exc}"}
+
     async def _route_generate(request: Request) -> JSONResponse:
         """POST /api/extensions/nanobanana/generate"""
         try:
@@ -487,28 +523,18 @@ def register(api: Any) -> None:
                 status_code=500,
             )
 
-        def _generate_and_persist() -> Dict[str, Any]:
-            result = _generate_image(api_key, prompt, model)
-            if "error" in result:
-                return result
-            try:
-                out_path, image_id = _persist_image(
-                    state_dir, result["mime"], result["image_bytes"], prompt
-                )
-            except OSError as exc:
-                return {"error": f"nanobanana: failed to write image: {exc}"}
-            return {
-                "image_url": _build_media_url(image_id),
-                "download_url": _build_download_url(image_id),
-                "image_id": image_id,
-                "file_size_bytes": out_path.stat().st_size,
-                "model": result["model"],
-                "text": result.get("text", ""),
-            }
+        job_id = f"job_{uuid.uuid4().hex[:12]}"
+        jobs[job_id] = {"status": "queued", "message": "Image generation queued."}
+        asyncio.create_task(_run_generate_job(job_id, api_key, state_dir, prompt, model))
+        return JSONResponse({"job_id": job_id, "status": "queued", "message": "Image generation started."})
 
-        result = await asyncio.to_thread(_generate_and_persist)
-        status_code = 200 if "error" not in result else 502
-        return JSONResponse(result, status_code=status_code)
+    def _route_status(request: Request) -> JSONResponse:
+        """GET /api/extensions/nanobanana/status?job_id=..."""
+        job_id = (request.query_params.get("job_id") or "").strip()
+        job = jobs.get(job_id)
+        if not job:
+            return JSONResponse({"status": "error", "error": "job not found"}, status_code=404)
+        return JSONResponse(job)
 
     def _route_media(request: Request) -> "FileResponse | JSONResponse":
         """GET /api/extensions/nanobanana/media?image_id=...
@@ -620,6 +646,11 @@ def register(api: Any) -> None:
         "generate",
         _route_generate,
         methods=("POST",),
+    )
+    api.register_route(
+        "status",
+        _route_status,
+        methods=("GET",),
     )
     api.register_route(
         "media",

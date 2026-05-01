@@ -1,22 +1,13 @@
 ---
 name: nanobanana
-description: Generate images from a text prompt via OpenRouter's image generation
-  API (Nano Banana / Gemini Flash Image). Displays the result inside the widget and
-  saves to disk for download.
-version: 0.2.0
+description: Generate images from a text prompt via OpenRouter's image generation API (Nano Banana / Gemini Flash Image). Displays the result inside the widget and saves to disk for download.
+version: 0.2.1
 type: extension
 runtime: python3
 entry: plugin.py
-permissions:
-- net
-- tool
-- route
-- widget
-- read_settings
-env_from_settings:
-- OPENROUTER_API_KEY
-when_to_use: User wants to generate or render an image from a text description, right
-  now, inside the web UI. Also saves the image to disk so it can be downloaded.
+permissions: [net, tool, route, widget, read_settings]
+env_from_settings: [OPENROUTER_API_KEY]
+when_to_use: User wants to generate or render an image from a text description, right now, inside the web UI. Also saves the image to disk so it can be downloaded.
 ui_tab:
   tab_id: widget
   title: Nano Banana
@@ -25,46 +16,50 @@ ui_tab:
     kind: declarative
     schema_version: 1
     components:
-    - type: form
-      title: Generate an image
-      target: result
-      route: generate
-      method: POST
-      submit_label: Generate
-      fields:
-      - name: prompt
-        label: Prompt
-        type: textarea
-        required: true
-      - name: model
-        label: Model
-        type: select
-        default: google/gemini-3.1-flash-image-preview
-        options:
-        - value: google/gemini-3.1-flash-image-preview
-          label: Nano Banana (Gemini 3.1 Flash)
-        - value: google/gemini-3.1-flash-image-preview
-          label: Nano Banana (Gemini 3.1 Flash)
-        - value: google/gemini-3-pro-image-preview
-          label: Nano Banana Pro (Gemini 3 Pro)
-    - type: status
-      target: result
-      idle: Enter a prompt and press Generate.
-      loading: Generating image…
-      success: Done.
-      error: Generation failed.
-    - type: markdown
-      target: result
-      path: error
-    - type: image
-      target: result
-      path: image_url
-      label: Generated image
-      alt: Generated image
-    - type: file
-      target: result
-      path: download_url
-      label: Download image
+      - type: form
+        title: Generate an image
+        target: result
+        route: generate
+        method: POST
+        job: true
+        status_route: status
+        interval_ms: 1500
+        max_ticks: 120
+        submit_label: Generate
+        fields:
+          - name: prompt
+            label: Prompt
+            type: textarea
+            required: true
+          - name: model
+            label: Model
+            type: select
+            default: "google/gemini-3.1-flash-image-preview"
+            options:
+              - value: "google/gemini-3.1-flash-image-preview"
+                label: "Nano Banana (Gemini 3.1 Flash)"
+              - value: "google/gemini-3.1-flash-image-preview"
+                label: "Nano Banana 2 (Gemini 3.1 Flash)"
+              - value: "google/gemini-3-pro-image-preview"
+                label: "Nano Banana Pro (Gemini 3 Pro)"
+      - type: status
+        target: result
+        idle: "Enter a prompt and press Generate."
+        loading: "Generating image…"
+        success: "Done."
+        error: "Generation failed."
+      - type: markdown
+        target: result
+        path: error
+      - type: image
+        target: result
+        path: image_url
+        label: Generated image
+        alt: Generated image
+      - type: file
+        target: result
+        path: download_url
+        label: Download image
 ---
 
 # Nano Banana image generation widget

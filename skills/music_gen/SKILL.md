@@ -1,23 +1,13 @@
 ---
 name: music_gen
-description: Generate a music clip from a text prompt via OpenRouter's Google Lyria
-  model and play it directly inside the widget. Files are persisted to the skill's
-  private state directory and streamed through an extension route for both inline
-  playback and download.
-version: 0.5.0
+description: Generate a music clip from a text prompt via OpenRouter's Google Lyria model and play it directly inside the widget. Files are persisted to the skill's private state directory and streamed through an extension route for both inline playback and download.
+version: 0.5.1
 type: extension
 runtime: python3
 entry: plugin.py
-permissions:
-- net
-- tool
-- route
-- widget
-- read_settings
-env_from_settings:
-- OPENROUTER_API_KEY
-when_to_use: User wants to generate music or an audio clip from a text prompt and
-  listen to it inline in the web UI.
+permissions: [net, tool, route, widget, read_settings]
+env_from_settings: [OPENROUTER_API_KEY]
+when_to_use: User wants to generate music or an audio clip from a text prompt and listen to it inline in the web UI.
 ui_tab:
   tab_id: music_gen
   title: Music generator
@@ -26,43 +16,47 @@ ui_tab:
     kind: declarative
     schema_version: 1
     components:
-    - type: form
-      title: Generate a music clip
-      target: result
-      route: generate
-      method: POST
-      submit_label: Generate
-      fields:
-      - name: prompt
-        label: Prompt
-        type: textarea
-        required: true
-    - type: status
-      target: result
-      idle: 'Enter a music prompt and press Generate. Typical latency: 30–60 seconds.'
-      loading: Generating music — this usually takes 30–60 seconds…
-      success: Done.
-      error: Generation failed.
-    - type: markdown
-      target: result
-      path: error
-    - type: audio
-      target: result
-      path: clip_url
-      label: Generated audio
-    - type: file
-      target: result
-      path: clip_url
-      label: Download audio
-    - type: kv
-      target: result
-      fields:
-      - path: detected
-        label: Format
-      - path: mime
-        label: MIME
-      - path: file_size_bytes
-        label: File size
+      - type: form
+        title: Generate a music clip
+        target: result
+        route: generate
+        method: POST
+        job: true
+        status_route: status
+        interval_ms: 2000
+        max_ticks: 180
+        submit_label: Generate
+        fields:
+          - name: prompt
+            label: Prompt
+            type: textarea
+            required: true
+      - type: status
+        target: result
+        idle: "Enter a music prompt and press Generate. Typical latency: 30–60 seconds."
+        loading: "Generating music — this usually takes 30–60 seconds…"
+        success: "Done."
+        error: "Generation failed."
+      - type: markdown
+        target: result
+        path: error
+      - type: audio
+        target: result
+        path: clip_url
+        label: Generated audio
+      - type: file
+        target: result
+        path: clip_url
+        label: Download audio
+      - type: kv
+        target: result
+        fields:
+          - path: detected
+            label: Format
+          - path: mime
+            label: MIME
+          - path: file_size_bytes
+            label: File size
 ---
 
 # Music generation widget

@@ -46,6 +46,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
@@ -328,6 +329,10 @@ _UI_RENDER: Dict[str, Any] = {
             "target": "result",
             "route": "generate",
             "method": "POST",
+            "job": True,
+            "status_route": "status",
+            "interval_ms": 2000,
+            "max_ticks": 180,
             "submit_label": "Generate",
             "fields": [
                 {
@@ -384,6 +389,7 @@ _UI_RENDER: Dict[str, Any] = {
 
 def register(api: Any) -> None:
     """PluginAPI v1 entry point. Called exactly once per load."""
+    jobs: Dict[str, Dict[str, Any]] = {}
 
     def _resolve_api_key() -> str:
         try:
@@ -416,6 +422,35 @@ def register(api: Any) -> None:
             f"?clip_id={urllib.parse.quote(clip_id, safe='')}"
         )
 
+    def _generate_and_persist(api_key: str, state_dir: Path, prompt: Any) -> Dict[str, Any]:
+        result = _generate_audio_bytes(api_key, prompt)
+        if "error" in result:
+            return result
+        try:
+            out_path, clip_id = _persist_clip(state_dir, result, prompt)
+        except OSError as exc:
+            return {"error": f"music_gen: failed to write clip: {exc}"}
+        return {
+            "clip_url": _build_clip_url(clip_id),
+            "clip_id": clip_id,
+            "file_size_bytes": out_path.stat().st_size,
+            "mime": result["mime"],
+            "detected": result["detected"],
+            "model": result["model"],
+            "text": result.get("text", ""),
+        }
+
+    async def _run_generate_job(job_id: str, api_key: str, state_dir: Path, prompt: Any) -> None:
+        jobs[job_id]["status"] = "running"
+        try:
+            result = await asyncio.to_thread(_generate_and_persist, api_key, state_dir, prompt)
+            if "error" in result:
+                jobs[job_id] = {"status": "error", "error": result["error"]}
+            else:
+                jobs[job_id] = {"status": "done", "result": result}
+        except Exception as exc:
+            jobs[job_id] = {"status": "error", "error": f"{type(exc).__name__}: {exc}"}
+
     async def _route_generate(request: Request) -> JSONResponse:
         """POST /api/extensions/music_gen/generate"""
         try:
@@ -437,27 +472,18 @@ def register(api: Any) -> None:
                 status_code=500,
             )
 
-        def _generate_and_persist() -> Dict[str, Any]:
-            result = _generate_audio_bytes(api_key, prompt)
-            if "error" in result:
-                return result
-            try:
-                out_path, clip_id = _persist_clip(state_dir, result, prompt)
-            except OSError as exc:
-                return {"error": f"music_gen: failed to write clip: {exc}"}
-            return {
-                "clip_url": _build_clip_url(clip_id),
-                "clip_id": clip_id,
-                "file_size_bytes": out_path.stat().st_size,
-                "mime": result["mime"],
-                "detected": result["detected"],
-                "model": result["model"],
-                "text": result.get("text", ""),
-            }
+        job_id = f"job_{uuid.uuid4().hex[:12]}"
+        jobs[job_id] = {"status": "queued", "message": "Music generation queued."}
+        asyncio.create_task(_run_generate_job(job_id, api_key, state_dir, prompt))
+        return JSONResponse({"job_id": job_id, "status": "queued", "message": "Music generation started."})
 
-        result = await asyncio.to_thread(_generate_and_persist)
-        status_code = 200 if "error" not in result else 502
-        return JSONResponse(result, status_code=status_code)
+    def _route_status(request: Request) -> JSONResponse:
+        """GET /api/extensions/music_gen/status?job_id=..."""
+        job_id = (request.query_params.get("job_id") or "").strip()
+        job = jobs.get(job_id)
+        if not job:
+            return JSONResponse({"status": "error", "error": "job not found"}, status_code=404)
+        return JSONResponse(job)
 
     def _route_download(request: Request) -> Response:
         """GET /api/extensions/music_gen/download?clip_id=..."""
@@ -539,6 +565,7 @@ def register(api: Any) -> None:
         timeout_sec=_TIMEOUT_SEC + 15,
     )
     api.register_route("generate", _route_generate, methods=("POST",))
+    api.register_route("status", _route_status, methods=("GET",))
     api.register_route("download", _route_download, methods=("GET",))
     api.register_ui_tab(
         "music_gen",
