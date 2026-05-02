@@ -79,6 +79,44 @@
           "size": 7063
         }
       ]
+    },
+    {
+      "slug": "duckduckgo",
+      "name": "duckduckgo",
+      "description": "Web search via DuckDuckGo — free, no API key required. Returns titles, URLs, and snippets. Requires the `ddgs` Python package (pip install ddgs).",
+      "version": "0.1.0",
+      "type": "extension",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "sha256": "b0655c9b913b90a62c4ad141bd6cf1430e6a56502e23f767547f0e1098acb420",
+          "size": 1695
+        },
+        {
+          "path": "plugin.py",
+          "sha256": "0815813e5102b4e036fbc6f7929f9057335de3b0c55f57d5b371eb58132ce0bc",
+          "size": 5307
+        }
+      ]
+    },
+    {
+      "slug": "perplexity",
+      "name": "perplexity",
+      "description": "Deep web research via OpenRouter web_search server tool. Uses any model + grounded search with citations. Requires OPENROUTER_API_KEY in Settings.",
+      "version": "0.1.1",
+      "type": "extension",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "sha256": "5ff32096a17097ec7d7cffa50d88997d14f78cb936957b526d3d6f6c4b892f74",
+          "size": 2125
+        },
+        {
+          "path": "plugin.py",
+          "sha256": "0cd2050169a15eddde78185a3f97828f9a841b683be0cabe9093c332593813f4",
+          "size": 8682
+        }
+      ]
     }
   ]
 }
