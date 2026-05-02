@@ -8,18 +8,18 @@
       "slug": "music_gen",
       "name": "music_gen",
       "description": "Generate a music clip from a text prompt via OpenRouter's Google Lyria model and play it directly inside the widget. Files are persisted to the skill's private state directory and streamed through an extension route for both inline playback and download.",
-      "version": "0.5.1",
+      "version": "0.5.3",
       "type": "extension",
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "7372883edf433bd969fd017f24705c68a122973deb5ae0332c665c87db2a85dc",
+          "sha256": "2aa533db76e5b2688f699162bef835afb2b5a6ef55386d5b9d392538e425e9b6",
           "size": 3716
         },
         {
           "path": "plugin.py",
-          "sha256": "b51ad9c8f7bc4e8822000c0a94eda87809b60158c3f90195225293f53c517d10",
-          "size": 20426
+          "sha256": "c07a613df16ed3c02c45290a9e6f13875bfe0d6368ca1d92cdaa0129699284a3",
+          "size": 21481
         }
       ]
     },
@@ -27,18 +27,18 @@
       "slug": "nanobanana",
       "name": "nanobanana",
       "description": "Generate images from a text prompt via OpenRouter's image generation API (Nano Banana / Gemini Flash Image). Displays the result inside the widget and saves to disk for download.",
-      "version": "0.2.1",
+      "version": "0.2.3",
       "type": "extension",
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "7d540fbf0ffdee1862a0aecfb6089db7dbc611cf18f815f14fa5a7ef534597e4",
+          "sha256": "4626b72ea4c3756fb322da69c47f8ea80f144e8d4e0bf151e39180428dec88c4",
           "size": 4739
         },
         {
           "path": "plugin.py",
-          "sha256": "24f365054f3a17860ba439fe53a03b880a737d80135bee751a1c73dd5cbe9e90",
-          "size": 23807
+          "sha256": "913d94658fd5440096904973175cfc25c33b898c3595de04835a55ef56535a0c",
+          "size": 24862
         }
       ]
     },

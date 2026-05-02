@@ -390,6 +390,24 @@ _UI_RENDER: Dict[str, Any] = {
 def register(api: Any) -> None:
     """PluginAPI v1 entry point. Called exactly once per load."""
     jobs: Dict[str, Dict[str, Any]] = {}
+    tasks: Dict[str, asyncio.Task[Any]] = {}
+    loop = asyncio.get_running_loop()
+    _MAX_JOBS = 25
+
+    def _prune_jobs() -> None:
+        terminal = [job_id for job_id, job in jobs.items() if job.get("status") in {"done", "error"}]
+        while len(jobs) > _MAX_JOBS and terminal:
+            jobs.pop(terminal.pop(0), None)
+
+    def _cleanup_jobs() -> None:
+        for job_id, task in list(tasks.items()):
+            if not task.done():
+                loop.call_soon_threadsafe(task.cancel)
+                jobs[job_id] = {
+                    "status": "error",
+                    "error": "generation cancelled because extension unloaded",
+                }
+        tasks.clear()
 
     def _resolve_api_key() -> str:
         try:
@@ -448,8 +466,10 @@ def register(api: Any) -> None:
                 jobs[job_id] = {"status": "error", "error": result["error"]}
             else:
                 jobs[job_id] = {"status": "done", "result": result}
+            _prune_jobs()
         except Exception as exc:
             jobs[job_id] = {"status": "error", "error": f"{type(exc).__name__}: {exc}"}
+            _prune_jobs()
 
     async def _route_generate(request: Request) -> JSONResponse:
         """POST /api/extensions/music_gen/generate"""
@@ -463,6 +483,8 @@ def register(api: Any) -> None:
 
         if not _normalize_prompt(prompt):
             return JSONResponse({"error": "prompt is empty"}, status_code=400)
+        if len(tasks) >= _MAX_JOBS:
+            return JSONResponse({"error": "too many active generation jobs; wait for one to finish"}, status_code=429)
 
         api_key = _resolve_api_key()
         state_dir = _resolve_state_dir()
@@ -474,7 +496,9 @@ def register(api: Any) -> None:
 
         job_id = f"job_{uuid.uuid4().hex[:12]}"
         jobs[job_id] = {"status": "queued", "message": "Music generation queued."}
-        asyncio.create_task(_run_generate_job(job_id, api_key, state_dir, prompt))
+        task = asyncio.create_task(_run_generate_job(job_id, api_key, state_dir, prompt))
+        tasks[job_id] = task
+        task.add_done_callback(lambda _task, _job_id=job_id: tasks.pop(_job_id, None))
         return JSONResponse({"job_id": job_id, "status": "queued", "message": "Music generation started."})
 
     def _route_status(request: Request) -> JSONResponse:
@@ -564,6 +588,7 @@ def register(api: Any) -> None:
         },
         timeout_sec=_TIMEOUT_SEC + 15,
     )
+    api.on_unload(_cleanup_jobs)
     api.register_route("generate", _route_generate, methods=("POST",))
     api.register_route("status", _route_status, methods=("GET",))
     api.register_route("download", _route_download, methods=("GET",))

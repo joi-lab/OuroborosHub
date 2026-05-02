@@ -1,7 +1,7 @@
 ---
 name: nanobanana
 description: Generate images from a text prompt via OpenRouter's image generation API (Nano Banana / Gemini Flash Image). Displays the result inside the widget and saves to disk for download.
-version: 0.2.1
+version: 0.2.3
 type: extension
 runtime: python3
 entry: plugin.py

@@ -1,7 +1,7 @@
 ---
 name: music_gen
 description: Generate a music clip from a text prompt via OpenRouter's Google Lyria model and play it directly inside the widget. Files are persisted to the skill's private state directory and streamed through an extension route for both inline playback and download.
-version: 0.5.1
+version: 0.5.3
 type: extension
 runtime: python3
 entry: plugin.py
