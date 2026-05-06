@@ -1,12 +1,14 @@
 ---
 name: duckduckgo
 description: Web search via DuckDuckGo — free, no API key required. Returns titles, URLs, and snippets.
-version: 0.1.0
+version: 0.1.1
 type: extension
 runtime: python3
 entry: plugin.py
 permissions: [net, tool, route, widget]
 env_from_settings: []
+dependencies:
+  - ddgs
 when_to_use: User asks to search the web, find information, look up facts, or research a topic — and no OpenAI key is available for web_search.
 timeout_sec: 60
 ui_tab:
@@ -49,8 +51,8 @@ No API keys required — works with any Ouroboros configuration.
 
 ## Dependencies
 
-Requires the `ddgs` Python package (`pip install ddgs`). The skill
-expects it to be pre-installed in the Python environment.
+Requires the `ddgs` Python package. Ouroboros installs it automatically
+from the manifest `dependencies` declaration during review/install.
 
 ## Network policy
 
