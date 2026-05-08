@@ -123,6 +123,69 @@
           "size": 8682
         }
       ]
+    },
+    {
+      "slug": "a2a",
+      "name": "a2a",
+      "description": "Agent-to-Agent protocol bridge for Ouroboros. Provides a local A2A-compatible server plus client tools for discovering and messaging other A2A agents.",
+      "version": "1.0.0",
+      "type": "extension",
+      "install_specs": [
+        {
+          "kind": "pip",
+          "package": "protobuf<6"
+        },
+        {
+          "kind": "pip",
+          "package": "a2a-sdk[http-server]>=1.0.0,<2.0.0"
+        }
+      ],
+      "files": [
+        {
+          "path": "SKILL.md",
+          "sha256": "3e58e5902f46fa6c0e9c33c704ad85cd00db06d289e67dddd13d3f6c514144dd",
+          "size": 1354
+        },
+        {
+          "path": "plugin.py",
+          "sha256": "9c901ca1bf452fafa0d3a40a6145a3e179387f6afefcb88bf92cc28134ebf016",
+          "size": 4632
+        },
+        {
+          "path": "lib/client.py",
+          "sha256": "d02c91b61f80cfbee9f059a71160d4b6d3e020ddb09031393cf0da6f32dcb219",
+          "size": 2410
+        },
+        {
+          "path": "scripts/a2a_daemon.py",
+          "sha256": "49e82d0d7a3c559e0d1e985e392d318b1a1530f61c5ced6f1769dc0d4d05fa9e",
+          "size": 10921
+        }
+      ]
+    },
+    {
+      "slug": "telegram-bridge",
+      "name": "telegram-bridge",
+      "description": "Bidirectional Telegram bot bridge for Ouroboros. Polls Telegram for inbound text/photos and mirrors host chat output back to Telegram.",
+      "version": "1.0.0",
+      "type": "extension",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "sha256": "b88570c659fd2bc14719bee436f0429a297a2be457efc873eb1f64d68537a5d8",
+          "size": 933
+        },
+        {
+          "path": "plugin.py",
+          "sha256": "aba17abaa3a8e495a20eaa72fe3bb851892e6b4849c42633f4d080936f2f20d0",
+          "size": 5080
+        },
+        {
+          "path": "lib/telegram_api.py",
+          "sha256": "86aa62d093f01b1ce591b96ebfa0aa623f03716395494c58423a93f2ecd14be9",
+          "size": 2398
+        }
+      ]
     }
   ]
 }
