@@ -148,8 +148,8 @@
         },
         {
           "path": "plugin.py",
-          "sha256": "9c901ca1bf452fafa0d3a40a6145a3e179387f6afefcb88bf92cc28134ebf016",
-          "size": 4632
+          "sha256": "9def41cdb61501ba1150b4d759bed62ace8f2a46a6cb6b0362039c97397a771e",
+          "size": 3764
         },
         {
           "path": "lib/client.py",
@@ -158,8 +158,8 @@
         },
         {
           "path": "scripts/a2a_daemon.py",
-          "sha256": "49e82d0d7a3c559e0d1e985e392d318b1a1530f61c5ced6f1769dc0d4d05fa9e",
-          "size": 10921
+          "sha256": "23b2a06897879017f1592bdec162f776720d68c56b210b451ca78ab31d675483",
+          "size": 11374
         }
       ]
     },

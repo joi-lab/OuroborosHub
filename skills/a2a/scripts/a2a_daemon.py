@@ -44,11 +44,22 @@ except Exception:
 STATE_DIR = pathlib.Path(os.environ.get("OUROBOROS_SKILL_STATE_DIR") or ".")
 HOST_SERVICE_URL = os.environ.get("HOST_SERVICE_URL", "http://127.0.0.1:8767").rstrip("/")
 HOST_SERVICE_TOKEN = os.environ.get("HOST_SERVICE_TOKEN", "")
-A2A_HOST = os.environ.get("A2A_HOST", "127.0.0.1")
-A2A_PORT = int(os.environ.get("A2A_PORT", "18800"))
-A2A_AGENT_NAME = os.environ.get("A2A_AGENT_NAME", "Ouroboros")
-A2A_AGENT_DESCRIPTION = os.environ.get("A2A_AGENT_DESCRIPTION", "Ouroboros A2A peer")
-A2A_SERVER_PASSWORD = os.environ.get("A2A_SERVER_PASSWORD", "").strip()
+
+
+def _load_settings() -> Dict[str, Any]:
+    path = STATE_DIR / "settings.json"
+    try:
+        return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    except Exception:
+        return {}
+
+
+_SETTINGS = _load_settings()
+A2A_HOST = os.environ.get("A2A_HOST") or str(_SETTINGS.get("A2A_HOST") or "127.0.0.1")
+A2A_PORT = int(os.environ.get("A2A_PORT") or _SETTINGS.get("A2A_PORT") or "18800")
+A2A_AGENT_NAME = os.environ.get("A2A_AGENT_NAME") or str(_SETTINGS.get("A2A_AGENT_NAME") or "Ouroboros")
+A2A_AGENT_DESCRIPTION = os.environ.get("A2A_AGENT_DESCRIPTION") or str(_SETTINGS.get("A2A_AGENT_DESCRIPTION") or "Ouroboros A2A peer")
+A2A_SERVER_PASSWORD = (os.environ.get("A2A_SERVER_PASSWORD") or str(_SETTINGS.get("A2A_SERVER_PASSWORD") or "")).strip()
 
 
 def _host_headers() -> Dict[str, str]:

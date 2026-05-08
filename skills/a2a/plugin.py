@@ -103,23 +103,5 @@ def register(api):
         },
     )
     info = api.get_runtime_info()
-    settings = _load_settings(api)
-    host_port = os.environ.get("OUROBOROS_HOST_SERVICE_PORT", "8767")
-    env = {
-        "HOST_SERVICE_URL": f"http://127.0.0.1:{host_port}",
-        "HOST_SERVICE_TOKEN": api.get_skill_token().use_in_request(),
-        "A2A_HOST": str(settings.get("A2A_HOST") or "127.0.0.1"),
-        "A2A_PORT": str(settings.get("A2A_PORT") or "18800"),
-        "A2A_AGENT_NAME": str(settings.get("A2A_AGENT_NAME") or "Ouroboros"),
-        "A2A_AGENT_DESCRIPTION": str(settings.get("A2A_AGENT_DESCRIPTION") or "Ouroboros A2A peer"),
-        "A2A_SERVER_PASSWORD": str(settings.get("A2A_SERVER_PASSWORD") or ""),
-        "OUROBOROS_SKILL_STATE_DIR": str(info.get("state_dir") or api.get_state_dir()),
-    }
-    api.register_companion_process(
-        "a2a_server",
-        ["python3", "scripts/a2a_daemon.py"],
-        runtime="python3",
-        env=env,
-        restart_policy="on_failure",
-        max_restarts=5,
-    )
+    api.get_skill_token()
+    api.register_companion_process("a2a_server")
