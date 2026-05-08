@@ -177,13 +177,13 @@
         },
         {
           "path": "plugin.py",
-          "sha256": "aba17abaa3a8e495a20eaa72fe3bb851892e6b4849c42633f4d080936f2f20d0",
-          "size": 5080
+          "sha256": "b2452ca441a6c5b51352b4c5e5a43b09ef46681800225107db08766d0eec7c8e",
+          "size": 5434
         },
         {
           "path": "lib/telegram_api.py",
-          "sha256": "86aa62d093f01b1ce591b96ebfa0aa623f03716395494c58423a93f2ecd14be9",
-          "size": 2398
+          "sha256": "de7934bf3a67159bfa314f448c56b3552a2cb84b047f3b044bc5d9f80e1c70af",
+          "size": 2780
         }
       ]
     }

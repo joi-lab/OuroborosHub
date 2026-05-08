@@ -112,9 +112,17 @@ def _make_typing(api):
 
 def _make_photo(api):
     async def handle(event: Dict[str, Any]) -> None:
-        # Photo mirroring is intentionally deferred until the host event carries
-        # reviewed file routing rather than only a caption/mime summary.
-        return None
+        settings = api.get_settings(["TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID"])
+        client = TelegramClient(settings.get("TELEGRAM_BOT_TOKEN", ""))
+        chat_id = _target_chat(settings, event)
+        image_base64 = str(event.get("image_base64") or "").strip()
+        if chat_id and image_base64:
+            await client.send_photo(
+                chat_id,
+                image_base64,
+                caption=str(event.get("caption") or ""),
+                mime=str(event.get("mime") or "image/png"),
+            )
     return handle
 
 

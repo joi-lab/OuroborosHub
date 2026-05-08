@@ -37,6 +37,11 @@ class TelegramClient:
     async def send_chat_action(self, chat_id: int, action: str = "typing") -> None:
         await self.call("sendChatAction", data={"chat_id": str(chat_id), "action": action}, timeout=10)
 
+    async def send_photo(self, chat_id: int, image_base64: str, *, caption: str = "", mime: str = "image/png") -> None:
+        filename = "image.png" if mime == "image/png" else "image.jpg"
+        files = {"photo": (filename, base64.b64decode(image_base64), mime)}
+        await self.call("sendPhoto", data={"chat_id": str(chat_id), "caption": caption}, files=files, timeout=30)
+
     async def download_photo(self, file_id: str) -> tuple[str, str]:
         payload = await self.call("getFile", data={"file_id": file_id}, timeout=20)
         file_path = str((payload.get("result") or {}).get("file_path") or "").strip()
