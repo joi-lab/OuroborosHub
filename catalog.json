@@ -148,8 +148,8 @@
         },
         {
           "path": "plugin.py",
-          "sha256": "9def41cdb61501ba1150b4d759bed62ace8f2a46a6cb6b0362039c97397a771e",
-          "size": 3764
+          "sha256": "53a4c5bec540da7c33290171d80089e0edf76f9afc00025871a83941f4dda238",
+          "size": 4081
         },
         {
           "path": "lib/client.py",
@@ -158,8 +158,8 @@
         },
         {
           "path": "scripts/a2a_daemon.py",
-          "sha256": "23b2a06897879017f1592bdec162f776720d68c56b210b451ca78ab31d675483",
-          "size": 11374
+          "sha256": "5b5edf333b1676445ee4a0b6a3151e54dc5b2348ab148c08eb18dc8948d62b05",
+          "size": 12120
         }
       ]
     },
@@ -172,13 +172,13 @@
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "b88570c659fd2bc14719bee436f0429a297a2be457efc873eb1f64d68537a5d8",
-          "size": 933
+          "sha256": "96ed624979d1652ddccc705dccad6f2a884f42606044b3d6339fb160cd79c8be",
+          "size": 1188
         },
         {
           "path": "plugin.py",
-          "sha256": "b2452ca441a6c5b51352b4c5e5a43b09ef46681800225107db08766d0eec7c8e",
-          "size": 5434
+          "sha256": "9fe02372e9c7d533cad58a9fbe82a174b5f85af15368879c0e370aba3d59c036",
+          "size": 8606
         },
         {
           "path": "lib/telegram_api.py",

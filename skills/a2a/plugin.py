@@ -33,6 +33,7 @@ def _make_settings_save(api):
             "A2A_AGENT_NAME",
             "A2A_AGENT_DESCRIPTION",
             "A2A_MAX_CONCURRENT",
+            "A2A_RESPONSE_TIMEOUT_SEC",
             "A2A_TASK_TTL_HOURS",
             "A2A_SERVER_PASSWORD",
         }
@@ -95,6 +96,8 @@ def register(api):
                         {"name": "A2A_PORT", "label": "Port", "type": "number", "placeholder": "18800"},
                         {"name": "A2A_AGENT_NAME", "label": "Agent name", "type": "text"},
                         {"name": "A2A_AGENT_DESCRIPTION", "label": "Description", "type": "textarea"},
+                        {"name": "A2A_MAX_CONCURRENT", "label": "Max concurrent inbound requests", "type": "number", "placeholder": "5"},
+                        {"name": "A2A_RESPONSE_TIMEOUT_SEC", "label": "Response timeout seconds", "type": "number", "placeholder": "600"},
                         {"name": "A2A_SERVER_PASSWORD", "label": "Server password for non-loopback binds", "type": "password"},
                     ],
                     "submit_label": "Save A2A settings",

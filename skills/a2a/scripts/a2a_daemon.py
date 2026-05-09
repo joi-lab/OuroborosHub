@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import pathlib
 import inspect
+import re
 import uuid
 import base64
 from typing import Any, Dict
@@ -60,6 +62,27 @@ A2A_PORT = int(os.environ.get("A2A_PORT") or _SETTINGS.get("A2A_PORT") or "18800
 A2A_AGENT_NAME = os.environ.get("A2A_AGENT_NAME") or str(_SETTINGS.get("A2A_AGENT_NAME") or "Ouroboros")
 A2A_AGENT_DESCRIPTION = os.environ.get("A2A_AGENT_DESCRIPTION") or str(_SETTINGS.get("A2A_AGENT_DESCRIPTION") or "Ouroboros A2A peer")
 A2A_SERVER_PASSWORD = (os.environ.get("A2A_SERVER_PASSWORD") or str(_SETTINGS.get("A2A_SERVER_PASSWORD") or "")).strip()
+
+
+def _setting_int(name: str, default: int, *, minimum: int = 1, maximum: int = 600) -> int:
+    try:
+        value = int(os.environ.get(name) or _SETTINGS.get(name) or default)
+    except (TypeError, ValueError):
+        value = default
+    return max(minimum, min(maximum, value))
+
+
+A2A_MAX_CONCURRENT = _setting_int("A2A_MAX_CONCURRENT", 5, minimum=1, maximum=20)
+A2A_RESPONSE_TIMEOUT_SEC = _setting_int("A2A_RESPONSE_TIMEOUT_SEC", 600, minimum=1, maximum=600)
+_A2A_SEMAPHORE = None
+_SLASH_COMMAND_RE = re.compile(r"^\s*/[A-Za-z]")
+
+
+def _get_semaphore() -> asyncio.Semaphore:
+    global _A2A_SEMAPHORE
+    if _A2A_SEMAPHORE is None:
+        _A2A_SEMAPHORE = asyncio.Semaphore(A2A_MAX_CONCURRENT)
+    return _A2A_SEMAPHORE
 
 
 def _host_headers() -> Dict[str, str]:
@@ -187,29 +210,7 @@ async def jsonrpc(request: Request) -> JSONResponse:
     text = _extract_text(params)
     task_id = str((params.get("message") or {}).get("taskId") or uuid.uuid4().hex)
     try:
-        alloc = httpx.post(
-            f"{HOST_SERVICE_URL}/chat/allocate-internal",
-            headers=_host_headers(),
-            json={"range_name": "a2a"},
-            timeout=5,
-        )
-        alloc.raise_for_status()
-        chat_id = int(alloc.json()["chat_id"])
-        injected = httpx.post(
-            f"{HOST_SERVICE_URL}/chat/inject",
-            headers=_host_headers(),
-            json={
-                "text": text,
-                "chat_id": chat_id,
-                "source": "a2a",
-                "sender_label": "A2A",
-                "wait_for_response": True,
-                "timeout_sec": 1800,
-            },
-            timeout=1810,
-        )
-        injected.raise_for_status()
-        response_text = injected.json().get("response") or ""
+        response_text = await _dispatch_to_host(text)
         task = {
             "id": task_id,
             "contextId": (params.get("message") or {}).get("contextId") or task_id,
@@ -256,7 +257,7 @@ class OuroborosExecutor(AgentExecutor if _A2A_SDK_AVAILABLE else object):
             await result
 
 
-async def _dispatch_to_host(text: str) -> str:
+def _dispatch_to_host_sync(text: str) -> str:
     alloc = httpx.post(
         f"{HOST_SERVICE_URL}/chat/allocate-internal",
         headers=_host_headers(),
@@ -274,12 +275,31 @@ async def _dispatch_to_host(text: str) -> str:
             "source": "a2a",
             "sender_label": "A2A",
             "wait_for_response": True,
-            "timeout_sec": 1800,
+            "timeout_sec": A2A_RESPONSE_TIMEOUT_SEC,
+            "transport": {
+                "kind": "a2a",
+                "conversation_id": str(chat_id),
+                "sender_label": "A2A",
+            },
         },
-        timeout=1810,
+        timeout=A2A_RESPONSE_TIMEOUT_SEC + 10,
     )
     injected.raise_for_status()
     return str(injected.json().get("response") or "")
+
+
+async def _dispatch_to_host(text: str) -> str:
+    if _SLASH_COMMAND_RE.match(text or ""):
+        raise ValueError("slash commands are reserved for direct owner input")
+    try:
+        semaphore = _get_semaphore()
+        await asyncio.wait_for(semaphore.acquire(), timeout=0.1)
+    except asyncio.TimeoutError as exc:
+        raise RuntimeError("A2A server is busy; retry later") from exc
+    try:
+        return await asyncio.to_thread(_dispatch_to_host_sync, text)
+    finally:
+        semaphore.release()
 
 
 def _build_app() -> Starlette:
