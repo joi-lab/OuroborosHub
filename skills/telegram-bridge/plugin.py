@@ -208,7 +208,7 @@ def register(api):
                         {"name": "TELEGRAM_MAX_UPDATES_PER_POLL", "label": "Max updates per poll", "type": "number", "placeholder": "20"},
                     ],
                     "submit_label": "Save Telegram settings",
-                },
+                }
             ]
         },
     )

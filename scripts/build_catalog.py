@@ -3,8 +3,28 @@
 from __future__ import annotations
 import hashlib, json, pathlib, yaml
 root = pathlib.Path(__file__).resolve().parents[1]
+existing_order = {}
+existing_entries = {}
+catalog_path = root / 'catalog.json'
+if catalog_path.exists():
+    try:
+        current = json.loads(catalog_path.read_text(encoding='utf-8'))
+        existing_entries = {
+            str(skill.get('slug') or ''): dict(skill)
+            for skill in current.get('skills') or []
+            if str(skill.get('slug') or '')
+        }
+        existing_order = {
+            str(skill.get('slug') or ''): idx
+            for idx, skill in enumerate(current.get('skills') or [])
+        }
+    except Exception:
+        existing_order = {}
+        existing_entries = {}
 skills = []
-for skill_dir in sorted((root / 'skills').iterdir()):
+skill_dirs = [p for p in (root / 'skills').iterdir() if p.is_dir()]
+skill_dirs.sort(key=lambda p: (existing_order.get(p.name, 10_000), p.name))
+for skill_dir in skill_dirs:
     if not skill_dir.is_dir() or not (skill_dir / 'SKILL.md').is_file():
         continue
     text = (skill_dir / 'SKILL.md').read_text(encoding='utf-8')
@@ -21,6 +41,12 @@ for skill_dir in sorted((root / 'skills').iterdir()):
         if path.is_file():
             data = path.read_bytes()
             files.append({'path': rel, 'sha256': hashlib.sha256(data).hexdigest(), 'size': len(data)})
-    skills.append({'slug': skill_dir.name, 'name': front.get('name', skill_dir.name), 'description': front.get('description', ''), 'version': str(front.get('version', '0.1.0')), 'type': front.get('type', 'instruction'), 'files': files})
+    entry = dict(existing_entries.get(skill_dir.name) or {})
+    entry.update({'slug': skill_dir.name, 'name': front.get('name', skill_dir.name), 'version': str(front.get('version', '0.1.0')), 'type': front.get('type', 'instruction'), 'files': files})
+    if not entry.get('description'):
+        entry['description'] = front.get('description', '')
+    if front.get('install_specs'):
+        entry['install_specs'] = front.get('install_specs')
+    skills.append(entry)
 catalog = {'schema_version': 1, 'name': 'OuroborosHub', 'description': 'Official Ouroboros skills catalog.', 'raw_base_url': 'https://raw.githubusercontent.com/joi-lab/OuroborosHub/main', 'skills': skills}
-(root / 'catalog.json').write_text(json.dumps(catalog, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
+catalog_path.write_text(json.dumps(catalog, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')

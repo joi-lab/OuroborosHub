@@ -147,19 +147,24 @@
           "size": 1354
         },
         {
-          "path": "plugin.py",
-          "sha256": "53a4c5bec540da7c33290171d80089e0edf76f9afc00025871a83941f4dda238",
-          "size": 4081
-        },
-        {
           "path": "lib/client.py",
           "sha256": "d02c91b61f80cfbee9f059a71160d4b6d3e020ddb09031393cf0da6f32dcb219",
           "size": 2410
         },
         {
+          "path": "plugin.py",
+          "sha256": "2266580933c4b303e9124e8d5f195f16f09e4904e187b9a6cd47dbebb1f5b878",
+          "size": 4149
+        },
+        {
           "path": "scripts/a2a_daemon.py",
-          "sha256": "5b5edf333b1676445ee4a0b6a3151e54dc5b2348ab148c08eb18dc8948d62b05",
-          "size": 12120
+          "sha256": "8400b800432a3982b734913f839e2a30358173b98fe952b546abc86f068091eb",
+          "size": 13321
+        },
+        {
+          "path": "tests/test_a2a_daemon_safety.py",
+          "sha256": "98fbb7c4b4fa535df7f4c6928925198fefc961c107723f9412f24ff80b87e2a5",
+          "size": 3411
         }
       ]
     },
@@ -176,14 +181,19 @@
           "size": 1188
         },
         {
-          "path": "plugin.py",
-          "sha256": "9fe02372e9c7d533cad58a9fbe82a174b5f85af15368879c0e370aba3d59c036",
-          "size": 8606
-        },
-        {
           "path": "lib/telegram_api.py",
           "sha256": "de7934bf3a67159bfa314f448c56b3552a2cb84b047f3b044bc5d9f80e1c70af",
           "size": 2780
+        },
+        {
+          "path": "plugin.py",
+          "sha256": "b13267f14b12819011a7f81ae536a309b5263e60ee85006104a914e073aa5f5f",
+          "size": 8605
+        },
+        {
+          "path": "tests/test_telegram_bridge_safety.py",
+          "sha256": "498aeeeb77a95f918021b37daec9337afb9d08e0246205267f1882a2136f0e2f",
+          "size": 4617
         }
       ]
     }

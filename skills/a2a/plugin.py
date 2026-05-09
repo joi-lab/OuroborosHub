@@ -106,5 +106,5 @@ def register(api):
         },
     )
     info = api.get_runtime_info()
-    api.get_skill_token()
+    _token = api.get_skill_token()  # noqa: F841 -- retained for companion token provisioning
     api.register_companion_process("a2a_server")

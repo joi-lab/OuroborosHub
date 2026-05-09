@@ -5,7 +5,9 @@ import json
 import os
 import pathlib
 import inspect
+import ipaddress
 import re
+import urllib.parse
 import uuid
 import base64
 from typing import Any, Dict
@@ -42,10 +44,56 @@ try:
 except Exception:
     _A2A_SDK_AVAILABLE = False
 
-
 STATE_DIR = pathlib.Path(os.environ.get("OUROBOROS_SKILL_STATE_DIR") or ".")
+
+
+def _is_loopback(host: str) -> bool:
+    clean = str(host or "").strip().strip("[]")
+    if clean == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(clean).is_loopback
+    except ValueError:
+        return False
+
+
+def _host_service_hostname(url: str) -> str:
+    parsed = urllib.parse.urlsplit(url)
+    if parsed.username or parsed.password:
+        raise RuntimeError("HOST_SERVICE_URL must not contain userinfo")
+    return parsed.hostname or ""
+
+
 HOST_SERVICE_URL = os.environ.get("HOST_SERVICE_URL", "http://127.0.0.1:8767").rstrip("/")
-HOST_SERVICE_TOKEN = os.environ.get("HOST_SERVICE_TOKEN", "")
+
+
+class _SkillToken:
+    """Companion-side SkillToken wrapper: prevents accidental logging of the raw token."""
+
+    __slots__ = ("_value",)
+
+    def __init__(self, raw: str) -> None:
+        self._value = raw
+
+    def use_in_request(self) -> str:
+        """Deliberate access at request construction sites."""
+        return self._value
+
+    def __str__(self) -> str:
+        return "<SkillToken:redacted>"
+
+    def __repr__(self) -> str:
+        return "<SkillToken:redacted>"
+
+
+_HOST_TOKEN = _SkillToken(os.environ.get("HOST_SERVICE_TOKEN", ""))
+
+# Enforce loopback-only Host Service calls (checklist item 12: host_token_handling)
+if not _is_loopback(_host_service_hostname(HOST_SERVICE_URL)):
+    raise RuntimeError(
+        "HOST_SERVICE_URL must be a loopback address; "
+        "refusing to send skill token to a non-local endpoint"
+    )
 
 
 def _load_settings() -> Dict[str, Any]:
@@ -86,11 +134,7 @@ def _get_semaphore() -> asyncio.Semaphore:
 
 
 def _host_headers() -> Dict[str, str]:
-    return {"X-Skill-Token": HOST_SERVICE_TOKEN}
-
-
-def _is_loopback(host: str) -> bool:
-    return str(host or "").strip() in {"127.0.0.1", "localhost", "::1"}
+    return {"X-Skill-Token": _HOST_TOKEN.use_in_request()}
 
 
 class _A2AAuthMiddleware(BaseHTTPMiddleware):

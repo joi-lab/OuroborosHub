@@ -2,6 +2,7 @@ import asyncio
 import importlib.util
 import os
 import sys
+import pytest
 from pathlib import Path
 
 
@@ -86,3 +87,30 @@ def test_dispatch_applies_backpressure(tmp_path, monkeypatch):
             daemon._A2A_SEMAPHORE.release()
 
     asyncio.run(run())
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://127.0.0.1:8767",
+        "http://localhost:8767",
+        "http://[::1]:8767",
+    ],
+)
+def test_host_service_loopback_urls_are_allowed(tmp_path, monkeypatch, url):
+    monkeypatch.setenv("HOST_SERVICE_URL", url)
+    daemon = _load_daemon(tmp_path, monkeypatch)
+    assert daemon._is_loopback(daemon._host_service_hostname(url)) is True
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://127.0.0.1:8767@evil.example",
+        "http://evil.example:8767",
+    ],
+)
+def test_host_service_url_rejects_non_loopback_and_userinfo(tmp_path, monkeypatch, url):
+    monkeypatch.setenv("HOST_SERVICE_URL", url)
+    with pytest.raises(RuntimeError):
+        _load_daemon(tmp_path, monkeypatch)
