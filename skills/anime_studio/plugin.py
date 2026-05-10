@@ -492,12 +492,18 @@ def _run_pipeline_thread(job, api_key: str):
         if _shutdown_event.is_set():
             return
 
-        client = OpenRouterClient(api_key=api_key, state_dir=_state_dir)
+        # Per-job directory isolation: each job gets its own assets/output/job.json
+        # so parallel jobs and retries never collide on filenames.
+        job_dir = _state_dir / "jobs" / job.job_id
+        job_dir.mkdir(parents=True, exist_ok=True)
+
+        client = OpenRouterClient(api_key=api_key, state_dir=job_dir)
         pipeline = Pipeline(
             client=client,
-            state_dir=_state_dir,
+            state_dir=job_dir,
             on_progress=_on_progress,
             shutdown_event=_shutdown_event,
+            lessons_dir=_state_dir,  # shared across jobs for progressive learning
         )
         _track_pipeline(pipeline)
         loop.run_until_complete(pipeline.run(job))
@@ -555,16 +561,19 @@ def _on_progress(job):
 
 
 def _save_job(job):
-    jobs_dir = _state_dir / "jobs"
-    jobs_dir.mkdir(parents=True, exist_ok=True)
-    path = jobs_dir / f"{job.job_id}.json"
+    job_dir = _state_dir / "jobs" / job.job_id
+    job_dir.mkdir(parents=True, exist_ok=True)
+    path = job_dir / "job.json"
     path.write_text(job.to_json(), encoding="utf-8")
 
 
 def _load_job(job_id: str):
     from .models import Job
 
-    path = _state_dir / "jobs" / f"{job_id}.json"
+    # Try new per-job directory first, fall back to legacy flat file
+    path = _state_dir / "jobs" / job_id / "job.json"
+    if not path.exists():
+        path = _state_dir / "jobs" / f"{job_id}.json"
     if not path.exists():
         return None
     try:
