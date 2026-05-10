@@ -11,13 +11,16 @@ import time
 from pathlib import Path, PurePosixPath
 from typing import Optional
 
+from io import BytesIO
+
 import httpx
+from PIL import Image as _PILImage
 
 logger = logging.getLogger("anime_studio.api")
 
 OPENROUTER_BASE = "https://openrouter.ai/api/v1"
 VIDEO_POLL_INTERVAL = 5  # seconds
-VIDEO_MAX_WAIT = 600  # 10 min max wait per clip
+VIDEO_MAX_WAIT = 1200  # 20 min max wait per clip
 
 
 def _safe_filename(filename: str) -> str:
@@ -627,8 +630,51 @@ class OpenRouterClient:
 
         return image_b64
 
-    def get_image_url(self, filepath: str) -> str:
-        """Convert local file to data URL for API input references."""
+    def _compress_image_for_api(self, filepath: str, max_dim: int = 720, quality: int = 85) -> tuple[str, str]:
+        """Compress and resize image for API payload size reduction.
+
+        Returns (base64_string, mime_type).
+        """
+        Image = _PILImage
+
+        path = Path(filepath)
+        if not path.exists():
+            raise FileNotFoundError(f"Asset not found: {filepath}")
+
+        img = Image.open(path)
+
+        # Resize if larger than max_dim
+        w, h = img.size
+        if max(w, h) > max_dim:
+            scale = max_dim / max(w, h)
+            new_w, new_h = int(w * scale), int(h * scale)
+            img = img.resize((new_w, new_h), Image.LANCZOS)
+
+        # Convert RGBA to RGB with white background
+        if img.mode in ("RGBA", "LA", "P"):
+            background = Image.new("RGB", img.size, (255, 255, 255))
+            if img.mode == "P":
+                img = img.convert("RGBA")
+            background.paste(img, mask=img.split()[-1] if "A" in img.mode else None)
+            img = background
+        elif img.mode != "RGB":
+            img = img.convert("RGB")
+
+        buf = BytesIO()
+        img.save(buf, format="JPEG", quality=quality, optimize=True)
+        b64 = base64.b64encode(buf.getvalue()).decode()
+        return b64, "image/jpeg"
+
+    def get_image_url(self, filepath: str, compress: bool = False) -> str:
+        """Convert local file to data URL for API input references.
+
+        Args:
+            compress: If True, resize to 720p and convert to JPEG for smaller payloads.
+        """
+        if compress:
+            b64, mime = self._compress_image_for_api(filepath)
+            return f"data:{mime};base64,{b64}"
+
         path = Path(filepath)
         if not path.exists():
             raise FileNotFoundError(f"Asset not found: {filepath}")
@@ -646,7 +692,7 @@ class OpenRouterClient:
         """Create an OpenRouter input_references entry from a local file."""
         return {
             "type": "image_url",
-            "image_url": {"url": self.get_image_url(filepath)},
+            "image_url": {"url": self.get_image_url(filepath, compress=True)},
         }
 
     def make_frame_image(self, filepath: str, frame_type: str = "first_frame") -> dict:
@@ -657,6 +703,7 @@ class OpenRouterClient:
             frame_type: "first_frame" or "last_frame" — hard condition for video start/end.
         """
         return {
-            "image_url": {"url": self.get_image_url(filepath)},
+            "type": "image_url",
+            "image_url": {"url": self.get_image_url(filepath, compress=True)},
             "frame_type": frame_type,
         }

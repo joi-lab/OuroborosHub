@@ -83,11 +83,13 @@ class Pipeline:
         state_dir: Path,
         on_progress: Optional[Callable[[Job], None]] = None,
         shutdown_event: Optional[threading.Event] = None,
+        lessons_dir: Optional[Path] = None,
     ):
         self.client = client
         self.state_dir = state_dir
         self.on_progress = on_progress
         self.shutdown_event = shutdown_event
+        self.lessons_dir = lessons_dir or state_dir
         self._active_procs: list[subprocess.Popen] = []
         self._procs_lock = threading.Lock()
         # Progressive prompt learning: lessons accumulated during this job
@@ -98,7 +100,7 @@ class Pipeline:
 
     def _load_lessons(self):
         """Load accumulated prompt lessons from previous jobs."""
-        lessons_path = self.state_dir / _LESSONS_FILENAME
+        lessons_path = self.lessons_dir / _LESSONS_FILENAME
         if lessons_path.exists():
             try:
                 data = json.loads(lessons_path.read_text())
@@ -108,7 +110,7 @@ class Pipeline:
 
     def _persist_lessons(self, image_lessons: list[str], video_lessons: list[str]):
         """Save lessons to disk for next job."""
-        lessons_path = self.state_dir / _LESSONS_FILENAME
+        lessons_path = self.lessons_dir / _LESSONS_FILENAME
         existing = {}
         if lessons_path.exists():
             try:
@@ -257,9 +259,11 @@ class Pipeline:
 
         for attempt in range(MAX_VERIFY_RETRIES + 1):
             if attempt > 0:
+                # Unique filename per retry to avoid overwriting the previous attempt
+                retry_filename = f"{Path(filename).stem}_r{attempt}{Path(filename).suffix}"
                 try:
                     image_path = await run_with_timeout(
-                        self._generate_image(job, current_prompt, filename, aspect_ratio),
+                        self._generate_image(job, current_prompt, retry_filename, aspect_ratio),
                         timeout_sec=TIMEOUT_IMAGE,
                         description=f"Retry {attempt} for {filename}",
                     )
@@ -364,7 +368,7 @@ class Pipeline:
         Returns {passed: bool, scores: dict, issues: list, suggestion: str}
         """
         chars_desc = self._build_characters_identity_block(storyboard, scene.characters)
-        frame_paths = self._extract_video_frames(video_path, num_frames=5)
+        frame_paths = self._extract_video_frames(video_path, num_frames=5, prefix=f"s{scene.index}")
 
         if not frame_paths:
             return {"passed": True, "scores": {}, "issues": [], "suggestion": ""}
@@ -403,10 +407,17 @@ class Pipeline:
 
     # ─── Video Frame Extraction ─────────────────────────────────────
 
-    def _extract_video_frames(self, video_path: str, num_frames: int = 5) -> list[str]:
-        """Extract evenly-spaced frames from a video using tracked _run_ffmpeg."""
+    def _extract_video_frames(self, video_path: str, num_frames: int = 5, prefix: str = "") -> list[str]:
+        """Extract evenly-spaced frames from a video using tracked _run_ffmpeg.
+
+        Args:
+            prefix: unique prefix to avoid filename collisions between concurrent
+                    callers (e.g. "s0" for scene 0, "xcheck_1" for cross-scene check).
+        """
         output_dir = self.state_dir / "assets"
+        output_dir.mkdir(parents=True, exist_ok=True)
         frames = []
+        tag = f"{prefix}_" if prefix else ""
         try:
             probe = self._run_ffmpeg(
                 ["ffprobe", "-v", "error", "-show_entries", "format=duration",
@@ -419,7 +430,7 @@ class Pipeline:
             interval = duration / (num_frames + 1)
             for i in range(num_frames):
                 timestamp = interval * (i + 1)
-                output_path = str(output_dir / f"_vframe_{i}.png")
+                output_path = str(output_dir / f"_vframe_{tag}{i}.png")
                 result = self._run_ffmpeg(
                     ["ffmpeg", "-y", "-ss", f"{timestamp:.2f}", "-i", video_path,
                      "-vframes", "1", "-q:v", "2", output_path],
@@ -502,9 +513,9 @@ class Pipeline:
         Returns the worst_scene_index if drift is major, else None.
         """
         frame_paths = []
-        for scene in storyboard.scenes:
+        for i, scene in enumerate(storyboard.scenes):
             if scene.video_url and Path(scene.video_url).exists():
-                mid_frames = self._extract_video_frames(scene.video_url, num_frames=1)
+                mid_frames = self._extract_video_frames(scene.video_url, num_frames=1, prefix=f"xcheck_{i}")
                 if mid_frames:
                     frame_paths.append(mid_frames[0])
                 else:
