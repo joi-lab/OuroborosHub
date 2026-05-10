@@ -1,145 +1,11 @@
 {
-  "schema_version": 1,
-  "name": "OuroborosHub",
   "description": "Official Ouroboros skills catalog.",
+  "name": "OuroborosHub",
   "raw_base_url": "https://raw.githubusercontent.com/joi-lab/OuroborosHub/main",
+  "schema_version": 1,
   "skills": [
     {
-      "slug": "music_gen",
-      "name": "music_gen",
-      "description": "Generate a music clip from a text prompt via OpenRouter's Google Lyria model and play it directly inside the widget. Files are persisted to the skill's private state directory and streamed through an extension route for both inline playback and download.",
-      "version": "0.5.3",
-      "type": "extension",
-      "files": [
-        {
-          "path": "SKILL.md",
-          "sha256": "2aa533db76e5b2688f699162bef835afb2b5a6ef55386d5b9d392538e425e9b6",
-          "size": 3716
-        },
-        {
-          "path": "plugin.py",
-          "sha256": "c07a613df16ed3c02c45290a9e6f13875bfe0d6368ca1d92cdaa0129699284a3",
-          "size": 21481
-        }
-      ]
-    },
-    {
-      "slug": "nanobanana",
-      "name": "nanobanana",
-      "description": "Generate images from a text prompt via OpenRouter's image generation API (Nano Banana / Gemini Flash Image). Displays the result inside the widget and saves to disk for download.",
-      "version": "0.2.3",
-      "type": "extension",
-      "files": [
-        {
-          "path": "SKILL.md",
-          "sha256": "4626b72ea4c3756fb322da69c47f8ea80f144e8d4e0bf151e39180428dec88c4",
-          "size": 4739
-        },
-        {
-          "path": "plugin.py",
-          "sha256": "913d94658fd5440096904973175cfc25c33b898c3595de04835a55ef56535a0c",
-          "size": 24862
-        }
-      ]
-    },
-    {
-      "slug": "video_gen",
-      "name": "video_gen",
-      "description": "Generate a short video clip via OpenRouter's video generation API using Seedance 2.0 (bytedance/seedance-2.0). Output is saved to the skill state directory.",
-      "version": "0.7.0",
-      "type": "script",
-      "files": [
-        {
-          "path": "SKILL.md",
-          "sha256": "0f233e9b86189b278576456e44cc511f7c0794eddeb21d0de2ebfa489049189d",
-          "size": 3260
-        },
-        {
-          "path": "scripts/generate.py",
-          "sha256": "8b65d06f2f6dc52e31ef12148d0d20b9c83492ecd50cabcc93b6c2e2b5c84430",
-          "size": 12054
-        }
-      ]
-    },
-    {
-      "slug": "weather",
-      "name": "weather",
-      "description": "Live weather widget — looks up current conditions for any city via wttr.in (no API key).",
-      "version": "0.2.1",
-      "type": "extension",
-      "files": [
-        {
-          "path": "SKILL.md",
-          "sha256": "3e26d2a479996e8f5dba6d781c9d7423bf4bf50acb3bcf5e0aecd3bc8b34d003",
-          "size": 2355
-        },
-        {
-          "path": "plugin.py",
-          "sha256": "24b1776c4d61e8922be350958040392ead985dcce06e7717b713d5449aabfe1b",
-          "size": 7063
-        }
-      ]
-    },
-    {
-      "slug": "duckduckgo",
-      "name": "duckduckgo",
-      "description": "Web search via DuckDuckGo — free, no API key required. Returns titles, URLs, and snippets. Requires the `ddgs` Python package (pip install ddgs).",
-      "version": "0.1.1",
-      "type": "extension",
-      "install_specs": [
-        {
-          "kind": "pip",
-          "package": "ddgs"
-        }
-      ],
-      "files": [
-        {
-          "path": "SKILL.md",
-          "sha256": "deb28194a4e73ec904e9f8659aa13284482de4ca6e79d266ec0487d504bf9942",
-          "size": 1733
-        },
-        {
-          "path": "plugin.py",
-          "sha256": "0815813e5102b4e036fbc6f7929f9057335de3b0c55f57d5b371eb58132ce0bc",
-          "size": 5307
-        }
-      ]
-    },
-    {
-      "slug": "perplexity",
-      "name": "perplexity",
-      "description": "Deep web research via OpenRouter web_search server tool. Uses any model + grounded search with citations. Requires OPENROUTER_API_KEY in Settings.",
-      "version": "0.1.1",
-      "type": "extension",
-      "files": [
-        {
-          "path": "SKILL.md",
-          "sha256": "5ff32096a17097ec7d7cffa50d88997d14f78cb936957b526d3d6f6c4b892f74",
-          "size": 2125
-        },
-        {
-          "path": "plugin.py",
-          "sha256": "0cd2050169a15eddde78185a3f97828f9a841b683be0cabe9093c332593813f4",
-          "size": 8682
-        }
-      ]
-    },
-    {
-      "slug": "a2a",
-      "name": "a2a",
       "description": "Agent-to-Agent protocol bridge for Ouroboros. Provides a local A2A-compatible server plus client tools for discovering and messaging other A2A agents.",
-      "version": "1.0.0",
-      "type": "extension",
-      "install_specs": [
-        {
-          "kind": "pip",
-          "package": "protobuf<6"
-        },
-        {
-          "kind": "pip",
-          "package": "a2a-sdk[http-server]>=1.0.0,<2.0.0"
-        }
-      ],
       "files": [
         {
           "path": "SKILL.md",
@@ -166,14 +32,156 @@
           "sha256": "98fbb7c4b4fa535df7f4c6928925198fefc961c107723f9412f24ff80b87e2a5",
           "size": 3411
         }
-      ]
+      ],
+      "install_specs": [
+        {
+          "kind": "pip",
+          "package": "protobuf<6"
+        },
+        {
+          "kind": "pip",
+          "package": "a2a-sdk[http-server]>=1.0.0,<2.0.0"
+        }
+      ],
+      "name": "a2a",
+      "slug": "a2a",
+      "type": "extension",
+      "version": "1.0.0"
     },
     {
-      "slug": "telegram-bridge",
-      "name": "telegram-bridge",
-      "description": "Bidirectional Telegram bot bridge for Ouroboros. Polls Telegram for inbound text/photos and mirrors host chat output back to Telegram.",
-      "version": "1.0.0",
+      "description": "AI-powered 2D anime generator with VLM-verified assets, video analysis via Gemini, sequential keyframes, scene continuity chain, and multi-model image generation",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "sha256": "9a50be761af685d20d32a5117114c6fc159296811ec4a5ff20c3510179ceaa72",
+          "size": 6742
+        },
+        {
+          "path": "__init__.py",
+          "sha256": "71396adce0137efaf9c07e0608d8ad4f18611a99145b4a85daaa99c343b5acb7",
+          "size": 62
+        },
+        {
+          "path": "api_client.py",
+          "sha256": "93743910346723fefff35c2ed2be42925b4cf956dd2e74b342a63ef0f3e47c9a",
+          "size": 26884
+        },
+        {
+          "path": "models.py",
+          "sha256": "4c252f008f41b7cce41802eb9eaf3d58f175184bd4d398db370c5098bb6ff387",
+          "size": 6565
+        },
+        {
+          "path": "pipeline.py",
+          "sha256": "ae2728ce9c204058e0179b1611d112def63ab0e8d94c59dfbcda8f7453511558",
+          "size": 50654
+        },
+        {
+          "path": "pipeline_test.txt",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "size": 0
+        },
+        {
+          "path": "plugin.py",
+          "sha256": "f53860edad78345224d83f1e2245709f718a4a444d36ce0e1d50084598ae905d",
+          "size": 22003
+        },
+        {
+          "path": "prompts.py",
+          "sha256": "2e4330bef6f4527d1492b106a97b76fee891134a50aff020def236608aeccae1",
+          "size": 15149
+        }
+      ],
+      "name": "anime_studio",
+      "slug": "anime_studio",
       "type": "extension",
+      "version": "2.1.0",
+      "when_to_use": "User wants to generate a short animated 2D anime cartoon, music video, or animated scene with consistent characters, VLM verification, and narrative continuity."
+    },
+    {
+      "description": "Web search via DuckDuckGo — free, no API key required. Returns titles, URLs, and snippets. Requires the `ddgs` Python package (pip install ddgs).",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "sha256": "deb28194a4e73ec904e9f8659aa13284482de4ca6e79d266ec0487d504bf9942",
+          "size": 1733
+        },
+        {
+          "path": "plugin.py",
+          "sha256": "0815813e5102b4e036fbc6f7929f9057335de3b0c55f57d5b371eb58132ce0bc",
+          "size": 5307
+        }
+      ],
+      "install_specs": [
+        {
+          "kind": "pip",
+          "package": "ddgs"
+        }
+      ],
+      "name": "duckduckgo",
+      "slug": "duckduckgo",
+      "type": "extension",
+      "version": "0.1.1"
+    },
+    {
+      "description": "Generate a music clip from a text prompt via OpenRouter's Google Lyria model and play it directly inside the widget. Files are persisted to the skill's private state directory and streamed through an extension route for both inline playback and download.",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "sha256": "2aa533db76e5b2688f699162bef835afb2b5a6ef55386d5b9d392538e425e9b6",
+          "size": 3716
+        },
+        {
+          "path": "plugin.py",
+          "sha256": "c07a613df16ed3c02c45290a9e6f13875bfe0d6368ca1d92cdaa0129699284a3",
+          "size": 21481
+        }
+      ],
+      "name": "music_gen",
+      "slug": "music_gen",
+      "type": "extension",
+      "version": "0.5.3"
+    },
+    {
+      "description": "Generate images from a text prompt via OpenRouter's image generation API (Nano Banana / Gemini Flash Image). Displays the result inside the widget and saves to disk for download.",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "sha256": "4626b72ea4c3756fb322da69c47f8ea80f144e8d4e0bf151e39180428dec88c4",
+          "size": 4739
+        },
+        {
+          "path": "plugin.py",
+          "sha256": "913d94658fd5440096904973175cfc25c33b898c3595de04835a55ef56535a0c",
+          "size": 24862
+        }
+      ],
+      "name": "nanobanana",
+      "slug": "nanobanana",
+      "type": "extension",
+      "version": "0.2.3"
+    },
+    {
+      "description": "Deep web research via OpenRouter web_search server tool. Uses any model + grounded search with citations. Requires OPENROUTER_API_KEY in Settings.",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "sha256": "5ff32096a17097ec7d7cffa50d88997d14f78cb936957b526d3d6f6c4b892f74",
+          "size": 2125
+        },
+        {
+          "path": "plugin.py",
+          "sha256": "0cd2050169a15eddde78185a3f97828f9a841b683be0cabe9093c332593813f4",
+          "size": 8682
+        }
+      ],
+      "name": "perplexity",
+      "slug": "perplexity",
+      "type": "extension",
+      "version": "0.1.1"
+    },
+    {
+      "description": "Bidirectional Telegram bot bridge for Ouroboros. Polls Telegram for inbound text/photos and mirrors host chat output back to Telegram.",
       "files": [
         {
           "path": "SKILL.md",
@@ -195,7 +203,49 @@
           "sha256": "498aeeeb77a95f918021b37daec9337afb9d08e0246205267f1882a2136f0e2f",
           "size": 4617
         }
-      ]
+      ],
+      "name": "telegram-bridge",
+      "slug": "telegram-bridge",
+      "type": "extension",
+      "version": "1.0.0"
+    },
+    {
+      "description": "Generate a short video clip via OpenRouter's video generation API using Seedance 2.0 (bytedance/seedance-2.0). Output is saved to the skill state directory.",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "sha256": "0f233e9b86189b278576456e44cc511f7c0794eddeb21d0de2ebfa489049189d",
+          "size": 3260
+        },
+        {
+          "path": "scripts/generate.py",
+          "sha256": "8b65d06f2f6dc52e31ef12148d0d20b9c83492ecd50cabcc93b6c2e2b5c84430",
+          "size": 12054
+        }
+      ],
+      "name": "video_gen",
+      "slug": "video_gen",
+      "type": "script",
+      "version": "0.7.0"
+    },
+    {
+      "description": "Live weather widget — looks up current conditions for any city via wttr.in (no API key).",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "sha256": "3e26d2a479996e8f5dba6d781c9d7423bf4bf50acb3bcf5e0aecd3bc8b34d003",
+          "size": 2355
+        },
+        {
+          "path": "plugin.py",
+          "sha256": "24b1776c4d61e8922be350958040392ead985dcce06e7717b713d5449aabfe1b",
+          "size": 7063
+        }
+      ],
+      "name": "weather",
+      "slug": "weather",
+      "type": "extension",
+      "version": "0.2.1"
     }
   ]
 }
