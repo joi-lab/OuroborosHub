@@ -38,13 +38,11 @@ from .models import (
 )
 from .prompts import (
     ADAPTIVE_SIMPLIFY_SCENE_PROMPT,
-    CROSS_SCENE_IDENTITY_CHECK_PROMPT,
-    DIRECTOR_QC_PROMPT,
+    DIRECTOR_AGENT_PROMPT,
     GEMINI_VIDEO_QC_PROMPT,
     IMAGE_CHARACTER_SHEET_PROMPT,
     IMAGE_KEYFRAME_PROMPT,
     IMAGE_KEYFRAME_SEQUENTIAL_PROMPT,
-    IMAGE_LOCATION_PROMPT,
     MUSIC_PROMPT_TEMPLATE,
     SCENARIO_SYSTEM,
     SCENARIO_USER_TEMPLATE,
@@ -62,7 +60,7 @@ TIMEOUT_MUSIC = 200
 TIMEOUT_VIDEO = 660
 TIMEOUT_VERIFY = 45
 TIMEOUT_VIDEO_VERIFY = 90
-TIMEOUT_GEMINI_QC = 120
+TIMEOUT_GEMINI_QC = 240
 TIMEOUT_DIRECTOR_QC = 90
 
 # VLM verification settings
@@ -467,42 +465,129 @@ class Pipeline:
             logger.warning(f"Gemini AV QC failed s{scene.index}: {e}")
             return SceneQualityReport(scene_index=scene.index, passed=False, issues=[f"QC skipped: {e}"])
 
-    async def _run_director_qc(self, job: Job, storyboard: Storyboard) -> list[int]:
-        import base64, json as _json
-        chars_desc = "\n".join(f"- {c.name}: {c.visual_traits}" for c in storyboard.characters)
-        content = [{"type": "text", "text": DIRECTOR_QC_PROMPT.format(
-            characters_description=chars_desc, style=storyboard.style,
-        )}]
-        for kf_path_str in job.progress.keyframes[:8]:
-            kf_path = Path(kf_path_str)
-            if kf_path.exists():
-                try:
-                    b64 = base64.b64encode(kf_path.read_bytes()).decode()
-                    ext = kf_path.suffix.lstrip(".")
-                    mime = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg"}.get(ext, "image/png")
-                    content.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}})
-                except Exception:
-                    pass
-        try:
-            raw = await run_with_timeout(
-                self.client.chat_multimodal(content, model="google/gemini-2.5-pro"),
-                timeout_sec=TIMEOUT_DIRECTOR_QC, description="Director QC",
+    async def _run_director_agent_loop(self, job: Job, storyboard: Storyboard) -> dict[int, str]:
+        """Director agent reviews assembled video clips and returns per-scene notes for regeneration.
+
+        Returns: dict mapping scene_index -> director note for scenes that need regeneration.
+        Max 2 scenes per pass, max 2 passes total.
+        """
+        import base64 as _b64, json as _json
+        from .prompts import DIRECTOR_AGENT_PROMPT
+
+        # Build scene timeline text
+        timeline_parts = []
+        for scene in storyboard.scenes:
+            start_sec = sum(s.duration_sec for s in storyboard.scenes[:scene.index])
+            end_sec = start_sec + scene.duration_sec
+            causal = getattr(scene, 'causal_link', '') or ''
+            timeline_parts.append(
+                f"Scene {scene.index} ({start_sec:.0f}s-{end_sec:.0f}s): {scene.description}"
+                + (f"\n  Causal link: {causal}" if causal else "")
             )
-            text = raw.strip()
-            if text.startswith("```"):
-                text = text.split("\n", 1)[1] if "\n" in text else text[3:]
-                if text.endswith("```"):
-                    text = text[:-3]
-                text = text.strip()
-            data = _json.loads(text)
+        scene_timeline = "\n".join(timeline_parts)
+
+        chars_desc = "\n".join(f"- {c.name}: {c.visual_traits}" for c in storyboard.characters)
+        synopsis = storyboard.synopsis or job.settings.theme
+
+        director_notes: dict[int, str] = {}
+
+        for pass_num in range(2):  # max 2 director passes
+            # Build content with frames from actual video clips
+            content = [{"type": "text", "text": DIRECTOR_AGENT_PROMPT.format(
+                characters_description=chars_desc,
+                style=storyboard.style,
+                synopsis=synopsis,
+                scene_timeline=scene_timeline,
+            )}]
+
+            # Attach first + last frame of each video clip
+            frames_added = 0
+            for scene in storyboard.scenes:
+                video_path = scene.video_url
+                if not video_path or not Path(video_path).exists():
+                    # Fall back to keyframe if no video yet
+                    kf = scene.keyframe_url
+                    if kf and Path(kf).exists():
+                        try:
+                            b64 = _b64.b64encode(Path(kf).read_bytes()).decode()
+                            ext = Path(kf).suffix.lstrip(".")
+                            mime = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg"}.get(ext, "image/png")
+                            content.append({
+                                "type": "image_url",
+                                "image_url": {"url": f"data:{mime};base64,{b64}"},
+                            })
+                            frames_added += 1
+                        except Exception:
+                            pass
+                    continue
+
+                # Extract first frame
+                first_frame = self._extract_video_frames(video_path, num_frames=1, prefix=f"dir_{scene.index}_first")
+                last_frame_path = self._extract_last_frame(video_path, scene.index + 1000)  # offset to avoid collision
+
+                for frame_path in (first_frame[:1] if first_frame else []) + ([last_frame_path] if last_frame_path else []):
+                    if frame_path and Path(frame_path).exists():
+                        try:
+                            b64 = _b64.b64encode(Path(frame_path).read_bytes()).decode()
+                            content.append({
+                                "type": "image_url",
+                                "image_url": {"url": f"data:image/png;base64,{b64}"},
+                            })
+                            frames_added += 1
+                            # Clean up temp frame
+                            try:
+                                Path(frame_path).unlink(missing_ok=True)
+                            except Exception:
+                                pass
+                        except Exception:
+                            pass
+
+            if frames_added == 0:
+                logger.info(f"Director pass {pass_num+1}: no frames available, skipping")
+                break
+
+            try:
+                raw = await run_with_timeout(
+                    self.client.chat_multimodal(content, model="google/gemini-2.5-pro", max_toks=16384),
+                    timeout_sec=180, description=f"Director agent pass {pass_num+1}",
+                )
+                text = raw.strip()
+                if text.startswith("```"):
+                    text = text.split("\n", 1)[1] if "\n" in text else text[3:]
+                    if text.endswith("```"):
+                        text = text[:-3]
+                    text = text.strip()
+                data = _json.loads(text)
+            except Exception as e:
+                logger.warning(f"Director agent pass {pass_num+1} failed: {e}")
+                break
+
+            logger.info(f"Director pass {pass_num+1}: score={data.get('overall_score','?')} approved={data.get('approved', True)}")
+
             if data.get("approved", True):
-                return []
-            scenes_to_regen = data.get("scenes_to_regen", [])[:3]
-            logger.info(f"Director QC: score={data.get('overall_score','?')} regen={scenes_to_regen}")
-            return scenes_to_regen
-        except Exception as e:
-            logger.warning(f"Director QC failed: {e}")
-            return []
+                break
+
+            raw_regen = data.get("scenes_to_regen", [])[:2]
+            scenes_to_regen = []
+            for si in raw_regen:
+                try:
+                    scenes_to_regen.append(int(si))
+                except (ValueError, TypeError):
+                    logger.warning(f"Director QC: ignoring non-integer scene index {si!r}")
+            timeline_notes = data.get("timeline_notes") or {}
+
+            if not scenes_to_regen:
+                break
+
+            # Record director notes for these scenes
+            for si in scenes_to_regen:
+                note = timeline_notes.get(str(si), "")
+                if note:
+                    director_notes[si] = note
+
+            return director_notes  # Return after first pass — caller regenerates, then we'll be called again if needed
+
+        return director_notes
 
     async def _simplify_scene(self, scene: Scene, issues: list[str]) -> tuple:
         prompt = ADAPTIVE_SIMPLIFY_SCENE_PROMPT.format(
@@ -515,7 +600,7 @@ class Pipeline:
         try:
             response = await run_with_timeout(
                 self.client.chat(messages=[{"role": "user", "content": prompt}],
-                                  model="anthropic/claude-sonnet-4.6", max_toks=1024, temperature=0.3),
+                                  model="anthropic/claude-sonnet-4.6", max_toks=16384, temperature=0.3),
                 timeout_sec=60, description=f"Simplify scene {scene.index}",
             )
             text = response.strip()
@@ -558,6 +643,8 @@ class Pipeline:
             music_style=s.music_style,
             include_dialogue="yes" if s.include_dialogue else "no",
         )
+        scenario_model = "anthropic/claude-opus-4.6" if self._get_effort(job) == "max" else "anthropic/claude-sonnet-4.6"
+        scenario_max_toks = 16384 if self._get_effort(job) == "max" else 8192
         try:
             scenario_raw = await run_with_timeout(
                 self.client.chat(
@@ -565,7 +652,7 @@ class Pipeline:
                         {"role": "system", "content": SCENARIO_SYSTEM},
                         {"role": "user", "content": scenario_prompt},
                     ],
-                    model="anthropic/claude-sonnet-4.6", max_toks=8192, temperature=0.8,
+                    model=scenario_model, max_toks=scenario_max_toks, temperature=0.8,
                 ),
                 timeout_sec=TIMEOUT_SCENARIO, description="Scenario generation",
             )
@@ -607,10 +694,10 @@ class Pipeline:
                 self._emit(job)
                 return
 
-        chars = [Character(name=c["name"], description=c.get("description", ""),
+        chars = [Character(name=c.get("name", "Unknown"), description=c.get("description", ""),
                             visual_traits=c.get("visual_traits", c.get("description", "")))
                  for c in scenario_data.get("characters", [])]
-        locs = [Location(name=l["name"], description=l.get("description", ""),
+        locs = [Location(name=l.get("name", "Unknown"), description=l.get("description", ""),
                           visual_traits=l.get("visual_traits", l.get("description", "")))
                 for l in scenario_data.get("locations", [])]
         scenes = []
@@ -627,6 +714,7 @@ class Pipeline:
                 lens_type=sc.get("lens_type"),
                 color_temperature=sc.get("color_temperature"),
                 lighting_setup=sc.get("lighting_setup"),
+                causal_link=sc.get("causal_link"),
             ))
         music_cues = []
         for i, mc in enumerate(scenario_data.get("music_cues", [])):
@@ -731,6 +819,7 @@ class Pipeline:
             if kf_path:
                 scene.keyframe_url = str(kf_path)
                 p.keyframes.append(str(kf_path))
+                prev_frame = str(kf_path)  # feed into next scene's sequential prompt
             p.progress_pct = 35.0 + (i + 1) / len(storyboard.scenes) * 20.0
             p.message = f"Keyframe {i+1}/{len(storyboard.scenes)} done"
             self._emit(job)
@@ -867,7 +956,7 @@ class Pipeline:
             p.progress_pct = 60.0 + (i + 1) / len(storyboard.scenes) * 30.0
             self._emit(job)
 
-        # ── Phase 6: DIRECTOR QC (effort=max) ──────────────────────
+        # ── Phase 6: DIRECTOR AGENT LOOP (effort=max) ──────────────
         if self._use_director_qc(job) and len(storyboard.scenes) > 1:
             p.phase = JobPhase.DIRECTOR_QC
             p.progress_pct = 90.0
@@ -875,50 +964,63 @@ class Pipeline:
             self._emit(job)
             self._check_shutdown()
 
-            scenes_to_regen = await self._run_director_qc(job, storyboard)
-            for si in scenes_to_regen:
-                if si >= len(storyboard.scenes):
-                    continue
-                scene = storyboard.scenes[si]
-                chars_block = self._build_chars_block(storyboard, scene.characters)
-                duration = self._clamp_duration(scene.duration_sec, s.video_model)
-                regen_audio_note = f"AUDIO: Generate voice and dialogue. Dialogue: {scene.dialogue}" if (s.generate_audio and scene.dialogue) else ("AUDIO: Generate ambient sound." if s.generate_audio else "AUDIO: No audio needed.")
-                regen_prompt = VIDEO_PROMPT_TEMPLATE.format(
-                    scene_description=scene.description,
-                    characters_identity_block=chars_block,
-                    style=s.style,
-                    camera_direction=scene.camera_direction,
-                    mood=scene.mood,
-                    duration_sec=duration,
-                    generate_audio_note=regen_audio_note,
-                    continuity_note="DIRECTOR QC REGEN: Improve on previous attempt. Fix identified issues.",
-                )
-                p.message = f"Director QC: regenerating scene {si+1}…"
+            for director_pass in range(2):  # max 2 director passes
+                director_notes = await self._run_director_agent_loop(job, storyboard)
+                if not director_notes:
+                    break
+
+                p.message = f"Director regen: {len(director_notes)} scene(s)…"
                 self._emit(job)
-                try:
-                    # NOTE: frame_images and input_references both omitted — same Seedance privacy policy as Phase 5.
-                    new_video = await run_with_timeout(
-                        self.client.generate_video(
-                            prompt=regen_prompt,
-                            filename=f"scene_{si}_director_regen.mp4",
-                            model=s.video_model,
-                            duration=duration,
-                            resolution="720p",
-                            aspect_ratio="16:9",
-                            generate_audio=s.generate_audio,
-                            frame_images=None,
-                            input_references=None,
-                        ),
-                        timeout_sec=TIMEOUT_VIDEO, description=f"Director regen s{si}",
+
+                for si, director_note in director_notes.items():
+                    if si >= len(storyboard.scenes):
+                        continue
+                    scene = storyboard.scenes[si]
+                    chars_block = self._build_chars_block(storyboard, scene.characters)
+                    duration = self._clamp_duration(scene.duration_sec, s.video_model)
+                    regen_audio_note = (
+                        f"AUDIO: Generate voice and dialogue. Dialogue: {scene.dialogue}"
+                        if (s.generate_audio and scene.dialogue)
+                        else ("AUDIO: Generate ambient sound." if s.generate_audio else "AUDIO: No audio needed.")
                     )
-                    if new_video:
-                        # Replace old clip
-                        if scene.video_url and str(scene.video_url) in p.video_clips:
-                            idx = p.video_clips.index(str(scene.video_url))
-                            p.video_clips[idx] = str(new_video)
-                        scene.video_url = str(new_video)
-                except Exception as e:
-                    self._warn(job, f"Director regen scene {si} failed: {e}")
+                    regen_prompt = VIDEO_PROMPT_TEMPLATE.format(
+                        scene_description=scene.description,
+                        characters_identity_block=chars_block,
+                        style=s.style,
+                        camera_direction=scene.camera_direction,
+                        mood=scene.mood,
+                        duration_sec=duration,
+                        generate_audio_note=regen_audio_note,
+                        continuity_note=f"DIRECTOR NOTE: {director_note}",
+                    )
+                    p.message = f"Director regen scene {si+1} (pass {director_pass+1})…"
+                    self._emit(job)
+                    try:
+                        new_video = await run_with_timeout(
+                            self.client.generate_video(
+                                prompt=regen_prompt,
+                                filename=f"scene_{si}_dir_p{director_pass}.mp4",
+                                model=s.video_model,
+                                duration=duration,
+                                resolution="720p",
+                                aspect_ratio="16:9",
+                                generate_audio=s.generate_audio,
+                                frame_images=None,
+                                input_references=None,
+                            ),
+                            timeout_sec=TIMEOUT_VIDEO, description=f"Director regen s{si} pass {director_pass+1}",
+                        )
+                        if new_video:
+                            if scene.video_url and str(scene.video_url) in p.video_clips:
+                                idx = p.video_clips.index(str(scene.video_url))
+                                p.video_clips[idx] = str(new_video)
+                            scene.video_url = str(new_video)
+                            # Extract new last frame for continuity
+                            lf = self._extract_last_frame(new_video, si)
+                            if lf:
+                                scene.prev_frame_url = lf
+                    except Exception as e:
+                        self._warn(job, f"Director regen scene {si} pass {director_pass+1} failed: {e}")
 
         # ── Phase 7: ASSEMBLY ──────────────────────────────────────
         p.phase = JobPhase.ASSEMBLY
@@ -938,7 +1040,6 @@ class Pipeline:
 
         output_dir = self.state_dir / "output"
         output_dir.mkdir(parents=True, exist_ok=True)
-        import uuid as _uuid
         output_path = str(output_dir / f"{job.job_id}_final.mp4")
 
         music_path = p.music_clips[0] if p.music_clips else None

@@ -92,7 +92,7 @@ class OpenRouterClient:
         self,
         content: list[dict],
         model: str = "google/gemini-2.5-pro",
-        max_toks: int = 2048,
+        max_toks: int = 16384,
     ) -> str:
         """Multimodal chat completion with content array (text + images + video)."""
         async with httpx.AsyncClient(timeout=180) as client:
@@ -145,14 +145,20 @@ class OpenRouterClient:
                     content.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}})
                 except Exception as e:
                     logger.warning(f"Failed to load frame {frame_path}: {e}")
+            # Clean up temp frames after encoding (mirroring pipeline.py::_verify_video_multidim)
+            for frame_path in frames:
+                try:
+                    frame_path.unlink(missing_ok=True)
+                except Exception:
+                    pass
 
         payload = {
             "model": model,
             "messages": [{"role": "user", "content": content}],
-            "max_tokens": 1024,
-            "provider": {"only": ["google-ai-studio"]},
+            "max_tokens": 16384,
+            "provider": {"only": ["google-ai-studio"], "require_parameters": True},
         }
-        async with httpx.AsyncClient(timeout=120) as client:
+        async with httpx.AsyncClient(timeout=300) as client:
             resp = await client.post(
                 f"{OPENROUTER_BASE}/chat/completions",
                 headers=self._headers(),
@@ -160,7 +166,11 @@ class OpenRouterClient:
             )
             resp.raise_for_status()
             data = resp.json()
-            return data["choices"][0]["message"]["content"]
+            content_text = data["choices"][0]["message"].get("content") or ""
+            if not content_text.strip():
+                finish_reason = data["choices"][0].get("finish_reason", "unknown")
+                raise ValueError(f"Empty content from Gemini video analysis (finish_reason={finish_reason})")
+            return content_text
 
     async def _extract_frames_for_analysis(self, video_path: Path, num_frames: int = 5) -> list[Path]:
         """Extract evenly-spaced JPEG frames from a video for API analysis.
@@ -348,9 +358,10 @@ class OpenRouterClient:
                             {"type": "text", "text": verify_prompt},
                             {"type": "image_url", "image_url": {"url": image_url}},
                         ]}],
-                        "max_tokens": 2048,
+                        "max_tokens": 16384,
                         "temperature": 0.1,
                         "response_format": {"type": "json_object"},
+                        "provider": {"require_parameters": True},
                     },
                 )
                 resp.raise_for_status()
@@ -391,7 +402,7 @@ class OpenRouterClient:
                             {"type": "text", "text": "Image 2:"},
                             {"type": "image_url", "image_url": {"url": url2}},
                         ]}],
-                        "max_tokens": 512,
+                        "max_tokens": 16384,
                         "temperature": 0.1,
                     },
                 )
@@ -417,9 +428,15 @@ class OpenRouterClient:
         self,
         image_paths: list[str],
         prompt: str,
-        model: str = "google/gemini-3.1-pro-preview",
+        model: str = "anthropic/claude-sonnet-4.6",
     ) -> dict:
-        """Send multiple images to a VLM for cross-frame/cross-scene analysis."""
+        """Send multiple images to a VLM for cross-frame/cross-scene analysis.
+
+        Uses a model with reliable json_mode support.  We add
+        ``provider.require_parameters: true`` so OpenRouter only routes to
+        providers that actually honour ``response_format``, instead of silently
+        sending to one that ignores it and returns null/empty content.
+        """
         content_parts = [{"type": "text", "text": prompt}]
         for path in image_paths:
             try:
@@ -439,21 +456,22 @@ class OpenRouterClient:
                     json={
                         "model": model,
                         "messages": [{"role": "user", "content": content_parts}],
-                        "max_tokens": 4096,
+                        "max_tokens": 16384,
                         "temperature": 0.1,
                         "response_format": {"type": "json_object"},
+                        # Only route to providers that truly support response_format
+                        # so we never get a silent null/empty response back.
+                        "provider": {"require_parameters": True},
                     },
                 )
                 resp.raise_for_status()
                 data = resp.json()
 
-            text = data["choices"][0]["message"]["content"].strip()
-            # Strip markdown fences if model ignores response_format
-            if text.startswith("```"):
-                text = text.split("\n", 1)[1] if "\n" in text else text[3:]
-                if text.endswith("```"):
-                    text = text[:-3]
-                text = text.strip()
+            content = data["choices"][0]["message"].get("content") or ""
+            text = content.strip()
+            if not text:
+                finish_reason = data["choices"][0].get("finish_reason", "unknown")
+                raise ValueError(f"Empty content from VLM (finish_reason={finish_reason})")
             return json.loads(text)
         except Exception as e:
             logger.warning(f"Multi-image VLM analysis failed: {e}")
@@ -541,11 +559,35 @@ class OpenRouterClient:
     # ─── Music Generation ────────────────────────────────────────────
 
     async def generate_music(self, prompt: str, filename: str) -> str:
-        """Generate music clip via Lyria 3 Pro Preview. Returns local file path."""
+        """Generate music clip via Lyria 3 Pro Preview. Returns local file path.
+
+        Retries up to 3 times with exponential back-off because lyria-3-pro-preview
+        is intermittently unavailable or returns empty audio on OpenRouter.
+        """
         filename = _safe_filename(filename)
         TIMEOUT = 180
         MAX_AUDIO_BYTES = 20 * 1024 * 1024
-        deadline = time.time() + TIMEOUT
+        MAX_RETRIES = 3
+
+        last_error: Exception = RuntimeError("generate_music: no attempts made")
+        for attempt in range(1, MAX_RETRIES + 1):
+            if attempt > 1:
+                wait = 5 * (2 ** (attempt - 2))  # 5s, 10s
+                logger.info(f"Music retry {attempt}/{MAX_RETRIES} after {wait}s (prev: {last_error})")
+                await asyncio.sleep(wait)
+
+            try:
+                result = await self._generate_music_once(prompt, filename, TIMEOUT, MAX_AUDIO_BYTES)
+                return result
+            except Exception as e:
+                last_error = e
+                logger.warning(f"Music attempt {attempt}/{MAX_RETRIES} failed: {e}")
+
+        raise RuntimeError(f"Music generation failed after {MAX_RETRIES} attempts. Last error: {last_error}")
+
+    async def _generate_music_once(self, prompt: str, filename: str, timeout: int, max_bytes: int) -> str:
+        """Single attempt at music generation via Lyria 3 Pro Preview."""
+        deadline = time.time() + timeout
         audio_buf = bytearray()
 
         payload = {
@@ -556,7 +598,7 @@ class OpenRouterClient:
             "stream": True,
         }
 
-        async with httpx.AsyncClient(timeout=httpx.Timeout(TIMEOUT, connect=30)) as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(timeout, connect=30)) as client:
             async with client.stream(
                 "POST", f"{OPENROUTER_BASE}/chat/completions",
                 headers=self._headers(), json=payload,
@@ -564,7 +606,7 @@ class OpenRouterClient:
                 response.raise_for_status()
                 async for line in response.aiter_lines():
                     if time.time() > deadline:
-                        raise TimeoutError(f"Music timed out after {TIMEOUT}s")
+                        raise TimeoutError(f"Music timed out after {timeout}s")
                     if not line or not line.startswith("data: "):
                         continue
                     data_str = line[6:].strip()
@@ -588,8 +630,8 @@ class OpenRouterClient:
                             decoded = base64.b64decode(b64_chunk + padding)
                         except Exception:
                             continue
-                        if len(audio_buf) + len(decoded) > MAX_AUDIO_BYTES:
-                            raise RuntimeError(f"Audio exceeds {MAX_AUDIO_BYTES // (1024 * 1024)} MB cap")
+                        if len(audio_buf) + len(decoded) > max_bytes:
+                            raise RuntimeError(f"Audio exceeds {max_bytes // (1024 * 1024)} MB cap")
                         audio_buf.extend(decoded)
 
         if not audio_buf:

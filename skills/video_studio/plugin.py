@@ -159,7 +159,7 @@ def register(api):
                 "theme": {"type": "string", "description": "Story theme/plot description"},
                 "style": {"type": "string", "description": "Visual style", "default": "photorealistic cinematic"},
                 "mood": {"type": "string", "description": "Overall mood", "default": "dramatic"},
-                "duration_sec": {"type": "number", "description": "Total duration in seconds (10-60)", "default": 30},
+                "duration_sec": {"type": "number", "description": "Total duration in seconds (10-120)", "default": 30},
                 "num_scenes": {"type": "integer", "description": "Number of scenes (2-8)", "default": 4},
                 "effort": {"type": "string", "description": "Quality effort: low/regular/max", "default": "regular"},
                 "video_model": {"type": "string", "description": "Video model", "default": "bytedance/seedance-2.0"},
@@ -173,7 +173,7 @@ def register(api):
 
     api.on_unload(_cleanup)
 
-    logger.info("Video Studio v1.0 extension registered")
+    logger.info("Video Studio v1.2.0 extension registered")
 
 
 _CLEANUP_JOIN_TIMEOUT_SEC = 30  # All threads are daemon threads; processes are killed before join
@@ -304,7 +304,7 @@ async def handle_generate(request) -> Any:
         generate_audio = bool(generate_audio_raw)
 
     try:
-        duration_sec = min(60, max(10, float(body.get("duration_sec", 30) or 30)))
+        duration_sec = min(120, max(10, float(body.get("duration_sec", 30) or 30)))
     except (TypeError, ValueError):
         duration_sec = 30.0
     try:
@@ -322,6 +322,8 @@ async def handle_generate(request) -> Any:
         music_style=body.get("music_style", "orchestral cinematic"),
         effort=body.get("effort", "regular"),
         generate_audio=generate_audio,
+        include_dialogue=generate_audio,
+        include_music=True,
     )
 
     job = Job(settings=settings, created_at=time.strftime("%Y-%m-%dT%H:%M:%SZ"))
@@ -499,7 +501,7 @@ async def tool_generate_video(
         theme=theme,
         style=style,
         mood=mood,
-        duration_sec=min(60, max(10, duration_sec)),
+        duration_sec=min(120, max(10, duration_sec)),
         num_scenes=min(8, max(2, num_scenes)),
         video_model=video_model,
         music_style=music_style,
@@ -607,9 +609,10 @@ def _run_pipeline_thread(job, api_key: str):
         job.progress.status = JobStatus.ERROR
         job.progress.error = "Cancelled (extension unloading)"
         job.progress.message = "Generation cancelled — extension unloaded"
+        _on_progress(job)
     except Exception as e:
         logger.exception("Pipeline thread error")
-        job.progress.status = "error"
+        job.progress.status = JobStatus.ERROR
         job.progress.error = str(e)
         job.progress.message = f"Pipeline crashed: {e}"
         _on_progress(job)
@@ -684,7 +687,13 @@ def _save_job(job):
 
 
 def _load_job(job_id: str):
+    import re
     from .models import Job
+
+    # Sanitize job_id to alphanumeric + dash/underscore to prevent path traversal
+    job_id = re.sub(r"[^a-zA-Z0-9_-]", "", job_id)
+    if not job_id:
+        return None
 
     path = _state_dir / "jobs" / job_id / "job.json"
     if not path.exists():

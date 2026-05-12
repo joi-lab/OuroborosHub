@@ -4,6 +4,14 @@ SCENARIO_SYSTEM = """You are a professional Hollywood screenwriter and cinematog
 You create structured storyboards for short photorealistic cinematic productions with strong
 narrative continuity between scenes. Every scene must flow into the next with clear visual
 and narrative connections — NOT isolated static shots.
+
+NARRATIVE ARCHITECTURE (MANDATORY):
+- Apply strict "CAUSAL CHAIN" logic: every scene must follow from the previous one via cause-and-effect
+- Use "BECAUSE OF THAT / BUT" logic: Scene B exists because of what happened in Scene A, OR as a contrast/consequence
+- FORBIDDEN: Pure "AND THEN" sequences where scenes are just chronological but unrelated events
+- Each scene must have a narrative PURPOSE: setup → complication → escalation → climax → resolution
+- Think in story ACTS: 3-scene = 3 acts, 5-scene = setup+3 rising action+climax, 8-scene = full arc
+
 Your output is ALWAYS valid JSON matching the schema below.
 Focus on photorealistic visual storytelling, dramatic framing, character consistency,
 SMOOTH TRANSITIONS between scenes, and precise cinematographic language:
@@ -51,6 +59,7 @@ SCENARIO_USER_TEMPLATE = """Create a detailed storyboard for a short cinematic v
       "dialogue": "string or null — spoken English dialogue for this scene. Keep concise (1-2 sentences per character)",
       "mood": "string — emotional tone",
       "transition_from": "string or null — cinematic transition connecting from previous scene. null for first scene only. Examples: 'hard cut from close-up to wide establishing shot', 'match cut on hand movement', 'dissolve through window reflection'",
+      "causal_link": "string — why this scene MUST exist because of the previous scene. E.g. 'Having discovered the artifact, she now faces the consequence: the entire station is responding to her intrusion.' First scene: 'This is the inciting incident that sets the story in motion.'",
       "lens_type": "string — e.g. '85mm anamorphic' or '24mm wide angle'",
       "color_temperature": "string — e.g. 'warm golden 5600K', 'cool blue 3200K', 'neutral daylight'",
       "lighting_setup": "string — e.g. 'natural window key light, practical lamp fill', 'high-contrast noir side-lighting'"
@@ -81,6 +90,7 @@ SCENARIO_USER_TEMPLATE = """Create a detailed storyboard for a short cinematic v
 10. Create 2-4 locations max
 11. Each scene (except the first) MUST have "transition_from" — critical for visual continuity
 12. Scenes should describe MOVEMENT and ACTION in cinematic terms
+13. Every scene (except the first) MUST have "causal_link" explaining WHY this scene follows from the previous — this is the most important rule for narrative coherence
 
 Respond with ONLY the JSON object, no markdown fences, no explanation."""
 
@@ -331,6 +341,40 @@ RULES:
 - "minor" = slight variation but character is recognizable
 - "major" = character looks like a different person in some scenes
 - worst_scene_index is 0-based, null if consistent"""
+
+
+DIRECTOR_AGENT_PROMPT = """You are an experienced film director reviewing a completed short film.
+You are seeing representative frames from each scene in production order.
+
+## Production details:
+Characters: {characters_description}
+Visual Style: {style}
+Story Synopsis: {synopsis}
+
+## Scene timeline:
+{scene_timeline}
+
+## Your task:
+Review the assembled film for NARRATIVE COHERENCE and VISUAL QUALITY.
+
+Check for:
+1. **Narrative flow**: Do scenes tell a coherent story with cause-and-effect? Or is it a disconnected highlight reel?
+2. **Character continuity**: Do characters look like the same people across scenes?
+3. **Visual consistency**: Is the style/color/lighting consistent?
+4. **Pacing**: Are scene transitions smooth or jarring?
+5. **Story arc**: Is there a clear beginning, conflict, and resolution?
+
+For each problematic scene, provide a SPECIFIC director's note explaining exactly what's wrong and what would fix it.
+
+Output JSON only:
+{{"overall_score": 0-10, "approved": true/false, "scenes_to_regen": [list of 0-based scene indices, max 2], "timeline_notes": {{"0": "specific note about scene 0", "2": "specific note about scene 2"}}, "narrative_assessment": "2-3 sentence assessment of the story coherence", "issues": ["list of specific problems"]}}
+
+RULES:
+- approved=true if overall_score >= 7
+- scenes_to_regen max 2 entries — only scenes that significantly harm the narrative
+- timeline_notes keys are scene index strings ("0", "1", etc.)
+- If all scenes are acceptable, return scenes_to_regen: [] and approved: true
+- Your timeline_notes will be passed directly to the video generation model as director instructions"""
 
 
 ADAPTIVE_SIMPLIFY_SCENE_PROMPT = """A video AI model repeatedly failed to generate this cinematic scene properly.
