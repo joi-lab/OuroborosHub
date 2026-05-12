@@ -93,6 +93,7 @@ class Scene:
     lens_type: Optional[str] = None  # e.g. "85mm anamorphic"
     color_temperature: Optional[str] = None  # e.g. "warm golden hour"
     lighting_setup: Optional[str] = None  # e.g. "natural window light, soft shadows"
+    causal_link: Optional[str] = None  # why this scene follows causally from the previous one
 
 
 @dataclass

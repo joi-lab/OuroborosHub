@@ -236,8 +236,8 @@
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "84fb040815e93fc0d960877d8de0d3fcc4e66205850b20ef1e3a93498744bc06",
-          "size": 5599
+          "sha256": "81defa0688a979d321c1ad6e2a51474e273d642dd356c365d96ac044697911b7",
+          "size": 5601
         },
         {
           "path": "__init__.py",
@@ -246,28 +246,28 @@
         },
         {
           "path": "api_client.py",
-          "sha256": "8a72b27af7ca1ac6886c26f0cb1dec7439acf77a898786ae06eee9d6e27d0a6e",
-          "size": 31816
+          "sha256": "dfc57df24d29a54648dcc8e4d77aaad14bfc506739d2029713a432336d84cbce",
+          "size": 34076
         },
         {
           "path": "models.py",
-          "sha256": "e1490f9f6cfdef03f700388a403e000206392f321ea2c61a6d85a197328cb641",
-          "size": 7733
+          "sha256": "f364adb18329206df11c3ff4e42e59ca909f8f8a6e84fe3a7899b6cbbb2b1d1e",
+          "size": 7828
         },
         {
           "path": "pipeline.py",
-          "sha256": "80f220f8aeff4154fef9f6144f768ba306e1f30c59f6883b1ba4f5bec60e50ea",
-          "size": 47914
+          "sha256": "83e1d18f6defbfe6b1db3513ff112b075f6297712778921383445f8faea8803c",
+          "size": 52717
         },
         {
           "path": "plugin.py",
-          "sha256": "721aec7e7383a305e699148af9861187541a177e2ea6949432f55381dcba5656",
-          "size": 26786
+          "sha256": "84e704c84e9502cc7669c9be86cf165d5acf918d706459cc4dd9af89840033c8",
+          "size": 27081
         },
         {
           "path": "prompts.py",
-          "sha256": "f009983ebcf8d9be77bf4bad299942826f23495e036ede109e4d1ab9ad492f15",
-          "size": 16090
+          "sha256": "0e14a0dbabde578b62f60ab6fc0ec6645348d04357b13d8bb2449012f9553821",
+          "size": 18762
         }
       ],
       "install_specs": [
@@ -276,7 +276,7 @@
       "name": "video_studio",
       "slug": "video_studio",
       "type": "extension",
-      "version": "1.1.0",
+      "version": "1.2.0",
       "when_to_use": "User wants to generate a photorealistic cinematic video, film scene, documentary, live-action style video, or realistic narrative with consistent characters, Gemini multimodal quality control, and Hollywood-grade production quality. Separate from anime_studio which generates 2D anime cartoons."
     },
     {

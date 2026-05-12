@@ -1,7 +1,7 @@
 ---
 name: video_studio
 description: Hollywood-grade photorealistic video production with Gemini multimodal AV QC, parallel best-of-N candidate generation, effort-based quality control (low/regular/max), voice/dialogue synthesis, and Director cross-scene review
-version: 1.1.0
+version: 1.2.0
 type: extension
 entry: plugin.py
 permissions: [net, route, widget, ws_handler, tool, read_settings, subprocess]
@@ -94,7 +94,7 @@ ui_tab:
             condition_key: has_warnings
 ---
 
-# Video Studio v1.0
+# Video Studio v1.2.0
 
 Hollywood-grade photorealistic video generator with Gemini multimodal AV QC.
 
