@@ -1,7 +1,7 @@
 ---
 name: anime_studio
 description: AI-powered 2D anime generator with VLM-verified assets, video analysis via Gemini, sequential keyframes, scene continuity chain, and multi-model image generation
-version: 2.2.0
+version: 2.3.0
 type: extension
 entry: plugin.py
 permissions: [net, route, widget, ws_handler, tool, read_settings, subprocess]

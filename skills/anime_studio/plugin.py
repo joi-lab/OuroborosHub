@@ -4,6 +4,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
+import signal
 import threading
 import time
 from pathlib import Path
@@ -23,6 +25,103 @@ _active_loops_lock = threading.Lock()
 _shutdown_event = threading.Event()
 _api = None
 _state_dir: Path = Path(".")
+
+# Registry of ffmpeg process-group IDs so panic SIGTERM can kill them.
+# Populated by pipeline._run_ffmpeg (via _register_pgid / _unregister_pgid),
+# cleared by _cleanup.  Keyed by pid for safe concurrent removal.
+_active_pgids: dict[int, int] = {}  # pid -> pgid
+_active_pgids_lock = threading.Lock()
+_sigterm_handler_installed = False
+_sigterm_handler_lock = threading.Lock()
+
+
+def _register_pgid(pid: int, pgid: int) -> None:
+    """Called by pipeline._run_ffmpeg immediately after Popen so the module
+    knows which process groups to kill on panic/SIGTERM."""
+    with _active_pgids_lock:
+        _active_pgids[pid] = pgid
+
+
+def _unregister_pgid(pid: int) -> None:
+    """Called by pipeline._run_ffmpeg in the finally block."""
+    with _active_pgids_lock:
+        _active_pgids.pop(pid, None)
+
+
+def _kill_tracked_pgids() -> None:
+    """Send SIGKILL to every tracked ffmpeg process group.
+
+    Called from both _cleanup (normal unload) and the SIGTERM handler (panic).
+    Safe to call more than once — already-dead pgids are silently ignored.
+    POSIX-only: on Windows, falls back to individual proc.kill() if available.
+    """
+    import sys
+    with _active_pgids_lock:
+        pgids_snapshot = dict(_active_pgids)
+
+    if sys.platform == "win32":
+        # Windows has no process groups; individual kills are best-effort
+        import signal as _signal
+        for pid in pgids_snapshot:
+            try:
+                os.kill(pid, _signal.SIGTERM)
+            except (OSError, ProcessLookupError):
+                pass
+        return
+
+    for pid, pgid in pgids_snapshot.items():
+        try:
+            os.killpg(pgid, signal.SIGKILL)
+        except (OSError, ProcessLookupError):
+            pass
+
+
+def _install_sigterm_handler() -> None:
+    """Register a cleanup callback on POSIX SIGTERM so tracked ffmpeg process
+    groups are killed when the host sends SIGTERM during panic.
+
+    Design notes:
+    - POSIX-only: skipped silently on Windows (no SIGTERM / no process groups).
+    - Chains to the existing handler: captures whatever handler is installed
+      (host's or SIG_DFL), installs our wrapper that first calls
+      _kill_tracked_pgids(), then forwards to the captured handler. This means
+      the host's own panic/SIGTERM handler still runs after ffmpeg groups are
+      killed — no handler is lost.
+    - Main-thread only: signal.signal() requires main thread; skipped silently
+      in worker/subprocess contexts.
+    - Idempotent: protected by ``_sigterm_handler_installed`` flag + lock.
+    """
+    import sys
+    import threading as _threading
+    global _sigterm_handler_installed
+    with _sigterm_handler_lock:
+        if _sigterm_handler_installed:
+            return
+        _sigterm_handler_installed = True  # mark early to avoid double-install
+
+        if sys.platform == "win32" or not hasattr(signal, "SIGTERM"):
+            return  # No process groups on Windows — skip
+
+        # Only install from the main thread (signal.signal requirement)
+        if _threading.current_thread() is not _threading.main_thread():
+            return
+
+        try:
+            existing = signal.getsignal(signal.SIGTERM)
+
+            def _handler(signum, frame):
+                _kill_tracked_pgids()
+                # Chain to previous handler (host's panic handler or SIG_DFL)
+                if callable(existing):
+                    existing(signum, frame)
+                elif existing == signal.SIG_DFL:
+                    signal.signal(signal.SIGTERM, signal.SIG_DFL)
+                    os.kill(os.getpid(), signal.SIGTERM)
+
+            signal.signal(signal.SIGTERM, _handler)
+        except (OSError, ValueError):
+            # May fail in worker subprocess contexts — acceptable
+            pass
 
 
 def _is_path_confined(path: Path) -> bool:
@@ -137,6 +236,9 @@ def register(api):
         timeout_sec=300,
     )
 
+    # Install SIGTERM handler so ffmpeg pgids are killed on panic
+    _install_sigterm_handler()
+
     # Cleanup handler
     api.on_unload(_cleanup)
 
@@ -153,9 +255,15 @@ def _cleanup():
     Guarantees all tracked subprocesses and threads are terminated:
     1. Sets shutdown_event so pipeline threads exit between phases
     2. Cancels all tasks in tracked event loops (interrupts in-flight HTTP)
-    3. Kills all tracked ffmpeg/ffprobe subprocesses immediately
-    4. Joins each pipeline thread with timeout
-    5. shutdown_event stays set permanently after cleanup
+    3. Kills all tracked ffmpeg process groups via pgid registry (SIGKILL)
+    4. Kills tracked pipeline subprocess lists as a redundant sweep
+    5. Joins each pipeline thread with timeout
+    6. shutdown_event stays set permanently after cleanup
+
+    Note: this is also indirectly triggered on panic via the SIGTERM handler
+    installed by _install_sigterm_handler() during register().  The SIGTERM
+    handler calls _kill_tracked_pgids() directly so ffmpeg groups die even
+    before the on_unload path runs.
     """
     global _jobs
     _shutdown_event.set()
@@ -171,7 +279,12 @@ def _cleanup():
                 pass
         _active_loops.clear()
 
-    # Kill tracked subprocesses immediately
+    # Kill all tracked ffmpeg process groups immediately (SIGKILL via pgid)
+    _kill_tracked_pgids()
+    with _active_pgids_lock:
+        _active_pgids.clear()
+
+    # Kill tracked pipeline subprocess lists as a redundant sweep
     with _active_pipelines_lock:
         for pipeline in _active_pipelines:
             try:
