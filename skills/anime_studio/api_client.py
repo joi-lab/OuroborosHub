@@ -74,18 +74,28 @@ class OpenRouterClient:
         model: str = "anthropic/claude-sonnet-4.6",
         max_toks: int = 4096,
         temperature: float = 0.7,
+        json_mode: bool = False,
     ) -> str:
-        """Standard LLM chat completion. Returns content text."""
-        async with httpx.AsyncClient(timeout=120) as client:
+        """Standard LLM chat completion. Returns content text.
+
+        Args:
+            json_mode: If True, sets response_format={"type":"json_object"} so the
+                model is guaranteed to return valid JSON. Use for structured storyboard
+                and scenario generation calls.
+        """
+        payload: dict = {
+            "model": model,
+            "messages": messages,
+            "max_tokens": max_toks,
+            "temperature": temperature,
+        }
+        if json_mode:
+            payload["response_format"] = {"type": "json_object"}
+        async with httpx.AsyncClient(timeout=300) as client:
             resp = await client.post(
                 f"{OPENROUTER_BASE}/chat/completions",
                 headers=self._headers(),
-                json={
-                    "model": model,
-                    "messages": messages,
-                    "max_tokens": max_toks,
-                    "temperature": temperature,
-                },
+                json=payload,
             )
             resp.raise_for_status()
             data = resp.json()
@@ -99,15 +109,21 @@ class OpenRouterClient:
         filename: str,
         aspect_ratio: str = "1:1",
         size: str = "auto",
+        model: str = "openai/gpt-image-2",
     ) -> str:
-        """Generate image via gpt-5.4-image-2. Returns local file path."""
+        """Generate image via OpenRouter chat completions (gpt-image-2 or gpt-5.4-image-2).
+
+        Uses /chat/completions with modalities=["image","text"] — the OpenRouter-supported
+        path for OpenAI image models. Pass model="openai/gpt-image-2" for the latest model
+        or "openai/gpt-5.4-image-2" for the previous generation.
+        """
         filename = _safe_filename(filename)
         async with httpx.AsyncClient(timeout=360) as client:
             resp = await client.post(
                 f"{OPENROUTER_BASE}/chat/completions",
                 headers=self._headers(),
                 json={
-                    "model": "openai/gpt-5.4-image-2",
+                    "model": model,
                     "messages": [{"role": "user", "content": prompt}],
                     "modalities": ["image", "text"],
                 },
@@ -124,6 +140,66 @@ class OpenRouterClient:
         filepath = self.assets_dir / filename
         filepath.write_bytes(base64.b64decode(image_b64))
         logger.info(f"Generated image (gpt-image-2): {filepath}")
+        return str(filepath)
+
+    # ─── Image Generation (GPT-Image-2 native via Images API) ──────
+
+    # Maps common aspect-ratio strings to gpt-image-2 size strings.
+    # gpt-image-2 accepts arbitrary WxH divisible by 16 in the [1:3, 3:1] range.
+    _GPT_IMAGE_ASPECT_SIZE: dict[str, str] = {
+        "16:9": "1344x768",
+        "9:16": "768x1344",
+        "1:1":  "1024x1024",
+        "4:3":  "1024x768",
+        "3:4":  "768x1024",
+    }
+
+    async def generate_image_gpt(
+        self,
+        prompt: str,
+        filename: str,
+        aspect_ratio: str = "16:9",
+    ) -> str:
+        """Generate image via gpt-image-2 using the native OpenAI Images API.
+
+        Uses /v1/images/generations with model=gpt-image-2.
+        Returns local file path. Response is always b64_json for this model.
+        """
+        filename = _safe_filename(filename)
+        size = self._GPT_IMAGE_ASPECT_SIZE.get(aspect_ratio, "1344x768")
+        async with httpx.AsyncClient(timeout=360) as client:
+            resp = await client.post(
+                f"{OPENROUTER_BASE}/images/generations",
+                headers=self._headers(),
+                json={
+                    "model": "openai/gpt-image-2",
+                    "prompt": prompt,
+                    "n": 1,
+                    "size": size,
+                    "quality": "medium",
+                    "output_format": "png",
+                },
+            )
+            resp.raise_for_status()
+            data = resp.json()
+
+        # gpt-image-2 always returns b64_json, never a URL
+        image_b64 = None
+        for item in data.get("data", []):
+            b64 = item.get("b64_json") or item.get("url", "")
+            if b64.startswith("data:"):
+                b64 = b64.split(",", 1)[1]
+            if b64 and not b64.startswith("http"):
+                image_b64 = b64
+                break
+
+        if not image_b64:
+            logger.error(f"No b64_json in gpt-image-2 response for {filename}: {data}")
+            raise RuntimeError(f"No image data in gpt-image-2 response for {filename}")
+
+        filepath = self.assets_dir / filename
+        filepath.write_bytes(base64.b64decode(image_b64))
+        logger.info(f"Generated image (gpt-image-2 native): {filepath}")
         return str(filepath)
 
     # ─── Image Generation (Nanobanana / Gemini) ─────────────────────
@@ -200,6 +276,11 @@ class OpenRouterClient:
                 resp.raise_for_status()
                 data = resp.json()
 
+            if "choices" not in data or not data["choices"]:
+                err = data.get("error", {})
+                logger.warning(f"VLM verification: no choices in response, error={err}")
+                return {"passed": True, "issues": [], "suggestion": "", "vlm_error": True}
+
             text = data["choices"][0]["message"]["content"].strip()
             if text.startswith("```"):
                 text = text.split("\n", 1)[1] if "\n" in text else text[3:]
@@ -211,10 +292,10 @@ class OpenRouterClient:
             return result
         except (json.JSONDecodeError, ValueError) as e:
             logger.warning(f"VLM verification returned non-JSON: {e}")
-            return {"passed": True, "issues": [], "suggestion": ""}
+            return {"passed": False, "issues": [f"VLM parse error: {e}"], "suggestion": "", "vlm_error": True}
         except Exception as e:
             logger.warning(f"VLM verification call failed: {e}")
-            return {"passed": True, "issues": [], "suggestion": ""}
+            return {"passed": False, "issues": [f"VLM call failed: {e}"], "suggestion": "", "vlm_error": True}
 
     # ─── VLM Compare Two Images ─────────────────────────────────────
 
@@ -250,6 +331,11 @@ class OpenRouterClient:
                 )
                 resp.raise_for_status()
                 data = resp.json()
+
+            if "choices" not in data or not data["choices"]:
+                err = data.get("error", {})
+                logger.warning(f"VLM compare: no choices in response, error={err}")
+                return {"winner": 1, "reason": f"no choices in response: {err}"}
 
             text = data["choices"][0]["message"]["content"].strip()
             if text.startswith("```"):
@@ -384,10 +470,10 @@ class OpenRouterClient:
             return result
         except (json.JSONDecodeError, ValueError) as e:
             logger.warning(f"Video VLM returned non-JSON: {e}")
-            return {"passed": True, "score": 7, "issues": [], "suggestion": ""}
+            return {"passed": False, "score": 4, "issues": [f"VLM parse error: {e}"], "suggestion": "", "vlm_error": True}
         except Exception as e:
             logger.warning(f"Video VLM verification failed: {e}")
-            return {"passed": True, "score": 7, "issues": [], "suggestion": ""}
+            return {"passed": False, "score": 4, "issues": [f"VLM call failed: {e}"], "suggestion": "", "vlm_error": True}
 
     # ─── Video Generation ───────────────────────────────────────────
 
@@ -641,7 +727,16 @@ class OpenRouterClient:
         if not path.exists():
             raise FileNotFoundError(f"Asset not found: {filepath}")
 
-        img = Image.open(path)
+        try:
+            img = Image.open(path)
+        except Exception:
+            # Fallback: PIL cannot parse this image (e.g. nanobanana PNG variant);
+            # return raw bytes with the original MIME type — no resize/recompress.
+            raw = path.read_bytes()
+            ext = path.suffix.lstrip(".").lower()
+            mime = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
+                    "webp": "image/webp"}.get(ext, "image/png")
+            return base64.b64encode(raw).decode(), mime
 
         # Resize if larger than max_dim
         w, h = img.size

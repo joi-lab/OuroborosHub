@@ -53,7 +53,7 @@
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "3a48a1a9542a0682c0a90c0da7c82103b11b50e3a14c1ee150a8efb417d92c34",
+          "sha256": "682478bdf8dd640ee618b4838666d2d4a4d1586677ba2893a012709bd621c472",
           "size": 6765
         },
         {
@@ -63,8 +63,8 @@
         },
         {
           "path": "api_client.py",
-          "sha256": "5c43557e2f31262058306ef157d2c498163b3abc3e86d623a42af9686391e872",
-          "size": 28562
+          "sha256": "37bf8a4d730b8855c57f7a2ea85fdf181b5c7a42891e935c6d518995de9dd2e2",
+          "size": 32712
         },
         {
           "path": "models.py",
@@ -73,8 +73,8 @@
         },
         {
           "path": "pipeline.py",
-          "sha256": "74e5086f571db403ba6a779ccadd7f0c5ea257b893aaaa397b2af02dcc82ae91",
-          "size": 51315
+          "sha256": "dae0a5b79d38c6fc2c526224c82a0b4d1fce82a348067940771ceae2de0dd040",
+          "size": 54603
         },
         {
           "path": "pipeline_test.txt",
@@ -83,8 +83,8 @@
         },
         {
           "path": "plugin.py",
-          "sha256": "c6766cce33620b04b5f1e5ecb571a05c467e0eefb749c98281aa514c3c694d60",
-          "size": 22486
+          "sha256": "65e8bf6455595c5b3cba0df395d013b72cc6cdce4bdf551ebc11f47d1fa1a5b8",
+          "size": 26884
         },
         {
           "path": "prompts.py",
@@ -98,7 +98,7 @@
       "name": "anime_studio",
       "slug": "anime_studio",
       "type": "extension",
-      "version": "2.2.0",
+      "version": "2.3.0",
       "when_to_use": "User wants to generate a short animated 2D anime cartoon, music video, or animated scene with consistent characters, VLM verification, and narrative continuity."
     },
     {

@@ -6,8 +6,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import shutil
 import subprocess
+import sys
 import threading
 from pathlib import Path
 from typing import Callable, Optional
@@ -45,7 +47,7 @@ from .prompts import (
 logger = logging.getLogger("anime_studio.pipeline")
 
 # Per-operation timeout limits (seconds)
-TIMEOUT_SCENARIO = 120
+TIMEOUT_SCENARIO = 240
 TIMEOUT_IMAGE = 400
 TIMEOUT_MUSIC = 200
 TIMEOUT_VIDEO = 660
@@ -157,10 +159,21 @@ class Pipeline:
     ) -> subprocess.CompletedProcess:
         """Run ffmpeg/ffprobe as a tracked child process.
 
-        Uses start_new_session=True so the subprocess gets its own process group,
-        enabling reliable group-kill on panic/unload. Environment is scrubbed to
-        only PATH (needed for ffmpeg binary resolution) so no unrelated secrets
-        leak to child processes.
+        Uses start_new_session=True so each ffmpeg process gets its own process
+        group, enabling reliable group-kill via os.killpg from both the plugin's
+        _cleanup (normal unload) and the plugin module's SIGTERM handler (panic).
+
+        Panic path:  host server receives SIGTERM → plugin's SIGTERM handler
+        fires → _kill_tracked_pgids() sends SIGKILL to every registered pgid →
+        then chains to the previous handler so normal shutdown proceeds.
+        This ensures ffmpeg subprocesses are killed even when os._exit(99)
+        is imminent, satisfying the BIBLE Emergency Stop invariant.
+
+        The pgid is registered with the plugin module immediately after Popen
+        (via _register_pgid) and removed in the finally block (_unregister_pgid).
+
+        Environment is scrubbed to only PATH (needed for ffmpeg binary
+        resolution) so no unrelated secrets leak to child processes.
         """
         import os
 
@@ -174,6 +187,19 @@ class Pipeline:
             start_new_session=True,
             env=scrubbed_env,
         )
+        # Register pgid with plugin module for panic-safe group-kill (POSIX only)
+        if sys.platform != "win32":
+            try:
+                pgid = os.getpgid(proc.pid)
+            except (OSError, ProcessLookupError):
+                pgid = None
+            if pgid is not None:
+                try:
+                    from . import plugin as _plugin_mod
+                    _plugin_mod._register_pgid(proc.pid, pgid)
+                except Exception:
+                    pass
+
         with self._procs_lock:
             self._active_procs.append(proc)
         try:
@@ -194,26 +220,37 @@ class Pipeline:
             with self._procs_lock:
                 if proc in self._active_procs:
                     self._active_procs.remove(proc)
+            # Unregister pgid regardless of outcome
+            try:
+                from . import plugin as _plugin_mod
+                _plugin_mod._unregister_pgid(proc.pid)
+            except Exception:
+                pass
 
     def _kill_proc(self, proc: subprocess.Popen):
         """Kill a subprocess and its entire process group.
 
-        Since subprocesses are started with start_new_session=True, each gets
-        its own process group. Killing the group ensures ffmpeg's child processes
-        (e.g. filter workers) are also terminated on panic/unload.
-        """
-        import os
-        import signal
+        Since subprocesses are started with start_new_session=True each gets
+        its own process group.  Killing the group ensures ffmpeg's child
+        processes (e.g. filter workers) are also terminated on timeout/unload.
 
-        try:
-            pgid = os.getpgid(proc.pid)
-            os.killpg(pgid, signal.SIGKILL)
-        except (OSError, ProcessLookupError):
-            # Fallback: process already dead or pgid lookup failed
+        On Windows, process groups and os.killpg are unavailable; falls back
+        to proc.kill() (SIGKILL equivalent on Windows).
+        """
+        if sys.platform != "win32":
+            import signal as _signal
             try:
-                proc.kill()
+                pgid = os.getpgid(proc.pid)
+                os.killpg(pgid, _signal.SIGKILL)
+                return
             except (OSError, ProcessLookupError):
                 pass
+
+        # Fallback: kill just the process (Windows or pgid unavailable)
+        try:
+            proc.kill()
+        except (OSError, ProcessLookupError):
+            pass
 
     def kill_active_processes(self):
         with self._procs_lock:
@@ -223,11 +260,35 @@ class Pipeline:
 
     # ─── Image Generation Router ────────────────────────────────────
 
+    # Duration allowlists per video model — values accepted by OpenRouter /videos.
+    # Seedance: any integer 4–15 is accepted.
+    # Veo-3.1 family: only [5, 8] (OpenRouter supported_durations).
+    _VIDEO_MODEL_DURATION_MAP: dict[str, list[int]] = {
+        "google/veo-3.1":       [5, 8],
+        "google/veo-3.1-fast":  [5, 8],
+        "google/veo-3.1-lite":  [4, 6, 8],
+    }
+
+    def _clamp_duration(self, desired_sec: int, model: str) -> int:
+        """Return the nearest allowed duration for the given video model."""
+        allowed = self._VIDEO_MODEL_DURATION_MAP.get(model)
+        if not allowed:
+            # Default: seedance and other models accept 4–15
+            return min(15, max(4, desired_sec))
+        # Pick the closest allowed value
+        return min(allowed, key=lambda v: abs(v - desired_sec))
+
     async def _generate_image(self, job: Job, prompt: str, filename: str, aspect_ratio: str = "16:9") -> str:
         """Route image generation to configured model."""
         if job.settings.image_model == "nanobanana":
             return await self.client.generate_image_nanobanana(
                 prompt=prompt, filename=filename, aspect_ratio=aspect_ratio,
+            )
+        elif job.settings.image_model == "gpt-image-2":
+            # openai/gpt-5.4-image-2 on OpenRouter uses chat completions with modalities.
+            return await self.client.generate_image(
+                prompt=prompt, filename=filename, aspect_ratio=aspect_ratio,
+                model="openai/gpt-5.4-image-2",
             )
         else:
             return await self.client.generate_image(
@@ -279,6 +340,11 @@ class Pipeline:
                 )
             except Exception as e:
                 logger.warning(f"VLM verification skipped for {filename}: {e}")
+                stats["skipped"] = stats.get("skipped", 0) + 1
+                return image_path
+
+            if result.get("vlm_error"):
+                # VLM service error (not a quality failure) — count as skipped and keep the image
                 stats["skipped"] = stats.get("skipped", 0) + 1
                 return image_path
 
@@ -564,6 +630,15 @@ class Pipeline:
     async def run(self, job: Job) -> Job:
         """Execute the full pipeline."""
         try:
+            # Preflight: verify ffmpeg is available before spending any API budget
+            if not shutil.which("ffmpeg"):
+                job.progress.status = JobStatus.FAILED
+                job.progress.message = (
+                    "ffmpeg not found. Install it before generating anime. "
+                    "macOS: brew install ffmpeg | Linux: apt install ffmpeg"
+                )
+                return job
+
             # Phase 1: Scenario
             self._check_shutdown()
             job.progress.phase = JobPhase.SCENARIO
@@ -685,15 +760,9 @@ class Pipeline:
             ],
             model="anthropic/claude-sonnet-4.6",
             max_toks=8192, temperature=0.8,
+            json_mode=True,
         )
-        text = response.strip()
-        if text.startswith("```"):
-            text = text.split("\n", 1)[1] if "\n" in text else text[3:]
-            if text.endswith("```"):
-                text = text[:-3]
-            text = text.strip()
-
-        data = json.loads(text)
+        data = json.loads(response)
         scenes = []
         for s in data["scenes"]:
             scenes.append(Scene(
@@ -927,7 +996,7 @@ class Pipeline:
                         self.client.generate_video(
                             prompt=current_prompt,
                             filename=f"scene_{scene.index}_v{attempt}.mp4",
-                            duration=min(15, max(4, int(scene.duration_sec))),
+                            duration=self._clamp_duration(int(scene.duration_sec), job.settings.video_model),
                             resolution=job.settings.resolution,
                             aspect_ratio=job.settings.aspect_ratio,
                             input_references=references if references else None,
@@ -1021,7 +1090,7 @@ class Pipeline:
                 self.client.generate_video(
                     prompt=prompt,
                     filename=f"scene_{scene.index}_regen.mp4",
-                    duration=min(15, max(4, int(scene.duration_sec))),
+                    duration=self._clamp_duration(int(scene.duration_sec), job.settings.video_model),
                     resolution=job.settings.resolution,
                     aspect_ratio=job.settings.aspect_ratio,
                     input_references=references if references else None,
