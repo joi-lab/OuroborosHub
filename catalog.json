@@ -232,6 +232,54 @@
       "version": "0.7.0"
     },
     {
+      "description": "Hollywood-grade photorealistic video production with Gemini multimodal AV QC, parallel best-of-N candidate generation, effort-based quality control (low/regular/max), voice/dialogue synthesis, and Director cross-scene review",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "sha256": "84fb040815e93fc0d960877d8de0d3fcc4e66205850b20ef1e3a93498744bc06",
+          "size": 5599
+        },
+        {
+          "path": "__init__.py",
+          "sha256": "d966675f6e312981f6bcad85977b470f8a40b5444c0b1d2bd82d53fae1457fee",
+          "size": 33
+        },
+        {
+          "path": "api_client.py",
+          "sha256": "8a72b27af7ca1ac6886c26f0cb1dec7439acf77a898786ae06eee9d6e27d0a6e",
+          "size": 31816
+        },
+        {
+          "path": "models.py",
+          "sha256": "e1490f9f6cfdef03f700388a403e000206392f321ea2c61a6d85a197328cb641",
+          "size": 7733
+        },
+        {
+          "path": "pipeline.py",
+          "sha256": "80f220f8aeff4154fef9f6144f768ba306e1f30c59f6883b1ba4f5bec60e50ea",
+          "size": 47914
+        },
+        {
+          "path": "plugin.py",
+          "sha256": "721aec7e7383a305e699148af9861187541a177e2ea6949432f55381dcba5656",
+          "size": 26786
+        },
+        {
+          "path": "prompts.py",
+          "sha256": "f009983ebcf8d9be77bf4bad299942826f23495e036ede109e4d1ab9ad492f15",
+          "size": 16090
+        }
+      ],
+      "install_specs": [
+        "Pillow"
+      ],
+      "name": "video_studio",
+      "slug": "video_studio",
+      "type": "extension",
+      "version": "1.1.0",
+      "when_to_use": "User wants to generate a photorealistic cinematic video, film scene, documentary, live-action style video, or realistic narrative with consistent characters, Gemini multimodal quality control, and Hollywood-grade production quality. Separate from anime_studio which generates 2D anime cartoons."
+    },
+    {
       "description": "Live weather widget — looks up current conditions for any city via wttr.in (no API key).",
       "files": [
         {
