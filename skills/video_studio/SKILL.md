@@ -1,10 +1,11 @@
 ---
 name: video_studio
 description: Hollywood-grade photorealistic video production with Gemini multimodal AV QC, parallel best-of-N candidate generation, effort-based quality control (low/regular/max), voice/dialogue synthesis, and Director cross-scene review
-version: 1.2.0
+version: 1.3.0
 type: extension
 entry: plugin.py
-permissions: [net, route, widget, ws_handler, tool, read_settings, subprocess]
+runtime: python3
+permissions: [net, route, widget, ws_handler, tool, read_settings, subprocess, fs]
 env_from_settings: [OPENROUTER_API_KEY]
 when_to_use: User wants to generate a photorealistic cinematic video, film scene, documentary, live-action style video, or realistic narrative with consistent characters, Gemini multimodal quality control, and Hollywood-grade production quality. Separate from anime_studio which generates 2D anime cartoons.
 timeout_sec: 300
@@ -68,6 +69,19 @@ ui_tab:
             options: ["true", "false"]
             default: "true"
         submit_label: "🎬 Generate Video"
+      - type: form
+        title: "🔄 Resume Interrupted Job"
+        route: resume
+        method: POST
+        mode: job
+        status_route: status
+        fields:
+          - name: job_id
+            label: Job ID
+            type: text
+            placeholder: "e.g. b4ec4c07"
+            required: true
+        submit_label: "▶️ Resume"
       - type: subscription
         event: video_studio_progress
         render:
