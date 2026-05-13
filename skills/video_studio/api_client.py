@@ -382,6 +382,40 @@ class OpenRouterClient:
         except Exception as e:
             return {"passed": False, "issues": [f"VLM call failed: {e}"], "suggestion": "", "vlm_error": True}
 
+    # ─── VLM Analyze Single Image (raw text) ──────────────────────────
+
+    async def analyze_image_vlm_text(self, image_path: str, prompt: str) -> str:
+        """Analyze a single image with a VLM prompt and return raw text (not JSON).
+
+        Used for open-ended image analysis like character DNA extraction.
+        """
+        image_url = self.get_image_url(image_path)
+        try:
+            async with httpx.AsyncClient(timeout=60) as client:
+                resp = await client.post(
+                    f"{OPENROUTER_BASE}/chat/completions",
+                    headers=self._headers(),
+                    json={
+                        "model": "anthropic/claude-sonnet-4.6",
+                        "messages": [{"role": "user", "content": [
+                            {"type": "text", "text": prompt},
+                            {"type": "image_url", "image_url": {"url": image_url}},
+                        ]}],
+                        "max_tokens": 1024,
+                        "temperature": 0.2,
+                    },
+                )
+                resp.raise_for_status()
+                data = resp.json()
+
+            if "choices" not in data or not data["choices"]:
+                return ""
+
+            return data["choices"][0]["message"]["content"].strip()
+        except Exception as e:
+            logger.warning(f"VLM text analysis failed: {e}")
+            return ""
+
     # ─── VLM Compare Two Images ─────────────────────────────────────
 
     async def compare_images_vlm(self, image_path_1: str, image_path_2: str, prompt: str) -> dict:

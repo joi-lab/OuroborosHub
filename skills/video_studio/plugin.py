@@ -76,6 +76,7 @@ def register(api):
     api.register_route("jobs", handler=handle_jobs, methods=("GET",))
     api.register_route("asset", handler=handle_asset, methods=("GET",))
     api.register_route("result", handler=handle_result, methods=("GET",))
+    api.register_route("resume", handler=handle_resume, methods=("POST",))
 
     # Register WebSocket handler
     api.register_ws_handler("studio_ping", handler=ws_ping)
@@ -111,6 +112,8 @@ def register(api):
                          "default": "dramatic"},
                         {"name": "duration_sec", "label": "Duration (seconds)", "type": "number", "default": 30},
                         {"name": "num_scenes", "label": "Number of Scenes", "type": "number", "default": 4},
+                        {"name": "resolution", "label": "Resolution", "type": "select",
+                         "options": ["720p", "1080p"], "default": "720p"},
                         {"name": "effort", "label": "Quality Effort", "type": "select",
                          "options": ["low", "regular", "max"], "default": "regular"},
                         {"name": "video_model", "label": "Video Model", "type": "select",
@@ -124,6 +127,20 @@ def register(api):
                          "options": ["true", "false"], "default": "true"},
                     ],
                     "submit_label": "\U0001f3ac Generate Video",
+                },
+                {
+                    "type": "form",
+                    "title": "🔄 Resume Interrupted Job",
+                    "route": "resume",
+                    "method": "POST",
+                    "mode": "job",
+                    "status_route": "status",
+                    "fields": [
+                        {"name": "job_id", "label": "Job ID", "type": "text",
+                         "placeholder": "e.g. b4ec4c07",
+                         "required": True},
+                    ],
+                    "submit_label": "▶️ Resume",
                 },
                 {
                     "type": "subscription",
@@ -161,12 +178,27 @@ def register(api):
                 "mood": {"type": "string", "description": "Overall mood", "default": "dramatic"},
                 "duration_sec": {"type": "number", "description": "Total duration in seconds (10-120)", "default": 30},
                 "num_scenes": {"type": "integer", "description": "Number of scenes (2-8)", "default": 4},
+                "resolution": {"type": "string", "description": "Output resolution: 720p or 1080p", "default": "720p"},
                 "effort": {"type": "string", "description": "Quality effort: low/regular/max", "default": "regular"},
                 "video_model": {"type": "string", "description": "Video model", "default": "bytedance/seedance-2.0"},
                 "music_style": {"type": "string", "description": "Music style", "default": "orchestral cinematic"},
                 "generate_audio": {"type": "boolean", "description": "Generate voice/dialogue via Seedance", "default": True},
             },
             "required": ["theme"],
+        },
+        timeout_sec=300,
+    )
+
+    api.register_tool(
+        "resume_video",
+        handler=tool_resume_video,
+        description="Resume an interrupted video generation job that has existing clips but no final video",
+        schema={
+            "type": "object",
+            "properties": {
+                "job_id": {"type": "string", "description": "ID of the interrupted job to resume"},
+            },
+            "required": ["job_id"],
         },
         timeout_sec=300,
     )
@@ -312,12 +344,15 @@ async def handle_generate(request) -> Any:
     except (TypeError, ValueError):
         num_scenes = 4
 
+    raw_res = body.get("resolution", "720p")
+    valid_res = raw_res if raw_res in ("720p", "1080p") else "720p"
     settings = GenerationSettings(
         theme=theme,
         style=body.get("style", "photorealistic cinematic"),
         duration_sec=duration_sec,
         num_scenes=num_scenes,
         mood=body.get("mood", "dramatic"),
+        resolution=valid_res,
         video_model=body.get("video_model", "bytedance/seedance-2.0"),
         music_style=body.get("music_style", "orchestral cinematic"),
         effort=body.get("effort", "regular"),
@@ -445,6 +480,79 @@ async def handle_result(request) -> Any:
     return FileResponse(str(path), media_type="video/mp4")
 
 
+async def handle_resume(request) -> Any:
+    """Resume an interrupted video generation job."""
+    from starlette.responses import JSONResponse
+
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+
+    job_id = (body.get("job_id") or "").strip()
+    if not job_id:
+        return JSONResponse({"error": "job_id is required"}, status_code=400)
+
+    job = _load_job(job_id)
+    if not job:
+        return JSONResponse({"error": f"Job {job_id} not found"}, status_code=404)
+
+    if job.progress.final_video_url:
+        return JSONResponse(
+            {"error": "Job already completed", "final_video_url": job.progress.final_video_url},
+            status_code=409,
+        )
+
+    storyboard = job.progress.storyboard
+    if not storyboard or not storyboard.scenes:
+        return JSONResponse(
+            {"error": "Job has no storyboard — cannot resume; start a new job instead"},
+            status_code=422,
+        )
+
+    existing_clips = [
+        str(sc.video_url) for sc in storyboard.scenes
+        if sc.video_url and Path(sc.video_url).exists()
+    ]
+    if not existing_clips:
+        return JSONResponse(
+            {"error": "No existing video clips on disk — cannot resume; start a new job instead"},
+            status_code=422,
+        )
+
+    keys = _api.get_settings(["OPENROUTER_API_KEY"])
+    or_key = keys.get("OPENROUTER_API_KEY", "")
+    if not or_key:
+        return JSONResponse(
+            {"error": "OPENROUTER_API_KEY not configured or not granted"},
+            status_code=403,
+        )
+
+    import shutil
+    missing_bins = [b for b in ("ffmpeg", "ffprobe") if not shutil.which(b)]
+    if missing_bins:
+        return JSONResponse(
+            {"error": f"Required binaries not found on PATH: {', '.join(missing_bins)}. "
+                      "Install ffmpeg (e.g. `brew install ffmpeg`) and ensure it is on PATH."},
+            status_code=503,
+        )
+
+    with _jobs_lock:
+        _jobs[job.job_id] = job
+
+    thread = threading.Thread(
+        target=_run_pipeline_thread,
+        args=(job, or_key),
+        kwargs={"resume": True},
+        daemon=True,
+        name=f"video_studio_resume_{job.job_id}",
+    )
+    _track_thread(thread)
+    thread.start()
+
+    return JSONResponse({"job_id": job.job_id, "status": "resumed", "existing_clips": len(existing_clips)})
+
+
 # ─── WebSocket Handler ──────────────────────────────────────────────
 
 
@@ -462,6 +570,7 @@ async def tool_generate_video(
     mood: str = "dramatic",
     duration_sec: float = 30,
     num_scenes: int = 4,
+    resolution: str = "720p",
     effort: str = "regular",
     video_model: str = "bytedance/seedance-2.0",
     music_style: str = "orchestral cinematic",
@@ -497,12 +606,14 @@ async def tool_generate_video(
 
     from .models import GenerationSettings, Job
 
+    valid_res = resolution if resolution in ("720p", "1080p") else "720p"
     settings = GenerationSettings(
         theme=theme,
         style=style,
         mood=mood,
         duration_sec=min(120, max(10, duration_sec)),
         num_scenes=min(8, max(2, num_scenes)),
+        resolution=valid_res,
         video_model=video_model,
         music_style=music_style,
         effort=effort if effort in ("low", "regular", "max") else "regular",
@@ -531,9 +642,67 @@ async def tool_generate_video(
         f"Video generation started!\n"
         f"Job ID: {job.job_id}\n"
         f"Theme: {theme}\n"
-        f"Style: {style} | Mood: {mood} | Effort: {effort}\n"
+        f"Style: {style} | Mood: {mood} | Effort: {effort} | Resolution: {valid_res}\n"
         f"Video model: {video_model} | Audio: {generate_audio}\n"
         f"Duration: {settings.duration_sec}s, {settings.num_scenes} scenes\n\n"
+        f"Track progress in the Video Studio widget tab, "
+        f"or poll: GET /api/extensions/video_studio/status?job_id={job.job_id}"
+    )
+
+
+async def tool_resume_video(ctx, job_id: str = "") -> str:
+    """Resume an interrupted video generation job via the agent tool interface."""
+    job_id = job_id.strip()
+    if not job_id:
+        return "Error: job_id parameter is required."
+
+    job = _load_job(job_id)
+    if not job:
+        return f"Error: Job {job_id} not found."
+
+    if job.progress.final_video_url:
+        return f"Job {job_id} already completed. Final video: {job.progress.final_video_url}"
+
+    storyboard = job.progress.storyboard
+    if not storyboard or not storyboard.scenes:
+        return f"Error: Job {job_id} has no storyboard — cannot resume; start a new job instead."
+
+    existing_clips = [
+        str(sc.video_url) for sc in storyboard.scenes
+        if sc.video_url and Path(sc.video_url).exists()
+    ]
+    if not existing_clips:
+        return f"Error: Job {job_id} has no existing video clips on disk — cannot resume."
+
+    keys = _api.get_settings(["OPENROUTER_API_KEY"])
+    or_key = keys.get("OPENROUTER_API_KEY", "")
+    if not or_key:
+        return "Error: OPENROUTER_API_KEY not configured or not granted for this skill."
+
+    import shutil
+    missing_bins = [b for b in ("ffmpeg", "ffprobe") if not shutil.which(b)]
+    if missing_bins:
+        return (f"Error: Required binaries not found on PATH: {', '.join(missing_bins)}. "
+                "Install ffmpeg (e.g. `brew install ffmpeg`) and ensure it is on PATH.")
+
+    with _jobs_lock:
+        _jobs[job.job_id] = job
+
+    thread = threading.Thread(
+        target=_run_pipeline_thread,
+        args=(job, or_key),
+        kwargs={"resume": True},
+        daemon=True,
+        name=f"video_studio_resume_{job.job_id}",
+    )
+    _track_thread(thread)
+    thread.start()
+
+    return (
+        f"Resuming video job {job_id}!\n"
+        f"Existing clips: {len(existing_clips)}\n"
+        f"Skipping: screenplay, character refs, keyframes, music, base video generation\n"
+        f"Running: Director QC (if effort=max) + final assembly\n\n"
         f"Track progress in the Video Studio widget tab, "
         f"or poll: GET /api/extensions/video_studio/status?job_id={job.job_id}"
     )
@@ -542,7 +711,7 @@ async def tool_generate_video(
 # ─── Pipeline Runner ────────────────────────────────────────────────
 
 
-def _run_pipeline_thread(job, api_key: str):
+def _run_pipeline_thread(job, api_key: str, resume: bool = False):
     """Run the video pipeline in a background thread."""
     # Ensure isolated deps (.ouroboros_env) are on sys.path in this thread.
     # extension_isolated_deps scope is context-local; background threads need
@@ -603,7 +772,7 @@ def _run_pipeline_thread(job, api_key: str):
             lessons_dir=_state_dir,
         )
         _track_pipeline(pipeline)
-        loop.run_until_complete(pipeline.run(job))
+        loop.run_until_complete(pipeline.resume(job) if resume else pipeline.run(job))
     except asyncio.CancelledError:
         from .models import JobStatus
         job.progress.status = JobStatus.ERROR

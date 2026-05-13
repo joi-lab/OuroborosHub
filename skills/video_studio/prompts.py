@@ -398,3 +398,158 @@ Simplify the scene description to make it more achievable while keeping cinemati
 
 ## Output JSON (only this, nothing else):
 {{"simplified_description": "string — simplified cinematic description", "simplified_camera": "string — simpler camera direction", "negative_constraints": "string — additional things to explicitly AVOID based on the failures"}}"""
+
+
+# ─── Character DNA Extraction ────────────────────────────────────────
+CHARACTER_DNA_EXTRACT_PROMPT = """You are a casting director. Analyze this character reference image and write an EXTREMELY SPECIFIC visual descriptor.
+
+Character name: {name}
+Original description: {visual_traits}
+
+Extract an ultra-precise "Character DNA" string that will be copy-pasted verbatim into every video prompt for this character. It must be SELF-CONTAINED and FREEZE the character's appearance.
+
+Include ALL of the following with maximum precision:
+- Exact face shape (heart/oval/square/round), cheekbone prominence, jaw angle
+- Eyes: exact color with any flecks/rings, spacing, lid shape, brow arch, lash quality
+- Nose: bridge width, tip shape
+- Mouth: lip fullness ratio, width, any micro-features (gap in teeth, dimple)
+- Skin: specific tone (NOT just "light" — use "warm ivory with pink undertones"), texture, any marks
+- Hair: exact color (paint-chip specificity), texture, length to exact landmark, part position
+- Build: height cues, shoulder-hip ratio, posture tendency
+- ONE highly distinctive micro-feature that makes this person uniquely recognizable
+- Dominant wardrobe signature (the ONE item that most identifies them)
+
+Write as a dense single paragraph starting with the character name. Maximum 120 words.
+This MUST work as standalone identity anchor when image conditioning is unavailable.
+
+Output ONLY the character DNA paragraph, no JSON, no explanations."""
+
+
+# ─── Video Prompt Variants ────────────────────────────────────────────
+VIDEO_PROMPT_VARIANT_CRITIC_PROMPT = """You are a video generation expert. You have 3 different prompt variants for the same scene.
+Choose the best one for a text-to-video model (Seedance 2.0 / ByteDance).
+
+## Scene intent:
+{scene_description}
+## Character identity to preserve:
+{character_dna}
+## Motion complexity assessment: {motion_complexity}/5
+
+## Variant A (continuity-heavy):
+{variant_a}
+
+## Variant B (action-first):
+{variant_b}
+
+## Variant C (cinematic-cue):
+{variant_c}
+
+## Your task:
+Select the variant most likely to produce a high-quality, consistent video clip.
+Consider:
+- Does it put character identity early in the prompt?
+- Is the action clear and singular?
+- Is motion complexity appropriate for the model?
+- Does it avoid abstract/poetic language?
+
+Output JSON only:
+{{"winner": "A" or "B" or "C", "reason": "one sentence why this variant is best", "suggested_tweak": "optional one-sentence refinement to apply to the winner"}}"""
+
+
+# ─── Diagnosis-based retry ────────────────────────────────────────────
+VIDEO_RETRY_DIAGNOSIS_PROMPT = """You are a video director. A generated clip failed quality checks. Rewrite the prompt to fix the specific problems.
+
+## Original prompt:
+{original_prompt}
+
+## Failure diagnosis (scores 0-10, pass threshold 6.5):
+{critique_json}
+
+## Failing dimensions:
+{failing_dimensions}
+
+## Surgical rewrite rules:
+- If identity_score < 6: Move character DNA to the very first line; add shot type that shows distinguishing features; emphasize wardrobe signature; use "medium shot" not close-up
+- If motion_score < 6: Reduce to ONE primary action; use stable camera; add "natural weight transfer", "realistic motion physics"
+- If style_score < 6: Front-load photorealism cues; add specific camera body reference; remove any abstract/surreal language
+- If artifacts_score < 6: Add explicit negatives "no text overlay, no morphing, no warping, no extra limbs, anatomically correct"
+- If composition_score < 6: Simplify camera movement; specify exact framing (medium close-up, over-the-shoulder, etc.)
+
+NEVER: simplify by removing character DNA or style lock
+NEVER: make it shorter by removing important specifics
+ALWAYS: preserve what scored well (7+)
+
+Output ONLY the rewritten prompt, no explanations, no JSON."""
+
+
+# ─── Contact sheet Director QC ───────────────────────────────────────
+DIRECTOR_VIDEO_FRAMES_PROMPT = """You are an executive producer reviewing actual generated video frames from a short film production.
+You are seeing 5 frames extracted at 0%%, 25%%, 50%%, 75%%, 100%% timestamps from each scene clip.
+
+## Characters in this production:
+{characters_description}
+
+## Visual Style: {style}
+## Story synopsis: {synopsis}
+
+## Review each scene's actual frames for:
+1. CHARACTER IDENTITY: Does the character look like the same person across ALL frames within each clip? And across scenes?
+2. TEMPORAL CONSISTENCY: Within a single clip, does the character's face/hair/clothing stay stable frame-to-frame?
+3. STYLE CONSISTENCY: Does the photorealistic quality and color grading feel like the same film?
+4. MOTION QUALITY: Does movement look natural or robotic/morphing?
+5. NARRATIVE COHERENCE: Can you follow the story from these frames in sequence?
+
+## Output JSON:
+{{"overall_score": 0-10, "approved": true/false, "scenes_to_regen": [list of 0-based scene indices with major identity or quality issues, max 2], "cross_scene_issues": ["specific cross-scene problems found"], "per_scene_notes": {{"0": "note", "1": "note"}}, "narrative_assessment": "2-3 sentences on story coherence and visual flow"}}
+
+RULES:
+- approved=true if overall_score >= 7
+- scenes_to_regen only if that scene has MAJOR problems (different character face, severe artifacts, completely wrong style)
+- Maximum 2 entries in scenes_to_regen
+- If all scenes are acceptable, scenes_to_regen=[] and approved=true"""
+
+
+# ─── Intelligent transitions ─────────────────────────────────────────
+TRANSITION_PLANNER_PROMPT = """You are a film editor. Plan the transitions between scenes for optimal cinematic flow.
+
+## Scene sequence:
+{scene_sequence}
+
+## For each cut point (between scenes N and N+1), choose:
+- "cut" — immediate hard cut (same location/time, continuous action, high energy)
+- "crossfade" — 0.3-0.8s dissolve (mood shift, time skip, reflective moment)
+- "fade_black" — dip to black 0.3-0.5s (major location change, time jump, act break)
+
+## Rules:
+- Prefer hard cuts for action/tension
+- Use crossfade for emotional transitions and location changes
+- Use fade_black only for major act breaks (max once per video)
+- Never use the same transition 3 times in a row
+- Cut points should respect narrative rhythm
+
+Output JSON only — array of transition objects:
+[{{"from_scene": 0, "to_scene": 1, "type": "cut"|"crossfade"|"fade_black", "duration_sec": 0.0-0.8, "reason": "brief reason"}}]
+
+Output ONLY the JSON array, no other text."""
+
+
+# ─── Color normalization ─────────────────────────────────────────────
+COLOR_GRADE_PLANNER_PROMPT = """You are a colorist reviewing frames from multiple scenes of the same film.
+The scenes were generated separately and may have slight color inconsistencies.
+
+## Target style: {style}
+## Target mood: {mood}
+
+Generate a single FFmpeg video filter string that applies a subtle, cohesive color grade
+appropriate for this style. The filter should UNIFY the scenes without looking processed.
+
+Requirements:
+- Use only: eq, colorbalance, curves, colorchannelmixer, vibrance, unsharp
+- Subtle values only (contrast 0.9-1.15, brightness -0.05 to +0.05, saturation 0.8-1.2)
+- Match the mood: {mood} suggests specific color temperature preferences
+- For cinematic styles: slight contrast boost, subtle saturation control
+- For thriller/noir: reduce saturation slightly, add contrast
+- For romantic: warm tones, slight softness (unsharp with low values)
+- Keep it under 200 characters total
+
+Output ONLY the FFmpeg filter string (e.g., "eq=contrast=1.05:brightness=0.01:saturation=0.95,unsharp=3:3:0.5"), nothing else."""
