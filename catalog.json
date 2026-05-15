@@ -102,6 +102,26 @@
       "when_to_use": "User wants to generate a short animated 2D anime cartoon, music video, or animated scene with consistent characters, VLM verification, and narrative continuity."
     },
     {
+      "description": "Interactive Improvement Backlog widget with kanban status management, filtering data, notes, and local item creation without mutating Ouroboros core memory directly.",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "sha256": "88f0c573974f53b84347d3060561de4d8e87822a57467b08242a2024c907ece8",
+          "size": 4197
+        },
+        {
+          "path": "plugin.py",
+          "sha256": "4f3b9b6afe1144770a5964ad075dff39c817d8aa9f4d05b4336d2f7ba99f5cbf",
+          "size": 16554
+        }
+      ],
+      "name": "backlog_manager",
+      "slug": "backlog_manager",
+      "type": "extension",
+      "version": "0.1.0",
+      "when_to_use": "User wants to inspect, triage, add, annotate, or manage Ouroboros improvement backlog items from a reviewed widget."
+    },
+    {
       "description": "Web search via DuckDuckGo — free, no API key required. Returns titles, URLs, and snippets. Requires the `ddgs` Python package (pip install ddgs).",
       "files": [
         {
