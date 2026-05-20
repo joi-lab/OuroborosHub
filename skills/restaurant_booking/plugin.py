@@ -317,14 +317,75 @@ def _select_restaurant(restaurants: list[dict[str, Any]], criteria: dict[str, An
     })
 
 
+# Patterns that explicitly negate success. Must beat any "success"/"confirmed" substring
+# so that an agent reporting "no success, captcha" does not collapse to a confirmed status.
+_STATUS_NEGATION_PATTERNS = (
+    re.compile(r"\bno success(?:ful)?\b"),
+    re.compile(r"\bnot success(?:ful)?\b"),
+    re.compile(r"\bне\s*(?:был[оа]?\s*)?успех"),
+    re.compile(r"\bнеуспех"),
+)
+
+# Blocker / phone-only markers take priority over generic success words, so a phrase like
+# "successful captcha block" resolves to technical_blocker, not confirmed.
+_STATUS_PRIORITY_MARKERS: tuple[tuple[str, str, bool], ...] = (
+    ("captcha", "technical_blocker", True),
+    ("капча", "technical_blocker", False),
+    ("anti-bot", "technical_blocker", False),
+    ("antibot", "technical_blocker", True),
+    ("антибот", "technical_blocker", False),
+    ("анти бот", "technical_blocker", False),
+    ("блокер", "technical_blocker", False),
+    ("login required", "technical_blocker", False),
+    ("login_required", "technical_blocker", True),
+    ("phone only", "phone_only", False),
+    ("call to book", "phone_only", False),
+    ("только по телефону", "phone_only", False),
+    ("бронь по телефону", "phone_only", False),
+)
+
+
+def _separator_normalize(text: str) -> str:
+    return re.sub(r"\s+", " ", re.sub(r"[\-/_]+", " ", text)).strip()
+
+
 def _canonical_status(value: Any) -> str:
-    text = _norm_key(value)
+    raw = _norm_key(value)
+    if not raw:
+        return "unknown_manual_check"
+    # Exact-match the raw form first so canonical keys with underscores (e.g. "no_slot",
+    # "phone_only", "login_required") keep working without going through fuzzy search.
+    if raw in STATUS_ALIASES:
+        return STATUS_ALIASES[raw]
+    if raw in FINAL_STATUSES:
+        return raw
+    # Then treat "-", "/", and "_" as space so that "phone-only", "blocker_due_to_captcha",
+    # and "анти-бот защита" reach the same markers as their space-separated forms.
+    text = _separator_normalize(raw)
     if text in STATUS_ALIASES:
         return STATUS_ALIASES[text]
-    for marker, canonical in STATUS_ALIASES.items():
-        if marker in text:
+    for pat in _STATUS_NEGATION_PATTERNS:
+        if pat.search(text):
+            return "unknown_manual_check"
+    for marker, canonical, word_only in _STATUS_PRIORITY_MARKERS:
+        norm_marker = _separator_normalize(marker)
+        if word_only:
+            if re.search(rf"\b{re.escape(norm_marker)}\b", text):
+                return canonical
+        elif norm_marker in text:
             return canonical
-    return text if text in FINAL_STATUSES else "unknown_manual_check"
+    # Longest aliases first: "successful" must win over "success", "needs_clarification" over
+    # "clarification". Single-word ASCII markers match on word boundaries so "no success ticket"
+    # cannot be coerced into "confirmed" via a stray substring.
+    for marker in sorted(STATUS_ALIASES, key=len, reverse=True):
+        canonical = STATUS_ALIASES[marker]
+        norm_marker = _separator_normalize(marker)
+        if " " not in norm_marker and norm_marker.isascii():
+            if re.search(rf"\b{re.escape(norm_marker)}\b", text):
+                return canonical
+        elif norm_marker in text:
+            return canonical
+    return "unknown_manual_check"
 
 
 def _is_phone_only_restaurant(restaurant: dict[str, Any]) -> bool:

@@ -61,6 +61,7 @@ when_to_use: "Используй, когда нужно забронироват
 - `input`
 - `task`
 - `expect`
+- `pool`
 - `rules`
 - `report_keys`
 
@@ -107,14 +108,18 @@ when_to_use: "Используй, когда нужно забронироват
 
 ## Установка
 
-Поместить папку:
+Штатный путь — через каталог OuroborosHub в десктопе:
 
 ```text
-~/Ouroboros/data/skills/external/restaurant_booking/
+Skills -> Marketplace -> OuroborosHub -> restaurant_booking -> Install
 ```
 
-Затем в Ouroboros UI:
+После установки скилл лежит в:
 
 ```text
-Skills -> Installed -> restaurant_booking -> Review -> Enable
+~/Ouroboros/data/skills/ouroboroshub/restaurant_booking/
 ```
+
+Дальше — обычный жизненный цикл: дождаться `review_skill` PASS и нажать `Enable` на карточке. Грантов и ключей скилл не требует (`permissions: [tool]`, `env_from_settings: []`).
+
+Альтернативный путь для разработки — положить руками в `~/Ouroboros/data/skills/external/restaurant_booking/` и вызвать `review_skill` / `Enable` через UI.

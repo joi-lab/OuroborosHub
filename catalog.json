@@ -1,8 +1,8 @@
 {
-  "description": "Official Ouroboros skills catalog.",
-  "name": "OuroborosHub",
-  "raw_base_url": "https://raw.githubusercontent.com/joi-lab/OuroborosHub/main",
   "schema_version": 1,
+  "name": "OuroborosHub",
+  "description": "Official Ouroboros skills catalog.",
+  "raw_base_url": "https://raw.githubusercontent.com/joi-lab/OuroborosHub/main",
   "skills": [
     {
       "description": "Agent-to-Agent protocol bridge for Ouroboros. Provides a local A2A-compatible server plus client tools for discovering and messaging other A2A agents.",
@@ -341,19 +341,19 @@
     {
       "slug": "restaurant_booking",
       "name": "restaurant_booking",
-      "description": "Автоматическое бронирование ресторанов: нормализует список ресторанов, формирует задачу для агента-исполнителя и валидирует результат.",
+      "description": "Оркестратор автоматического бронирования ресторанов: нормализует список ресторанов, формирует задачу для агента-исполнителя и валидирует результат.",
       "version": "1.0.0",
       "type": "extension",
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "3c60b398dc7fa3a59ec0923caf6298d7d65547fee621c7b54bef811b642c6c25",
-          "size": 6715
+          "sha256": "8a8d76e88d4c452a0ff4541dcf89d519b431c91efa93ad901d8eda43a9de9df3",
+          "size": 7301
         },
         {
           "path": "plugin.py",
-          "sha256": "cbda616bec0c1f807b923ac1df00a616eacf4ef13a5f284216c4fa681c7ac84c",
-          "size": 36703
+          "sha256": "51ad8b46ed1c04e9c8cfe9e9810af5e342d435a4dff1dd1c1861367bacf1544a",
+          "size": 39577
         }
       ]
     }
