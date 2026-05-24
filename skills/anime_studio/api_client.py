@@ -99,6 +99,8 @@ class OpenRouterClient:
             )
             resp.raise_for_status()
             data = resp.json()
+            if not data.get("choices"):
+                raise RuntimeError("No choices in LLM response")
             return data["choices"][0]["message"]["content"]
 
     # ─── Image Generation (GPT-Image-2) ────────────────────────────
@@ -133,8 +135,9 @@ class OpenRouterClient:
 
         image_b64 = self._extract_image_b64(data)
         if not image_b64:
-            msg = data["choices"][0]["message"]
-            logger.error(f"No image data in response for {filename}. keys: {list(msg.keys())}")
+            choices = data.get("choices", [])
+            detail = list(choices[0]["message"].keys()) if choices else ["(empty choices)"]
+            logger.error(f"No image data in response for {filename}. keys: {detail}")
             raise RuntimeError(f"No image data in response for {filename}")
 
         filepath = self.assets_dir / filename
@@ -384,6 +387,9 @@ class OpenRouterClient:
                 resp.raise_for_status()
                 data = resp.json()
 
+            if not data.get("choices"):
+                return {"consistent": True, "worst_scene_index": None, "drift_description": "", "severity": "none"}
+
             text = data["choices"][0]["message"]["content"].strip()
             if text.startswith("```"):
                 text = text.split("\n", 1)[1] if "\n" in text else text[3:]
@@ -455,6 +461,9 @@ class OpenRouterClient:
                 )
                 resp.raise_for_status()
                 data = resp.json()
+
+            if not data.get("choices"):
+                return {"passed": False, "score": 4, "issues": ["No choices in response"], "suggestion": "", "vlm_error": True}
 
             text = data["choices"][0]["message"]["content"].strip()
             if text.startswith("```"):
@@ -684,6 +693,8 @@ class OpenRouterClient:
 
     def _extract_image_b64(self, data: dict) -> Optional[str]:
         """Extract base64 image data from an OpenRouter response."""
+        if not data.get("choices"):
+            return None
         msg = data["choices"][0]["message"]
         image_b64 = None
 

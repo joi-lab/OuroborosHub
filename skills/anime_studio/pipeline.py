@@ -9,11 +9,11 @@ import logging
 import os
 import shutil
 import subprocess
-import sys
 import threading
 from pathlib import Path
 from typing import Callable, Optional
 
+from .ffmpeg_bootstrap import ensure_ffmpeg
 from .api_client import OpenRouterClient, run_with_timeout
 from .models import (
     Character,
@@ -46,7 +46,6 @@ from .prompts import (
 
 logger = logging.getLogger("anime_studio.pipeline")
 
-# Per-operation timeout limits (seconds)
 TIMEOUT_SCENARIO = 240
 TIMEOUT_IMAGE = 400
 TIMEOUT_MUSIC = 200
@@ -54,7 +53,6 @@ TIMEOUT_VIDEO = 660
 TIMEOUT_VERIFY = 45
 TIMEOUT_VIDEO_VERIFY = 90
 
-# VLM verification settings
 MAX_VERIFY_RETRIES = 2
 MAX_VIDEO_VERIFY_RETRIES = 2  # Raised from 1: video is the most expensive asset
 
@@ -62,22 +60,13 @@ MAX_VIDEO_VERIFY_RETRIES = 2  # Raised from 1: video is the most expensive asset
 MULTIDIM_PASS_THRESHOLD = 6.5
 MULTIDIM_WEIGHTS = {"identity": 0.30, "motion": 0.20, "style": 0.15, "artifacts": 0.25, "composition": 0.10}
 
-# Subprocess output cap (bytes)
 _STDERR_CAP_BYTES = 65536  # 64 KB
 
-# Lessons file for progressive prompt learning
 _LESSONS_FILENAME = "prompt_lessons.json"
 
-
 class Pipeline:
-    """Orchestrates the full anime generation pipeline with verification,
-    progressive learning, best-of-2 character selection, multi-dimensional
-    video scoring, cross-scene identity check, and adaptive simplification.
-
-    Parallel generation: character sheets, locations, and independent keyframes
-    are generated concurrently via asyncio.gather. Sequential constraints apply
-    only to keyframes (visual continuity) and video scenes (last-frame chain).
-    """
+    """Full anime pipeline: VLM verification, progressive learning,
+    best-of-2 selection, multi-dim scoring, identity checks, parallel gen."""
 
     def __init__(
         self,
@@ -86,19 +75,23 @@ class Pipeline:
         on_progress: Optional[Callable[[Job], None]] = None,
         shutdown_event: Optional[threading.Event] = None,
         lessons_dir: Optional[Path] = None,
+        ffmpeg_cache_dir: Optional[Path] = None,
     ):
         self.client = client
         self.state_dir = state_dir
         self.on_progress = on_progress
         self.shutdown_event = shutdown_event
         self.lessons_dir = lessons_dir or state_dir
+        self.ffmpeg_cache_dir = ffmpeg_cache_dir or state_dir
         self._active_procs: list[subprocess.Popen] = []
         self._procs_lock = threading.Lock()
-        # Progressive prompt learning: lessons accumulated during this job
         self._learned_lessons: list[str] = []
         self._load_lessons()
 
-    # ─── Progressive Learning ───────────────────────────────────────
+        self._ffmpeg_path: str = "ffmpeg"
+        self._ffprobe_path: str = "ffprobe"
+
+    # ─── Progressive Learning ───
 
     def _load_lessons(self):
         """Load accumulated prompt lessons from previous jobs."""
@@ -121,7 +114,6 @@ class Pipeline:
                 pass
         existing_img = existing.get("image_lessons", [])
         existing_vid = existing.get("video_lessons", [])
-        # Deduplicate and cap at 20 each
         all_img = list(dict.fromkeys(existing_img + image_lessons))[-20:]
         all_vid = list(dict.fromkeys(existing_vid + video_lessons))[-20:]
         lessons_path.write_text(json.dumps({
@@ -140,7 +132,7 @@ class Pipeline:
         if lesson and lesson not in self._learned_lessons:
             self._learned_lessons.append(lesson)
 
-    # ─── Utility ────────────────────────────────────────────────────
+    # ─── Utility ───
 
     def _emit(self, job: Job):
         if self.on_progress:
@@ -159,18 +151,9 @@ class Pipeline:
     ) -> subprocess.CompletedProcess:
         """Run ffmpeg/ffprobe as a tracked child process.
 
-        Uses start_new_session=True so each ffmpeg process gets its own process
-        group, enabling reliable group-kill via os.killpg from both the plugin's
-        _cleanup (normal unload) and the plugin module's SIGTERM handler (panic).
-
-        Panic path:  host server receives SIGTERM → plugin's SIGTERM handler
-        fires → _kill_tracked_pgids() sends SIGKILL to every registered pgid →
-        then chains to the previous handler so normal shutdown proceeds.
-        This ensures ffmpeg subprocesses are killed even when os._exit(99)
-        is imminent, satisfying the BIBLE Emergency Stop invariant.
-
-        The pgid is registered with the plugin module immediately after Popen
-        (via _register_pgid) and removed in the finally block (_unregister_pgid).
+        Child processes inherit the server's process group so the host's
+        panic cleanup (os._exit / process-group kill) reaps them automatically.
+        Normal cleanup uses _active_procs tracking + kill_active_processes().
 
         Environment is scrubbed to only PATH (needed for ffmpeg binary
         resolution) so no unrelated secrets leak to child processes.
@@ -178,27 +161,15 @@ class Pipeline:
         import os
 
         stdout_target = subprocess.PIPE if capture_stdout else subprocess.DEVNULL
-        # Scrub env: only PATH is needed for ffmpeg/ffprobe resolution
-        scrubbed_env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin:/usr/local/bin")}
+        bin_dir = str(self.ffmpeg_cache_dir / "bin")
+        system_path = os.environ.get("PATH", "/usr/bin:/bin:/usr/local/bin")
+        scrubbed_env = {"PATH": f"{bin_dir}:{system_path}"}
         proc = subprocess.Popen(
             cmd,
             stdout=stdout_target,
             stderr=subprocess.PIPE,
-            start_new_session=True,
             env=scrubbed_env,
         )
-        # Register pgid with plugin module for panic-safe group-kill (POSIX only)
-        if sys.platform != "win32":
-            try:
-                pgid = os.getpgid(proc.pid)
-            except (OSError, ProcessLookupError):
-                pgid = None
-            if pgid is not None:
-                try:
-                    from . import plugin as _plugin_mod
-                    _plugin_mod._register_pgid(proc.pid, pgid)
-                except Exception:
-                    pass
 
         with self._procs_lock:
             self._active_procs.append(proc)
@@ -220,33 +191,9 @@ class Pipeline:
             with self._procs_lock:
                 if proc in self._active_procs:
                     self._active_procs.remove(proc)
-            # Unregister pgid regardless of outcome
-            try:
-                from . import plugin as _plugin_mod
-                _plugin_mod._unregister_pgid(proc.pid)
-            except Exception:
-                pass
 
     def _kill_proc(self, proc: subprocess.Popen):
-        """Kill a subprocess and its entire process group.
-
-        Since subprocesses are started with start_new_session=True each gets
-        its own process group.  Killing the group ensures ffmpeg's child
-        processes (e.g. filter workers) are also terminated on timeout/unload.
-
-        On Windows, process groups and os.killpg are unavailable; falls back
-        to proc.kill() (SIGKILL equivalent on Windows).
-        """
-        if sys.platform != "win32":
-            import signal as _signal
-            try:
-                pgid = os.getpgid(proc.pid)
-                os.killpg(pgid, _signal.SIGKILL)
-                return
-            except (OSError, ProcessLookupError):
-                pass
-
-        # Fallback: kill just the process (Windows or pgid unavailable)
+        """Kill a subprocess on timeout/unload."""
         try:
             proc.kill()
         except (OSError, ProcessLookupError):
@@ -258,44 +205,53 @@ class Pipeline:
                 self._kill_proc(proc)
             self._active_procs.clear()
 
-    # ─── Image Generation Router ────────────────────────────────────
+    # ─── Image Generation Router ───
 
     # Duration allowlists per video model — values accepted by OpenRouter /videos.
-    # Seedance: any integer 4–15 is accepted.
-    # Veo-3.1 family: only [5, 8] (OpenRouter supported_durations).
     _VIDEO_MODEL_DURATION_MAP: dict[str, list[int]] = {
-        "google/veo-3.1":       [5, 8],
-        "google/veo-3.1-fast":  [5, 8],
-        "google/veo-3.1-lite":  [4, 6, 8],
+        "google/veo-3.1":             [5, 8],
+        "google/veo-3.1-fast":        [5, 8],
+        "google/veo-3.1-lite":        [4, 6, 8],
+        "minimax/hailuo-2.3":         [4, 6],
+        "bytedance/seedance-1-5-pro": [4, 5, 6, 8, 10],
+        "kwaivgi/kling-v3.0-pro":     [5, 10],
+        "kwaivgi/kling-v3.0-std":     [5, 10],
+        "kwaivgi/kling-video-o1":     [5, 10],
     }
 
     def _clamp_duration(self, desired_sec: int, model: str) -> int:
         """Return the nearest allowed duration for the given video model."""
         allowed = self._VIDEO_MODEL_DURATION_MAP.get(model)
         if not allowed:
-            # Default: seedance and other models accept 4–15
             return min(15, max(4, desired_sec))
-        # Pick the closest allowed value
         return min(allowed, key=lambda v: abs(v - desired_sec))
+
+    # Mapping from short UI image model names to OpenRouter model IDs.
+    _IMAGE_MODEL_MAP: dict[str, str] = {
+        "gpt-image-2":        "openai/gpt-5.4-image-2",
+        "gpt-5-image":        "openai/gpt-5-image",
+        "gpt-5-image-mini":   "openai/gpt-5-image-mini",
+        "gemini-3-pro-image": "google/gemini-3-pro-image-preview",
+        "flux.2-pro":         "black-forest-labs/flux.2-pro",
+        "flux.2-max":         "black-forest-labs/flux.2-max",
+        "seedream-4.5":       "bytedance-seed/seedream-4.5",
+        "grok-imagine":       "x-ai/grok-imagine-image-quality",
+    }
 
     async def _generate_image(self, job: Job, prompt: str, filename: str, aspect_ratio: str = "16:9") -> str:
         """Route image generation to configured model."""
-        if job.settings.image_model == "nanobanana":
+        model_name = job.settings.image_model
+        if model_name == "nanobanana":
             return await self.client.generate_image_nanobanana(
                 prompt=prompt, filename=filename, aspect_ratio=aspect_ratio,
             )
-        elif job.settings.image_model == "gpt-image-2":
-            # openai/gpt-5.4-image-2 on OpenRouter uses chat completions with modalities.
-            return await self.client.generate_image(
-                prompt=prompt, filename=filename, aspect_ratio=aspect_ratio,
-                model="openai/gpt-5.4-image-2",
-            )
-        else:
-            return await self.client.generate_image(
-                prompt=prompt, filename=filename, aspect_ratio=aspect_ratio,
-            )
+        openrouter_id = self._IMAGE_MODEL_MAP.get(model_name, model_name)
+        return await self.client.generate_image(
+            prompt=prompt, filename=filename, aspect_ratio=aspect_ratio,
+            model=openrouter_id,
+        )
 
-    # ─── Character Identity Block Builder ───────────────────────────
+    # ─── Character Identity Block Builder ───
 
     def _build_characters_identity_block(self, storyboard: Storyboard, scene_chars: list[str] = None) -> str:
         chars = storyboard.characters
@@ -308,7 +264,7 @@ class Pipeline:
             lines.append(f"- {char.name}: {char.visual_traits}")
         return "\n".join(lines) if lines else "No specific character references."
 
-    # ─── VLM Verification with Retry (Images) ──────────────────────
+    # ─── VLM Verification with Retry (Images) ───
 
     async def _verify_and_retry(
         self, job: Job, image_path: str, original_prompt: str,
@@ -320,7 +276,6 @@ class Pipeline:
 
         for attempt in range(MAX_VERIFY_RETRIES + 1):
             if attempt > 0:
-                # Unique filename per retry to avoid overwriting the previous attempt
                 retry_filename = f"{Path(filename).stem}_r{attempt}{Path(filename).suffix}"
                 try:
                     image_path = await run_with_timeout(
@@ -344,7 +299,6 @@ class Pipeline:
                 return image_path
 
             if result.get("vlm_error"):
-                # VLM service error (not a quality failure) — count as skipped and keep the image
                 stats["skipped"] = stats.get("skipped", 0) + 1
                 return image_path
 
@@ -355,7 +309,6 @@ class Pipeline:
             logger.info(f"VLM rejected {filename} (attempt {attempt+1}): {result.get('issues')}")
             stats["retried"] = stats.get("retried", 0) + 1
 
-            # Learn from rejection
             if result.get("suggestion"):
                 self._add_lesson(result["suggestion"], "image")
                 current_prompt = f"{original_prompt}\n\nCRITICAL: {result['suggestion']}"
@@ -364,7 +317,7 @@ class Pipeline:
         self._warn(job, f"VLM verification failed for {filename} after {MAX_VERIFY_RETRIES} retries")
         return image_path
 
-    # ─── Best-of-2 Character Sheet Selection ────────────────────────
+    # ─── Best-of-2 Character Sheet Selection ───
 
     async def _generate_best_of_2_character_sheet(
         self, job: Job, char: Character, index: int, style: str
@@ -375,7 +328,6 @@ class Pipeline:
         )
         base_name = f"char_{index}_{char.name.lower().replace(' ', '_')}"
 
-        # Generate 2 candidates in parallel
         tasks = [
             run_with_timeout(
                 self._generate_image(job, prompt, f"{base_name}_a.png", "1:1"),
@@ -390,7 +342,6 @@ class Pipeline:
         ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        # Filter successful results
         candidates = []
         for r in results:
             if not isinstance(r, Exception):
@@ -400,13 +351,11 @@ class Pipeline:
             self._warn(job, f"Both character sheet candidates failed for '{char.name}'")
             return None
         if len(candidates) == 1:
-            # Only one succeeded — verify and return it
             return await self._verify_and_retry(
                 job, candidates[0], prompt, f"{base_name}.png", "1:1",
                 char_ref_desc=char.visual_traits,
             )
 
-        # Compare via VLM
         compare_prompt = VLM_COMPARE_CHARACTER_SHEETS_PROMPT.format(
             name=char.name, visual_traits=char.visual_traits, style=style,
         )
@@ -454,7 +403,6 @@ class Pipeline:
                 description=f"Video multidim verify scene {scene.index}",
             )
 
-            # Compute weighted average
             scores = {k: result.get(k, 7) for k in MULTIDIM_WEIGHTS}
             weighted_avg = sum(scores[k] * MULTIDIM_WEIGHTS[k] for k in scores)
             result["passed"] = weighted_avg >= MULTIDIM_PASS_THRESHOLD
@@ -463,7 +411,7 @@ class Pipeline:
             return result
         except Exception as e:
             logger.warning(f"Video multidim verification skipped for scene {scene.index}: {e}")
-            return {"passed": True, "scores": {}, "issues": [], "suggestion": ""}
+            return {"passed": True, "scores": {}, "issues": [], "suggestion": "", "vlm_error": True}
         finally:
             for fp in frame_paths:
                 try:
@@ -486,7 +434,7 @@ class Pipeline:
         tag = f"{prefix}_" if prefix else ""
         try:
             probe = self._run_ffmpeg(
-                ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                [self._ffprobe_path, "-v", "error", "-show_entries", "format=duration",
                  "-of", "csv=p=0", video_path],
                 timeout=15, capture_stdout=True,
             )
@@ -498,7 +446,7 @@ class Pipeline:
                 timestamp = interval * (i + 1)
                 output_path = str(output_dir / f"_vframe_{tag}{i}.png")
                 result = self._run_ffmpeg(
-                    ["ffmpeg", "-y", "-ss", f"{timestamp:.2f}", "-i", video_path,
+                    [self._ffmpeg_path, "-y", "-ss", f"{timestamp:.2f}", "-i", video_path,
                      "-vframes", "1", "-q:v", "2", output_path],
                     timeout=15,
                 )
@@ -515,7 +463,7 @@ class Pipeline:
         output_path = str(self.state_dir / "assets" / f"lastframe_{scene_index}.png")
         try:
             probe = self._run_ffmpeg(
-                ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                [self._ffprobe_path, "-v", "error", "-show_entries", "format=duration",
                  "-of", "csv=p=0", video_path],
                 timeout=15, capture_stdout=True,
             )
@@ -524,7 +472,7 @@ class Pipeline:
             timestamp = max(0, duration - 0.1)
 
             result = self._run_ffmpeg(
-                ["ffmpeg", "-y", "-ss", str(timestamp), "-i", video_path,
+                [self._ffmpeg_path, "-y", "-ss", str(timestamp), "-i", video_path,
                  "-vframes", "1", "-q:v", "2", output_path],
                 timeout=30,
             )
@@ -630,16 +578,31 @@ class Pipeline:
     async def run(self, job: Job) -> Job:
         """Execute the full pipeline."""
         try:
-            # Preflight: verify ffmpeg is available before spending any API budget
-            if not shutil.which("ffmpeg"):
-                job.progress.status = JobStatus.FAILED
-                job.progress.message = (
-                    "ffmpeg not found. Install it before generating anime. "
-                    "macOS: brew install ffmpeg | Linux: apt install ffmpeg"
-                )
+            job.progress.message = "Checking ffmpeg availability..."
+            job.progress.progress_pct = 1.0
+            self._emit(job)
+
+            try:
+                def _download_progress(downloaded, total, tool):
+                    if total:
+                        pct = min(downloaded / total * 100, 100)
+                        job.progress.message = f"Downloading {tool}... {pct:.0f}%"
+                    else:
+                        mb = downloaded / (1024 * 1024)
+                        job.progress.message = f"Downloading {tool}... {mb:.1f} MB"
+                    job.progress.progress_pct = 2.0
+                    self._emit(job)
+
+                paths = ensure_ffmpeg(self.ffmpeg_cache_dir, on_progress=_download_progress)
+                self._ffmpeg_path = paths["ffmpeg"]
+                self._ffprobe_path = paths["ffprobe"]
+            except Exception as exc:
+                job.progress.phase = JobPhase.ERROR
+                job.progress.status = JobStatus.ERROR
+                job.progress.error = f"ffmpeg setup failed: {exc}"
+                job.progress.message = job.progress.error
                 return job
 
-            # Phase 1: Scenario
             self._check_shutdown()
             job.progress.phase = JobPhase.SCENARIO
             job.progress.status = JobStatus.RUNNING
@@ -648,7 +611,7 @@ class Pipeline:
             self._emit(job)
 
             storyboard = await run_with_timeout(
-                self._generate_scenario(job.settings),
+                self._generate_scenario(job.settings, job=job),
                 timeout_sec=TIMEOUT_SCENARIO,
                 description="Storyboard generation",
             )
@@ -657,38 +620,36 @@ class Pipeline:
             job.progress.message = f"Storyboard ready: {storyboard.title} ({len(storyboard.scenes)} scenes)"
             self._emit(job)
 
-            # Phase 2: Assets (Best-of-2 chars, parallel locations, sequential keyframes)
             self._check_shutdown()
             job.progress.phase = JobPhase.ASSETS
-            job.progress.message = "Generating assets (best-of-2 character sheets, keyframes)..."
+            if job.settings.include_music:
+                job.progress.message = "Generating assets + music in parallel..."
+            else:
+                job.progress.message = "Generating assets (best-of-2 character sheets, keyframes)..."
             job.progress.progress_pct = 18.0
             self._emit(job)
 
-            await self._generate_assets(job, storyboard)
+            parallel_tasks = [self._generate_assets(job, storyboard)]
+            if job.settings.include_music:
+                parallel_tasks.append(self._generate_music(job, storyboard))
+            await asyncio.gather(*parallel_tasks)
 
-            # Phase 2.5: Verification summary
             job.progress.phase = JobPhase.VERIFICATION
             stats = job.progress.verification_stats
             passed = stats.get("passed", 0)
             retried = stats.get("retried", 0)
             failed = stats.get("failed", 0)
-            job.progress.message = f"Verification: {passed} passed, {retried} retried, {failed} failed"
-            job.progress.progress_pct = 50.0
+            music_count = len(job.progress.music_clips)
+            job.progress.message = (
+                f"Verification: {passed} passed, {retried} retried, {failed} failed"
+                + (f" | Music: {music_count} clips" if job.settings.include_music else "")
+            )
+            job.progress.progress_pct = 55.0
             self._emit(job)
 
-            # Phase 2b: Music (parallel with nothing — runs independently)
-            if job.settings.include_music:
-                self._check_shutdown()
-                job.progress.phase = JobPhase.MUSIC
-                job.progress.message = "Generating soundtrack..."
-                self._emit(job)
-                await self._generate_music(job, storyboard)
-
-            job.progress.progress_pct = 55.0
             job.progress.message = "Assets ready. Starting animation with multi-dim scoring..."
             self._emit(job)
 
-            # Phase 3: Animation (sequential + multidim VLM + adaptive simplification)
             self._check_shutdown()
             job.progress.phase = JobPhase.ANIMATION
             job.progress.message = "Animating scenes (multidim scoring + frame anchoring)..."
@@ -696,7 +657,6 @@ class Pipeline:
 
             await self._generate_videos(job, storyboard)
 
-            # Phase 3.5: Cross-scene identity verification
             self._check_shutdown()
             job.progress.message = "Running cross-scene identity check..."
             self._emit(job)
@@ -711,7 +671,6 @@ class Pipeline:
             job.progress.message = "All scenes animated. Assembling final video..."
             self._emit(job)
 
-            # Phase 4: Assembly
             self._check_shutdown()
             job.progress.phase = JobPhase.ASSEMBLY
             self._emit(job)
@@ -722,7 +681,6 @@ class Pipeline:
             job.progress.status = JobStatus.DONE
             job.progress.progress_pct = 100.0
 
-            # Persist lessons learned during this job
             img_lessons = [l for l in self._learned_lessons if "text" in l.lower() or "character" in l.lower()]
             vid_lessons = [l for l in self._learned_lessons if l not in img_lessons]
             self._persist_lessons(img_lessons, vid_lessons or self._learned_lessons)
@@ -745,40 +703,59 @@ class Pipeline:
 
     # ─── Phase 1: Scenario ──────────────────────────────────────────
 
-    async def _generate_scenario(self, settings: GenerationSettings) -> Storyboard:
-        """Generate storyboard via LLM."""
+    async def _generate_scenario(self, settings: GenerationSettings, job: Optional[Job] = None) -> Storyboard:
+        """Generate storyboard via LLM with automatic retry on malformed JSON."""
         prompt = SCENARIO_USER_TEMPLATE.format(
             theme=settings.theme, style=settings.style,
             duration_sec=settings.duration_sec, num_scenes=settings.num_scenes,
             mood=settings.mood, include_dialogue=settings.include_dialogue,
             music_style=settings.music_style,
         )
-        response = await self.client.chat(
-            messages=[
-                {"role": "system", "content": SCENARIO_SYSTEM},
-                {"role": "user", "content": prompt},
-            ],
-            model="anthropic/claude-sonnet-4.6",
-            max_toks=8192, temperature=0.8,
-            json_mode=True,
-        )
-        data = json.loads(response)
-        scenes = []
-        for s in data["scenes"]:
-            scenes.append(Scene(
-                index=s["index"], description=s["description"],
-                duration_sec=s["duration_sec"], characters=s["characters"],
-                location=s["location"], camera_direction=s["camera_direction"],
-                dialogue=s.get("dialogue"), mood=s.get("mood", "neutral"),
-                transition_from=s.get("transition_from"),
-            ))
-        return Storyboard(
-            title=data["title"], synopsis=data["synopsis"],
-            style=data["style"], total_duration_sec=data["total_duration_sec"],
-            characters=[Character(**c) for c in data["characters"]],
-            locations=[Location(**loc) for loc in data["locations"]],
-            scenes=scenes,
-            music_cues=[MusicCue(**m) for m in data["music_cues"]],
+        max_attempts = 3
+        last_error: Optional[Exception] = None
+        for attempt in range(1, max_attempts + 1):
+            self._check_shutdown()
+            if attempt > 1 and job is not None:
+                job.progress.message = f"Storyboard parse failed, retrying ({attempt}/{max_attempts})..."
+                self._emit(job)
+            response = await self.client.chat(
+                messages=[
+                    {"role": "system", "content": SCENARIO_SYSTEM},
+                    {"role": "user", "content": prompt},
+                ],
+                model="anthropic/claude-sonnet-4.6",
+                max_toks=8192, temperature=0.8,
+                json_mode=True,
+            )
+            try:
+                data = json.loads(response)
+                scenes = []
+                for s in data["scenes"]:
+                    scenes.append(Scene(
+                        index=s["index"], description=s["description"],
+                        duration_sec=s["duration_sec"], characters=s["characters"],
+                        location=s["location"], camera_direction=s["camera_direction"],
+                        dialogue=s.get("dialogue"), mood=s.get("mood", "neutral"),
+                        transition_from=s.get("transition_from"),
+                    ))
+                return Storyboard(
+                    title=data["title"], synopsis=data["synopsis"],
+                    style=data["style"], total_duration_sec=data["total_duration_sec"],
+                    characters=[Character(**c) for c in data["characters"]],
+                    locations=[Location(**loc) for loc in data["locations"]],
+                    scenes=scenes,
+                    music_cues=[MusicCue(**m) for m in data["music_cues"]],
+                )
+            except (json.JSONDecodeError, KeyError, TypeError) as e:
+                last_error = e
+                logger.warning(
+                    f"Scenario parse failed (attempt {attempt}/{max_attempts}): {e}"
+                )
+                if attempt < max_attempts:
+                    await asyncio.sleep(1)  # brief pause before retry
+        raise ValueError(
+            f"Failed to generate valid storyboard after {max_attempts} attempts. "
+            f"Last error: {last_error}"
         )
 
     # ─── Phase 2: Assets (Best-of-2 chars parallel, locs parallel, keyframes sequential)
@@ -786,7 +763,6 @@ class Pipeline:
     async def _generate_assets(self, job: Job, storyboard: Storyboard):
         """Generate assets with maximum parallelism where dependencies allow."""
 
-        # Step 1: Character sheets — Best-of-2 in parallel per character
         char_tasks = [
             self._generate_best_of_2_character_sheet(job, char, i, storyboard.style)
             for i, char in enumerate(storyboard.characters)
@@ -806,7 +782,6 @@ class Pipeline:
         self._emit(job)
         self._check_shutdown()
 
-        # Step 2: Locations — all in parallel (no dependencies)
         loc_tasks = []
         for i, loc in enumerate(storyboard.locations):
             prompt = IMAGE_LOCATION_PROMPT.format(
@@ -829,7 +804,6 @@ class Pipeline:
 
         self._check_shutdown()
 
-        # Step 3: Keyframes — SEQUENTIAL for visual continuity
         char_ref_desc = "; ".join(f"{c.name}: {c.visual_traits}" for c in storyboard.characters)
         chars_identity_block = self._build_characters_identity_block(storyboard)
         prev_keyframe_desc = None
@@ -904,22 +878,116 @@ class Pipeline:
         job.progress.message = f"Music: {len(job.progress.music_clips)}/{len(storyboard.music_cues)} clips"
         self._emit(job)
 
-    # ─── Phase 3: Video Animation (Sequential + Multidim + Adaptive + frame_images)
+    # ─── Failure Advisor (LLM-powered error recovery) ─────────────
+
+    AVAILABLE_VIDEO_MODELS = [
+        "bytedance/seedance-2.0",
+        "bytedance/seedance-2.0-fast",
+        "bytedance/seedance-1-5-pro",
+        "google/veo-3.1",
+        "google/veo-3.1-fast",
+        "google/veo-3.1-lite",
+        "minimax/hailuo-2.3",
+        "kwaivgi/kling-v3.0-pro",
+        "kwaivgi/kling-v3.0-std",
+        "kwaivgi/kling-video-o1",
+    ]
+
+    _VIDEO_MODEL_PROMPT_LIMIT: dict[str, int] = {
+        "kwaivgi/kling-v3.0-pro": 2500,
+        "kwaivgi/kling-v3.0-std": 2500,
+        "kwaivgi/kling-video-o1": 2500,
+    }
+
+    async def _condense_prompt_for_model(self, prompt: str, model: str) -> str:
+        """Shorten *prompt* via LLM if it exceeds the model's character limit."""
+        limit = self._VIDEO_MODEL_PROMPT_LIMIT.get(model)
+        if not limit or len(prompt) <= limit:
+            return prompt
+        target = limit - 50
+        logger.info(f"Prompt {len(prompt)} chars > {model} limit {limit}, condensing to ~{target}")
+        req = (
+            "You are a video prompt editor. Rewrite the prompt below to fit within "
+            f"{target} characters. Keep ALL character visuals, camera, action, mood, "
+            "and style. Remove boilerplate/negative constraints. Return ONLY the text.\n\n"
+            f"--- ORIGINAL ---\n{prompt}\n--- END ---"
+        )
+        try:
+            condensed = (await run_with_timeout(
+                self.client.chat(
+                    messages=[{"role": "user", "content": req}],
+                    model="google/gemini-3.5-flash", max_toks=1024, temperature=0.2,
+                ), timeout_sec=30, description="Prompt condensation",
+            )).strip()
+            if 100 < len(condensed) <= limit:
+                logger.info(f"Prompt condensed: {len(prompt)} → {len(condensed)} chars")
+                return condensed
+            logger.warning(f"Condensation returned {len(condensed)} chars, hard-truncating")
+            return prompt[:limit]
+        except Exception as e:
+            logger.warning(f"Condensation failed ({e}), hard-truncating")
+            return prompt[:limit]
+
+    async def _get_failure_advisor_recommendation(
+        self, error: str, current_model: str, scene_description: str,
+    ) -> dict:
+        """Ask a fast LLM to analyze a video generation failure and recommend an action."""
+        alternatives = [m for m in self.AVAILABLE_VIDEO_MODELS if m != current_model]
+        prompt = (
+            "You are an AI video generation advisor. A video generation request failed.\n\n"
+            f"Error: {error}\n"
+            f"Current model: {current_model}\n"
+            f"Scene: {scene_description[:300]}\n\n"
+            f"Available alternative models: {', '.join(alternatives)}\n\n"
+            "Analyze the error and recommend ONE action:\n"
+            '- "retry_same_model" — if the error is transient (timeout, rate limit, server error, 500/502/503)\n'
+            '- "switch_model" — if the error is model-specific (copyright filter, content policy, '
+            "unsupported feature). Pick the best alternative from the list above.\n"
+            '- "skip" — if the error is fundamental and no model can help (invalid prompt, impossible request)\n\n'
+            'Return ONLY valid JSON: {"action": "...", "reason": "...", "suggested_model": "model_id_or_null"}'
+        )
+        try:
+            response = await run_with_timeout(
+                self.client.chat(
+                    messages=[{"role": "user", "content": prompt}],
+                    model="google/gemini-3.5-flash",
+                    max_toks=256,
+                    temperature=0.1,
+                    json_mode=True,
+                ),
+                timeout_sec=30,
+                description="Failure advisor",
+            )
+            text = response.strip()
+            if text.startswith("```"):
+                text = text.split("\n", 1)[1] if "\n" in text else text[3:]
+                if text.endswith("```"):
+                    text = text[:-3]
+                text = text.strip()
+            result = json.loads(text)
+            action = result.get("action", "skip")
+            if action not in ("retry_same_model", "switch_model", "skip"):
+                action = "skip"
+            suggested = result.get("suggested_model")
+            if action == "switch_model" and suggested not in alternatives:
+                suggested = alternatives[0] if alternatives else None
+                if not suggested:
+                    action = "skip"
+            return {"action": action, "reason": result.get("reason", ""), "suggested_model": suggested}
+        except Exception as e:
+            logger.warning(f"Failure advisor call failed: {e}")
+            return {"action": "skip", "reason": f"Advisor unavailable: {e}", "suggested_model": None}
+
+    # ─── Phase 3: Video Animation ──────────────────────────────────
 
     async def _generate_videos(self, job: Job, storyboard: Storyboard):
-        """Generate video for each scene with:
-        - frame_images hard anchoring (prev scene last frame as first_frame)
-        - Multi-dimensional scoring (5 axes, weighted avg)
-        - Adaptive scene simplification on 2+ failures
-        - Progressive prompt learning from VLM feedback
-        """
+        """Generate video for each scene with multidim scoring and adaptive simplification."""
         prev_frame_path: Optional[str] = None
         chars_identity_block = self._build_characters_identity_block(storyboard)
 
         for i, scene in enumerate(storyboard.scenes):
             self._check_shutdown()
 
-            # Build input references (soft guidance) — character sheets + location + keyframe
             references = []
             for char_name in scene.characters:
                 char = next((c for c in storyboard.characters if c.name == char_name), None)
@@ -933,12 +1001,10 @@ class Pipeline:
             if scene.keyframe_url:
                 references.append(self.client.make_input_reference(scene.keyframe_url))
 
-            # Build frame_images (hard anchoring) — previous scene's last frame
             frame_images = None
             if prev_frame_path and Path(prev_frame_path).exists():
                 frame_images = [self.client.make_frame_image(prev_frame_path, "first_frame")]
 
-            # Build video prompt
             continuity_note = ""
             if i > 0 and scene.transition_from:
                 continuity_note = SCENE_TRANSITION_TEMPLATE.format(
@@ -955,12 +1021,10 @@ class Pipeline:
                 continuity_note=continuity_note,
             )
 
-            # Inject learned lessons into prompt
             lessons_text = self._get_lessons_text()
             if lessons_text and "No lessons" not in lessons_text:
                 base_prompt += f"\n\nLEARNED FROM PREVIOUS GENERATIONS (apply these):\n{lessons_text}"
 
-            # Generate video with retry + multidim scoring + adaptive simplification
             video_path = None
             all_issues: list[str] = []
             current_description = scene.description
@@ -971,14 +1035,12 @@ class Pipeline:
                 if attempt > 0 and all_issues:
                     current_prompt += "\n\nCRITICAL FIXES REQUIRED: " + "; ".join(all_issues[-3:])
 
-                # Adaptive simplification after 2 consecutive failures
                 if attempt >= 2 and all_issues:
                     simplified_desc, simplified_cam, neg_constraints = await self._simplify_scene(
                         scene, all_issues
                     )
                     current_description = simplified_desc
                     current_camera = simplified_cam
-                    # Rebuild prompt with simplified scene
                     current_prompt = VIDEO_PROMPT_TEMPLATE.format(
                         scene_description=simplified_desc,
                         characters_identity_block=chars_identity_block,
@@ -992,9 +1054,13 @@ class Pipeline:
                     logger.info(f"Scene {scene.index} simplified for attempt {attempt+1}")
 
                 try:
+                    final_prompt = await self._condense_prompt_for_model(
+                        current_prompt, job.settings.video_model,
+                    )
+
                     video_path = await run_with_timeout(
                         self.client.generate_video(
-                            prompt=current_prompt,
+                            prompt=final_prompt,
                             filename=f"scene_{scene.index}_v{attempt}.mp4",
                             duration=self._clamp_duration(int(scene.duration_sec), job.settings.video_model),
                             resolution=job.settings.resolution,
@@ -1012,7 +1078,11 @@ class Pipeline:
                     verify_result = await self._verify_video_multidim(job, video_path, scene, storyboard)
                     stats = job.progress.verification_stats
 
-                    if verify_result.get("passed", True):
+                    if verify_result.get("vlm_error"):
+                        stats["video_skipped"] = stats.get("video_skipped", 0) + 1
+                        logger.info(f"Video scene {scene.index} verification skipped (VLM error)")
+                        break
+                    elif verify_result.get("passed", True):
                         stats["video_passed"] = stats.get("video_passed", 0) + 1
                         scores = verify_result.get("scores", {})
                         logger.info(
@@ -1025,7 +1095,6 @@ class Pipeline:
                         issues = verify_result.get("issues", [])
                         suggestion = verify_result.get("suggestion", "")
                         all_issues.extend(issues)
-                        # Learn from this failure
                         if suggestion:
                             self._add_lesson(suggestion, "video")
                         scores = verify_result.get("scores", {})
@@ -1038,8 +1107,103 @@ class Pipeline:
                             self._warn(job, f"Video scene {scene.index} failed after {MAX_VIDEO_VERIFY_RETRIES+1} attempts")
 
                 except Exception as e:
-                    self._warn(job, f"Video scene {i} failed: {e}")
-                    video_path = None
+                    error_str = str(e)
+                    self._warn(job, f"Video scene {i} failed: {error_str}")
+
+                    _err_lower = error_str.lower()
+                    _is_prompt_limit = any(
+                        kw in _err_lower
+                        for kw in ("prompt: size must be", "prompt too long", "prompt length", "maximum prompt")
+                    )
+                    if _is_prompt_limit:
+                        alts = [m for m in self.AVAILABLE_VIDEO_MODELS if m != job.settings.video_model]
+                        self._warn(
+                            job,
+                            f"Model {job.settings.video_model} rejected the prompt as too long. "
+                            f"Try switching to a different model (e.g. {alts[0] if alts else 'N/A'})."
+                        )
+                        video_path = None
+                        break
+
+                    job.progress.message = f"Scene {i} failed — consulting advisor..."
+                    self._emit(job)
+                    advice = await self._get_failure_advisor_recommendation(
+                        error_str, job.settings.video_model, scene.description,
+                    )
+                    action = advice.get("action", "skip")
+                    reason = advice.get("reason", "")
+                    suggested_model = advice.get("suggested_model")
+
+                    if reason:
+                        self._warn(job, f"Advisor ({action}): {reason}")
+
+                    if action == "retry_same_model":
+                        job.progress.message = f"Advisor: retrying scene {i} with {job.settings.video_model}..."
+                        self._emit(job)
+                        try:
+                            retry_prompt = await self._condense_prompt_for_model(
+                                current_prompt, job.settings.video_model,
+                            )
+                            video_path = await run_with_timeout(
+                                self.client.generate_video(
+                                    prompt=retry_prompt,
+                                    filename=f"scene_{scene.index}_advisor_retry.mp4",
+                                    duration=self._clamp_duration(int(scene.duration_sec), job.settings.video_model),
+                                    resolution=job.settings.resolution,
+                                    aspect_ratio=job.settings.aspect_ratio,
+                                    input_references=references if references else None,
+                                    frame_images=frame_images,
+                                    model=job.settings.video_model,
+                                    generate_audio=True,
+                                ),
+                                timeout_sec=TIMEOUT_VIDEO,
+                                description=f"Advisor retry scene {scene.index}",
+                            )
+                        except Exception as retry_e:
+                            self._warn(job, f"Advisor retry also failed: {retry_e}")
+                            video_path = None
+                    elif action == "switch_model" and suggested_model:
+                        job.progress.message = f"Advisor: switching to {suggested_model} for scene {i}..."
+                        self._emit(job)
+                        try:
+                            switch_prompt = await self._condense_prompt_for_model(
+                                current_prompt, suggested_model,
+                            )
+                            video_path = await run_with_timeout(
+                                self.client.generate_video(
+                                    prompt=switch_prompt,
+                                    filename=f"scene_{scene.index}_alt.mp4",
+                                    duration=self._clamp_duration(int(scene.duration_sec), suggested_model),
+                                    resolution=job.settings.resolution,
+                                    aspect_ratio=job.settings.aspect_ratio,
+                                    input_references=references if references else None,
+                                    frame_images=frame_images,
+                                    model=suggested_model,
+                                    generate_audio=True,
+                                ),
+                                timeout_sec=TIMEOUT_VIDEO,
+                                description=f"Scene {scene.index} with {suggested_model}",
+                            )
+                        except Exception as switch_e:
+                            self._warn(job, f"Alternative model {suggested_model} also failed: {switch_e}")
+                            video_path = None
+                    else:
+                        video_path = None
+
+                    if video_path:
+                        verify_result = await self._verify_video_multidim(job, video_path, scene, storyboard)
+                        stats = job.progress.verification_stats
+                        if verify_result.get("vlm_error"):
+                            stats["video_skipped"] = stats.get("video_skipped", 0) + 1
+                            logger.info(f"Video scene {scene.index} advisor fallback verification skipped (VLM error)")
+                        elif verify_result.get("passed", True):
+                            stats["video_passed"] = stats.get("video_passed", 0) + 1
+                            logger.info(f"Video scene {scene.index} advisor fallback passed VLM score={verify_result.get('weighted_score', '?')}")
+                        else:
+                            stats["video_retried"] = stats.get("video_retried", 0) + 1
+                            logger.warning(f"Video scene {scene.index} advisor fallback failed VLM: {verify_result.get('issues', [])}")
+                            self._warn(job, "Advisor fallback video failed quality check, using as-is")
+
                     break
 
             if video_path:
@@ -1069,7 +1233,6 @@ class Pipeline:
             if char and char.sheet_url:
                 references.append(self.client.make_input_reference(char.sheet_url))
 
-        # Use previous scene's last frame as hard anchor if available
         frame_images = None
         if scene_idx > 0:
             prev_scene = storyboard.scenes[scene_idx - 1]
@@ -1102,7 +1265,6 @@ class Pipeline:
                 description=f"Regenerate scene {scene.index} (identity fix)",
             )
             scene.video_url = video_path
-            # Update in video_clips list
             for idx, clip in enumerate(job.progress.video_clips):
                 if f"scene_{scene.index}_" in clip:
                     job.progress.video_clips[idx] = video_path
@@ -1119,12 +1281,6 @@ class Pipeline:
         output_dir.mkdir(parents=True, exist_ok=True)
         output_path = output_dir / f"{job.job_id}_final.mp4"
 
-        if not shutil.which("ffmpeg"):
-            raise RuntimeError(
-                "ffmpeg not found. Please install ffmpeg for video assembly. "
-                "On macOS: brew install ffmpeg"
-            )
-
         clips = [
             scene.video_url for scene in storyboard.scenes
             if scene.video_url and Path(scene.video_url).exists()
@@ -1137,15 +1293,13 @@ class Pipeline:
             shutil.copy2(clips[0], output_path)
             return str(output_path)
 
-        # Create concat file
         concat_file = self.state_dir / "concat.txt"
         with open(concat_file, "w") as f:
             for clip in clips:
                 f.write(f"file '{clip}'\n")
 
-        # Concatenate — try stream copy first
         cmd = [
-            "ffmpeg", "-y", "-f", "concat", "-safe", "0",
+            self._ffmpeg_path, "-y", "-f", "concat", "-safe", "0",
             "-i", str(concat_file), "-c", "copy", str(output_path),
         ]
         proc = self._run_ffmpeg(cmd, timeout=120)
@@ -1153,7 +1307,7 @@ class Pipeline:
         if proc.returncode != 0:
             self._check_shutdown()
             cmd_reencode = [
-                "ffmpeg", "-y", "-f", "concat", "-safe", "0",
+                self._ffmpeg_path, "-y", "-f", "concat", "-safe", "0",
                 "-i", str(concat_file),
                 "-c:v", "libx264", "-preset", "fast", "-c:a", "aac",
                 str(output_path),
@@ -1162,7 +1316,6 @@ class Pipeline:
             if proc.returncode != 0:
                 raise RuntimeError(f"ffmpeg assembly failed: {proc.stderr[-500:]}")
 
-        # Mix music if available
         music_clips = [
             mc.audio_url for mc in storyboard.music_cues
             if mc.audio_url and Path(mc.audio_url).exists()
@@ -1183,7 +1336,7 @@ class Pipeline:
 
         music_merged = self.state_dir / "music_merged.mp3"
         self._run_ffmpeg(
-            ["ffmpeg", "-y", "-f", "concat", "-safe", "0",
+            [self._ffmpeg_path, "-y", "-f", "concat", "-safe", "0",
              "-i", str(music_concat), "-c", "copy", str(music_merged)],
             timeout=60,
         )
@@ -1196,7 +1349,7 @@ class Pipeline:
         video_path = Path(video_path)
         temp_output = video_path.with_suffix(".tmp.mp4")
         cmd = [
-            "ffmpeg", "-y",
+            self._ffmpeg_path, "-y",
             "-i", str(video_path),
             "-i", str(music_merged),
             "-filter_complex",
