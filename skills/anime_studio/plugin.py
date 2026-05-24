@@ -5,7 +5,6 @@ import asyncio
 import json
 import logging
 import os
-import signal
 import threading
 import time
 from pathlib import Path
@@ -26,110 +25,14 @@ _shutdown_event = threading.Event()
 _api = None
 _state_dir: Path = Path(".")
 
-# Registry of ffmpeg process-group IDs so panic SIGTERM can kill them.
-# Populated by pipeline._run_ffmpeg (via _register_pgid / _unregister_pgid),
-# cleared by _cleanup.  Keyed by pid for safe concurrent removal.
-_active_pgids: dict[int, int] = {}  # pid -> pgid
-_active_pgids_lock = threading.Lock()
-_sigterm_handler_installed = False
-_sigterm_handler_lock = threading.Lock()
-
-
-def _register_pgid(pid: int, pgid: int) -> None:
-    """Called by pipeline._run_ffmpeg immediately after Popen so the module
-    knows which process groups to kill on panic/SIGTERM."""
-    with _active_pgids_lock:
-        _active_pgids[pid] = pgid
-
-
-def _unregister_pgid(pid: int) -> None:
-    """Called by pipeline._run_ffmpeg in the finally block."""
-    with _active_pgids_lock:
-        _active_pgids.pop(pid, None)
-
-
-def _kill_tracked_pgids() -> None:
-    """Send SIGKILL to every tracked ffmpeg process group.
-
-    Called from both _cleanup (normal unload) and the SIGTERM handler (panic).
-    Safe to call more than once — already-dead pgids are silently ignored.
-    POSIX-only: on Windows, falls back to individual proc.kill() if available.
-    """
-    import sys
-    with _active_pgids_lock:
-        pgids_snapshot = dict(_active_pgids)
-
-    if sys.platform == "win32":
-        # Windows has no process groups; individual kills are best-effort
-        import signal as _signal
-        for pid in pgids_snapshot:
-            try:
-                os.kill(pid, _signal.SIGTERM)
-            except (OSError, ProcessLookupError):
-                pass
-        return
-
-    for pid, pgid in pgids_snapshot.items():
-        try:
-            os.killpg(pgid, signal.SIGKILL)
-        except (OSError, ProcessLookupError):
-            pass
-
-
-def _install_sigterm_handler() -> None:
-    """Register a cleanup callback on POSIX SIGTERM so tracked ffmpeg process
-    groups are killed when the host sends SIGTERM during panic.
-
-    Design notes:
-    - POSIX-only: skipped silently on Windows (no SIGTERM / no process groups).
-    - Chains to the existing handler: captures whatever handler is installed
-      (host's or SIG_DFL), installs our wrapper that first calls
-      _kill_tracked_pgids(), then forwards to the captured handler. This means
-      the host's own panic/SIGTERM handler still runs after ffmpeg groups are
-      killed — no handler is lost.
-    - Main-thread only: signal.signal() requires main thread; skipped silently
-      in worker/subprocess contexts.
-    - Idempotent: protected by ``_sigterm_handler_installed`` flag + lock.
-    """
-    import sys
-    import threading as _threading
-    global _sigterm_handler_installed
-    with _sigterm_handler_lock:
-        if _sigterm_handler_installed:
-            return
-        _sigterm_handler_installed = True  # mark early to avoid double-install
-
-        if sys.platform == "win32" or not hasattr(signal, "SIGTERM"):
-            return  # No process groups on Windows — skip
-
-        # Only install from the main thread (signal.signal requirement)
-        if _threading.current_thread() is not _threading.main_thread():
-            return
-
-        try:
-            existing = signal.getsignal(signal.SIGTERM)
-
-            def _handler(signum, frame):
-                _kill_tracked_pgids()
-                # Chain to previous handler (host's panic handler or SIG_DFL)
-                if callable(existing):
-                    existing(signum, frame)
-                elif existing == signal.SIG_DFL:
-                    signal.signal(signal.SIGTERM, signal.SIG_DFL)
-                    os.kill(os.getpid(), signal.SIGTERM)
-
-            signal.signal(signal.SIGTERM, _handler)
-        except (OSError, ValueError):
-            # May fail in worker subprocess contexts — acceptable
-            pass
-
 
 def _is_path_confined(path: Path) -> bool:
     """Check if a resolved path is under the skill state directory."""
     try:
         resolved = path.resolve()
         state_resolved = _state_dir.resolve()
-        return str(resolved).startswith(str(state_resolved) + "/") or resolved == state_resolved
+        resolved.relative_to(state_resolved)
+        return True
     except (OSError, ValueError):
         return False
 
@@ -158,6 +61,18 @@ def register(api):
     """Register the Anime Studio extension."""
     global _api, _state_dir
 
+    # Clear module-level state so reloads start clean (critical: _shutdown_event
+    # is set permanently by _cleanup; without clearing it, pipeline threads exit
+    # immediately on reload).
+    _shutdown_event.clear()
+    with _jobs_lock:
+        _jobs.clear()
+    with _active_threads_lock:
+        _active_threads.clear()
+    with _active_pipelines_lock:
+        _active_pipelines.clear()
+    with _active_loops_lock:
+        _active_loops.clear()
     _api = api
     _state_dir = Path(api.get_state_dir())
     _state_dir.mkdir(parents=True, exist_ok=True)
@@ -194,11 +109,18 @@ def register(api):
                         {"name": "mood", "label": "Mood", "type": "select", "options": ["adventurous", "comedic", "dramatic", "melancholic", "mysterious", "romantic", "action-packed", "wholesome"], "default": "adventurous"},
                         {"name": "duration_sec", "label": "Duration (seconds)", "type": "number", "default": 30},
                         {"name": "num_scenes", "label": "Number of Scenes", "type": "number", "default": 4},
-                        {"name": "image_model", "label": "Image Generator", "type": "select", "options": ["gpt-image-2", "nanobanana"], "default": "gpt-image-2"},
-                        {"name": "video_model", "label": "Video Model", "type": "select", "options": ["bytedance/seedance-2.0", "bytedance/seedance-2.0-fast", "google/veo-3.1"], "default": "bytedance/seedance-2.0"},
+                        {"name": "image_model", "label": "Image Generator", "type": "select", "options": ["gpt-image-2", "gpt-5-image", "gpt-5-image-mini", "nanobanana", "gemini-3-pro-image", "flux.2-pro", "flux.2-max", "seedream-4.5", "grok-imagine"], "default": "gpt-image-2"},
+                        {"name": "video_model", "label": "Video Model", "type": "select", "options": ["bytedance/seedance-2.0", "bytedance/seedance-2.0-fast", "bytedance/seedance-1-5-pro", "google/veo-3.1", "google/veo-3.1-fast", "google/veo-3.1-lite", "minimax/hailuo-2.3", "kwaivgi/kling-v3.0-pro", "kwaivgi/kling-v3.0-std", "kwaivgi/kling-video-o1"], "default": "bytedance/seedance-2.0"},
                         {"name": "music_style", "label": "Music Style", "type": "select", "options": ["orchestral cinematic", "electronic ambient", "acoustic guitar folk", "j-pop instrumental", "lo-fi hip hop beats", "epic battle drums"], "default": "orchestral cinematic"},
                     ],
                     "submit_label": "\U0001f3ac Generate Anime",
+                },
+                {
+                    "type": "file",
+                    "path": "result_download_url",
+                    "label": "\U0001f3ac Download Video",
+                    "condition_key": "result_download_url",
+                    "filename": "anime_video.mp4",
                 },
                 {
                     "type": "subscription",
@@ -228,21 +150,18 @@ def register(api):
                 "duration_sec": {"type": "number", "description": "Total duration in seconds (10-60)", "default": 30},
                 "num_scenes": {"type": "integer", "description": "Number of scenes (2-8)", "default": 4},
                 "mood": {"type": "string", "description": "Overall mood", "default": "adventurous"},
-                "image_model": {"type": "string", "description": "Image generator: 'gpt-image-2' or 'nanobanana'", "default": "gpt-image-2"},
-                "video_model": {"type": "string", "description": "Video model", "default": "bytedance/seedance-2.0"},
+                "image_model": {"type": "string", "description": "Image generator: 'gpt-image-2', 'gpt-5-image', 'gpt-5-image-mini', 'nanobanana', 'gemini-3-pro-image', 'flux.2-pro', 'flux.2-max', 'seedream-4.5', 'grok-imagine'", "default": "gpt-image-2"},
+                "video_model": {"type": "string", "description": "Video model: seedance-2.0/1.5, veo-3.1/fast/lite, hailuo-2.3, kling-v3.0-pro/std/o1", "default": "bytedance/seedance-2.0"},
             },
             "required": ["theme"],
         },
         timeout_sec=300,
     )
 
-    # Install SIGTERM handler so ffmpeg pgids are killed on panic
-    _install_sigterm_handler()
-
     # Cleanup handler
     api.on_unload(_cleanup)
 
-    logger.info("Anime Studio v2.0 extension registered")
+    logger.info("Anime Studio v2.10.0 extension registered")
 
 
 # Thread join timeout — long enough for pipeline to notice shutdown_event between phases
@@ -255,15 +174,10 @@ def _cleanup():
     Guarantees all tracked subprocesses and threads are terminated:
     1. Sets shutdown_event so pipeline threads exit between phases
     2. Cancels all tasks in tracked event loops (interrupts in-flight HTTP)
-    3. Kills all tracked ffmpeg process groups via pgid registry (SIGKILL)
-    4. Kills tracked pipeline subprocess lists as a redundant sweep
-    5. Joins each pipeline thread with timeout
-    6. shutdown_event stays set permanently after cleanup
-
-    Note: this is also indirectly triggered on panic via the SIGTERM handler
-    installed by _install_sigterm_handler() during register().  The SIGTERM
-    handler calls _kill_tracked_pgids() directly so ffmpeg groups die even
-    before the on_unload path runs.
+    3. Kills tracked pipeline subprocesses (ffmpeg inherits the host's
+       process group, so the host's panic kill also reaps them)
+    4. Joins each pipeline thread with timeout
+    5. shutdown_event stays set permanently after cleanup
     """
     global _jobs
     _shutdown_event.set()
@@ -279,12 +193,7 @@ def _cleanup():
                 pass
         _active_loops.clear()
 
-    # Kill all tracked ffmpeg process groups immediately (SIGKILL via pgid)
-    _kill_tracked_pgids()
-    with _active_pgids_lock:
-        _active_pgids.clear()
-
-    # Kill tracked pipeline subprocess lists as a redundant sweep
+    # Kill tracked pipeline subprocesses
     with _active_pipelines_lock:
         for pipeline in _active_pipelines:
             try:
@@ -374,11 +283,21 @@ async def handle_generate(request) -> dict:
 
     from .models import GenerationSettings, Job
 
+    # Form fields arrive as strings from HTML forms — cast numeric values.
+    try:
+        duration_sec = int(body.get("duration_sec", 30))
+    except (ValueError, TypeError):
+        duration_sec = 30
+    try:
+        num_scenes = int(body.get("num_scenes", 4))
+    except (ValueError, TypeError):
+        num_scenes = 4
+
     settings = GenerationSettings(
         theme=theme,
         style=body.get("style", "modern anime"),
-        duration_sec=min(60, max(10, body.get("duration_sec", 30))),
-        num_scenes=min(8, max(2, body.get("num_scenes", 4))),
+        duration_sec=min(60, max(10, duration_sec)),
+        num_scenes=min(8, max(2, num_scenes)),
         mood=body.get("mood", "adventurous"),
         resolution=body.get("resolution", "720p"),
         aspect_ratio=body.get("aspect_ratio", "16:9"),
@@ -436,6 +355,7 @@ async def handle_status(request) -> dict:
         "video_clips": p.video_clips,
         "music_clips": p.music_clips,
         "final_video_url": p.final_video_url,
+        "result_download_url": f"/api/extensions/anime_studio/result?job_id={job.job_id}" if p.final_video_url else "",
         "error": p.error,
         "warnings": p.warnings,
         "verification_stats": p.verification_stats,
@@ -509,7 +429,11 @@ async def handle_result(request) -> Any:
     if not path.exists():
         return JSONResponse({"error": "Video file not found"}, status_code=404)
 
-    return FileResponse(str(path), media_type="video/mp4")
+    return FileResponse(
+        str(path),
+        media_type="video/mp4",
+        filename=f"{job_id}_anime.mp4",
+    )
 
 
 # ─── WebSocket Handler ──────────────────────────────────────────────
@@ -594,6 +518,7 @@ def _run_pipeline_thread(job, api_key: str):
     timeouts to expire.
     """
     from .api_client import OpenRouterClient
+    from .models import JobPhase, JobStatus
     from .pipeline import Pipeline
 
     loop = asyncio.new_event_loop()
@@ -617,16 +542,19 @@ def _run_pipeline_thread(job, api_key: str):
             on_progress=_on_progress,
             shutdown_event=_shutdown_event,
             lessons_dir=_state_dir,  # shared across jobs for progressive learning
+            ffmpeg_cache_dir=_state_dir,  # shared across jobs — avoid re-downloading per job
         )
         _track_pipeline(pipeline)
         loop.run_until_complete(pipeline.run(job))
     except asyncio.CancelledError:
-        job.progress.status = "error"
+        job.progress.status = JobStatus.ERROR
+        job.progress.phase = JobPhase.ERROR
         job.progress.error = "Cancelled (extension unloading)"
         job.progress.message = "Generation cancelled — extension unloaded"
     except Exception as e:
         logger.exception("Pipeline thread error")
-        job.progress.status = "error"
+        job.progress.status = JobStatus.ERROR
+        job.progress.phase = JobPhase.ERROR
         job.progress.error = str(e)
         job.progress.message = f"Pipeline crashed: {e}"
         _on_progress(job)
@@ -656,6 +584,7 @@ def _on_progress(job):
                 "video_clips": p.video_clips,
                 "music_clips": p.music_clips,
                 "final_video_url": p.final_video_url,
+                "result_download_url": f"/api/extensions/anime_studio/result?job_id={job.job_id}" if p.final_video_url else "",
                 "warnings": p.warnings,
                 "has_warnings": bool(p.warnings),
                 "warnings_display": [{"key": f"\u26a0\ufe0f {i+1}", "value": w} for i, w in enumerate(p.warnings)] if p.warnings else [],
@@ -681,7 +610,12 @@ def _save_job(job):
 
 
 def _load_job(job_id: str):
+    import re
     from .models import Job
+
+    # Validate job_id to prevent path traversal (only hex/dash chars allowed)
+    if not job_id or not re.match(r'^[a-fA-F0-9\-]{1,64}$', job_id):
+        return None
 
     # Try new per-job directory first, fall back to legacy flat file
     path = _state_dir / "jobs" / job_id / "job.json"

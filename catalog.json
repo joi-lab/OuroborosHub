@@ -1,8 +1,8 @@
 {
-  "schema_version": 1,
-  "name": "OuroborosHub",
   "description": "Official Ouroboros skills catalog.",
+  "name": "OuroborosHub",
   "raw_base_url": "https://raw.githubusercontent.com/joi-lab/OuroborosHub/main",
+  "schema_version": 1,
   "skills": [
     {
       "description": "Agent-to-Agent protocol bridge for Ouroboros. Provides a local A2A-compatible server plus client tools for discovering and messaging other A2A agents.",
@@ -49,12 +49,12 @@
       "version": "1.0.0"
     },
     {
-      "description": "AI-powered 2D anime generator with VLM-verified assets, video analysis via Gemini, sequential keyframes, scene continuity chain, and multi-model image generation",
+      "description": "AI-powered 2D anime generator with VLM-verified assets, video analysis via Gemini, sequential keyframes, scene continuity chain, multi-model image/video generation, LLM-powered error recovery, and parallel asset+music pipeline",
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "682478bdf8dd640ee618b4838666d2d4a4d1586677ba2893a012709bd621c472",
-          "size": 6765
+          "sha256": "d5dfb8069348d664681ed48728504ead674a53adbb9c13e844afb6b9245a6716",
+          "size": 7977
         },
         {
           "path": "__init__.py",
@@ -63,8 +63,13 @@
         },
         {
           "path": "api_client.py",
-          "sha256": "37bf8a4d730b8855c57f7a2ea85fdf181b5c7a42891e935c6d518995de9dd2e2",
-          "size": 32712
+          "sha256": "617f26d6fc5d89fea31c982c258612823e3f0df99887477bed839c0fc19dab83",
+          "size": 33283
+        },
+        {
+          "path": "ffmpeg_bootstrap.py",
+          "sha256": "7834ff3bb3af3dc2bc0420efde131a428a4f1c5ced10d02a61d9dd1dd62ed7b7",
+          "size": 9737
         },
         {
           "path": "models.py",
@@ -73,8 +78,8 @@
         },
         {
           "path": "pipeline.py",
-          "sha256": "dae0a5b79d38c6fc2c526224c82a0b4d1fce82a348067940771ceae2de0dd040",
-          "size": 54603
+          "sha256": "7631684cf4b626213f1b0ca95b62bc7b89482d2f78887cf181e0fd789bb4fd19",
+          "size": 63158
         },
         {
           "path": "pipeline_test.txt",
@@ -83,8 +88,8 @@
         },
         {
           "path": "plugin.py",
-          "sha256": "65e8bf6455595c5b3cba0df395d013b72cc6cdce4bdf551ebc11f47d1fa1a5b8",
-          "size": 26884
+          "sha256": "0e7ccf3b19414193474f7dff7d7560537bbe972915c663043e55ee0a3ff978b8",
+          "size": 24791
         },
         {
           "path": "prompts.py",
@@ -98,7 +103,7 @@
       "name": "anime_studio",
       "slug": "anime_studio",
       "type": "extension",
-      "version": "2.3.0",
+      "version": "2.10.0",
       "when_to_use": "User wants to generate a short animated 2D anime cartoon, music video, or animated scene with consistent characters, VLM verification, and narrative continuity."
     },
     {
@@ -202,6 +207,25 @@
       "slug": "perplexity",
       "type": "extension",
       "version": "0.1.1"
+    },
+    {
+      "description": "Оркестратор автоматического бронирования ресторанов: нормализует список ресторанов, формирует задачу для агента-исполнителя и валидирует результат.",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "sha256": "8a8d76e88d4c452a0ff4541dcf89d519b431c91efa93ad901d8eda43a9de9df3",
+          "size": 7301
+        },
+        {
+          "path": "plugin.py",
+          "sha256": "51ad8b46ed1c04e9c8cfe9e9810af5e342d435a4dff1dd1c1861367bacf1544a",
+          "size": 39577
+        }
+      ],
+      "name": "restaurant_booking",
+      "slug": "restaurant_booking",
+      "type": "extension",
+      "version": "1.0.0"
     },
     {
       "description": "Bidirectional Telegram bot bridge for Ouroboros. Polls Telegram for inbound text/photos and mirrors host chat output back to Telegram.",
@@ -337,25 +361,6 @@
       "slug": "weather",
       "type": "extension",
       "version": "0.2.1"
-    },
-    {
-      "slug": "restaurant_booking",
-      "name": "restaurant_booking",
-      "description": "Оркестратор автоматического бронирования ресторанов: нормализует список ресторанов, формирует задачу для агента-исполнителя и валидирует результат.",
-      "version": "1.0.0",
-      "type": "extension",
-      "files": [
-        {
-          "path": "SKILL.md",
-          "sha256": "8a8d76e88d4c452a0ff4541dcf89d519b431c91efa93ad901d8eda43a9de9df3",
-          "size": 7301
-        },
-        {
-          "path": "plugin.py",
-          "sha256": "51ad8b46ed1c04e9c8cfe9e9810af5e342d435a4dff1dd1c1861367bacf1544a",
-          "size": 39577
-        }
-      ]
     }
   ]
 }
