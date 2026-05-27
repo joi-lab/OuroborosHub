@@ -228,33 +228,39 @@
       "version": "1.0.0"
     },
     {
-      "description": "Bidirectional Telegram bot bridge for Ouroboros. Polls Telegram for inbound text/photos and mirrors host chat output back to Telegram.",
+      "description": "Bidirectional Telegram bot bridge for Ouroboros with configurable command modes, inline keyboard control panel, and optional silent (edit-in-place) mirror.",
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "96ed624979d1652ddccc705dccad6f2a884f42606044b3d6339fb160cd79c8be",
-          "size": 1188
+          "sha256": "1c7ea6f1e02e1ceec055c8362190fba68fa99ae9e38937600c5bb330473a869b",
+          "size": 2807
         },
         {
           "path": "lib/telegram_api.py",
-          "sha256": "de7934bf3a67159bfa314f448c56b3552a2cb84b047f3b044bc5d9f80e1c70af",
-          "size": 2780
+          "sha256": "5d93dc5802db96ee00cbcc2a09b24170a705683fafa38120f8fb6399a4ed9bf4",
+          "size": 23741
         },
         {
           "path": "plugin.py",
-          "sha256": "b13267f14b12819011a7f81ae536a309b5263e60ee85006104a914e073aa5f5f",
-          "size": 8605
+          "sha256": "edab076bc75dd1fc4264091e382fa084b22a0afd506af197b75a598d34915adb",
+          "size": 56816
+        },
+        {
+          "path": "tests/test_markdown_to_html.py",
+          "sha256": "82131035698a8b6f4bae7a80b3a3eb5999edf9b1c5dae5b9845771ce81709ad0",
+          "size": 5300
         },
         {
           "path": "tests/test_telegram_bridge_safety.py",
-          "sha256": "498aeeeb77a95f918021b37daec9337afb9d08e0246205267f1882a2136f0e2f",
-          "size": 4617
+          "sha256": "a8a33dccc13343eecdf73d12b191dc5ee45292c93b87f1e5219f193b21247aa1",
+          "size": 5594
         }
       ],
       "name": "telegram-bridge",
       "slug": "telegram-bridge",
       "type": "extension",
-      "version": "1.0.0"
+      "version": "2.1.3",
+      "when_to_use": "User wants to communicate with Ouroboros through Telegram."
     },
     {
       "description": "Generate a short video clip via OpenRouter's video generation API using Seedance 2.0 (bytedance/seedance-2.0). Output is saved to the skill state directory.",

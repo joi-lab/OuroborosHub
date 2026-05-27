@@ -32,6 +32,9 @@ class FakeApi:
     def get_skill_token(self):
         return types.SimpleNamespace(use_in_request=lambda: "skill-token")
 
+    def log(self, level, message, **fields):
+        pass  # no-op for tests
+
 
 class FakeTelegramClient:
     instances = []
@@ -41,11 +44,20 @@ class FakeTelegramClient:
         self.sent = []
         FakeTelegramClient.instances.append(self)
 
+    async def call(self, method, **kwargs):
+        return {"ok": True, "result": {}}
+
     async def get_updates(self, offset):
         return list(self.updates)
 
     async def send_message(self, chat_id, text):
         self.sent.append((chat_id, text))
+
+    async def send_message_with_inline_keyboard(self, chat_id, text, keyboard):
+        self.sent.append((chat_id, text))
+
+    async def answer_callback_query(self, callback_query_id, *, text=""):
+        self.sent.append(("cb_answer", callback_query_id, text))
 
 
 def test_slash_messages_are_not_injected(tmp_path, monkeypatch):
@@ -140,3 +152,15 @@ def test_manifest_declares_route_permission():
     manifest = Path(__file__).resolve().parents[1] / "SKILL.md"
     text = manifest.read_text(encoding="utf-8")
     assert "route" in text.split("permissions:", 1)[1].split("]", 1)[0]
+
+
+def test_markdown_to_telegram_html_placeholder_ordering(tmp_path):
+    plugin = _load_plugin(tmp_path)
+    from telegram_bridge_test.lib.telegram_api import markdown_to_telegram_html
+    # Generate a string with more than 10 backtick blocks
+    text = " ".join(f"`block{i}`" for i in range(12))
+    result = markdown_to_telegram_html(text)
+    # Ensure all placeholders replaced correctly without trailing "0" or "1" on any block
+    for i in range(12):
+        assert f"<code>block{i}</code>" in result
+    assert "CODEPLACEHOLDER" not in result
