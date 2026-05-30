@@ -1,0 +1,29 @@
+name: Sync Joi Lab Mirror
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Push main to joi-lab mirror
+        env:
+          MIRROR_PAT: ${{ secrets.JOILAB_HUB_MIRROR_PAT }}
+        run: |
+          set -euo pipefail
+          if [ -z "${MIRROR_PAT:-}" ]; then
+            echo "JOILAB_HUB_MIRROR_PAT is not configured" >&2
+            exit 1
+          fi
+          git remote add joi-lab "https://x-access-token:${MIRROR_PAT}@github.com/joi-lab/OuroborosHub.git"
+          git push joi-lab HEAD:main
