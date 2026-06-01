@@ -85,6 +85,75 @@ def test_slash_messages_are_not_injected(tmp_path, monkeypatch):
     assert FakeTelegramClient.instances[-1].sent
 
 
+def test_full_access_injects_raw_slash_commands(tmp_path, monkeypatch):
+    plugin = _load_plugin(tmp_path)
+    (tmp_path / "settings.json").write_text(
+        json.dumps({"TELEGRAM_MAX_UPDATES_PER_POLL": 20, "TELEGRAM_COMMAND_MODE": "full_access", "TELEGRAM_CHAT_ID": "42"}),
+        encoding="utf-8",
+    )
+    FakeTelegramClient.updates = [
+        {"update_id": 1, "message": {"chat": {"id": 42}, "from": {"id": 7}, "text": "/panic"}}
+    ]
+    monkeypatch.setattr(plugin, "TelegramClient", FakeTelegramClient)
+    injected = []
+
+    async def fake_inject(api, payload):
+        injected.append(payload)
+
+    monkeypatch.setattr(plugin, "_inject", fake_inject)
+
+    async def stop_sleep(_delay):
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(plugin.asyncio, "sleep", stop_sleep)
+    poller = plugin._make_poller(FakeApi(tmp_path))
+
+    try:
+        asyncio.run(poller())
+    except asyncio.CancelledError:
+        pass
+
+    assert len(injected) == 1
+    assert injected[0]["text"] == "/panic"
+    assert injected[0]["transport"]["kind"] == "telegram"
+
+
+def test_full_access_first_chat_pins_silently_and_forwards(tmp_path, monkeypatch):
+    plugin = _load_plugin(tmp_path)
+    (tmp_path / "settings.json").write_text(
+        json.dumps({"TELEGRAM_MAX_UPDATES_PER_POLL": 20, "TELEGRAM_COMMAND_MODE": "full_access"}),
+        encoding="utf-8",
+    )
+    FakeTelegramClient.updates = [
+        {"update_id": 1, "message": {"chat": {"id": 42}, "from": {"id": 7}, "text": "/panic"}}
+    ]
+    monkeypatch.setattr(plugin, "TelegramClient", FakeTelegramClient)
+    injected = []
+    monkeypatch.setattr(plugin, "_inject", lambda api, payload: injected.append(payload))
+
+    async def stop_sleep(_delay):
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(plugin.asyncio, "sleep", stop_sleep)
+    poller = plugin._make_poller(FakeApi(tmp_path))
+
+    try:
+        asyncio.run(poller())
+    except asyncio.CancelledError:
+        pass
+
+    # First chat is pinned (inbound filter), but pinning is SILENT: the message
+    # flows straight through and the raw slash is forwarded. The single
+    # "send the command again" confirmation is owned by the core owner-external
+    # TOFU (server._process_bridge_updates), not duplicated by the skill.
+    settings = json.loads((tmp_path / "settings.json").read_text(encoding="utf-8"))
+    assert settings["TELEGRAM_CHAT_ID"] == "42"
+    assert len(injected) == 1
+    assert injected[0]["text"] == "/panic"
+    # The skill did not emit its own registration prompt.
+    assert all("registered" not in str(s).lower() for s in FakeTelegramClient.instances[-1].sent)
+
+
 def test_poller_caps_update_batch_and_adds_transport(tmp_path, monkeypatch):
     plugin = _load_plugin(tmp_path)
     (tmp_path / "settings.json").write_text(json.dumps({"TELEGRAM_MAX_UPDATES_PER_POLL": 2}), encoding="utf-8")

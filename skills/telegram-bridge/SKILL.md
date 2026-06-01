@@ -1,7 +1,7 @@
 ---
 name: telegram-bridge
 description: Bidirectional Telegram bot bridge for Ouroboros with configurable command modes, inline keyboard control panel, and optional silent (edit-in-place) mirror.
-version: 2.1.3
+version: 2.2.0
 type: extension
 entry: plugin.py
 runtime: python3
@@ -25,19 +25,20 @@ from Telegram (configure in Settings → Telegram Bridge):
 | Mode | Allowed commands | Blocked |
 |------|-----------------|---------|
 | **strict** (default) | None — all slash commands blocked | Everything with `/` |
-| **safe_commands** | status, bg status (translated to natural language) | All dangerous commands |
-| **full_access** | safe commands + bg start/stop (translated to natural language) | `/panic`, `/restart`, `/review`, `/evolve` |
+| **safe_commands** | `/status`, `/bg`, `/bg status` | Mutating commands |
+| **full_access** | Raw owner commands including `/panic`, `/restart`, `/review`, `/evolve`, `/bg` | Unknown commands only |
 
-**Important:** Slash commands are NEVER injected as-is. Allowed commands are
-translated to natural-language text (e.g. `/status` → "show status") so the
-LLM interprets them without hitting reserved supervisor command paths.
+**Important:** In `full_access`, this reviewed transport is a first-class owner
+chat surface. Slash commands are forwarded as raw chat text through the Host
+Service after the skill passes review, grants, enablement, token, rate-limit,
+and chat/user binding checks.
 
 ## Inline Keyboard
 
 Send `/menu` in Telegram to get an inline button panel with available
-commands (adapts to the current command mode). Button presses use non-slash callback identifiers that are mapped to
-natural-language text before injection — no slash commands ever reach the
-Host Service.
+commands (adapts to the current command mode). Button presses use non-slash
+callback identifiers internally, then map to the same allowed command text as
+ordinary Telegram messages.
 
 ## Silent Mode
 
@@ -57,6 +58,5 @@ starts a fresh bubble. Default: off.
 
 `TELEGRAM_BOT_TOKEN` is a protected secret and requires an explicit owner
 grant before the skill can run. Chat routing settings such as `TELEGRAM_CHAT_ID`
-are owned by this skill's settings panel rather than by core settings. Inbound
-Telegram slash commands are translated to natural-language text before Host
-Service injection — slash-shaped strings never reach the inject endpoint.
+are owned by this skill's settings panel rather than by core settings. Use
+`full_access` only for a bot/chat you trust as an owner channel.

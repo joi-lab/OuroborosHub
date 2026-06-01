@@ -14,20 +14,16 @@ from .lib.telegram_api import TelegramClient, markdown_to_telegram_html, _LOCALI
 
 _SLASH_COMMAND_RE = re.compile(r"^\s*/[A-Za-z]")
 
-# Slash commands are NEVER injected as-is into the Host Service.
-# Instead, allowed commands are translated to natural-language text that the
-# LLM can interpret, keeping the bridge on the right side of the
-# inject_chat_minimization checklist item.
+# In strict/safe modes slash commands are still controlled locally. In
+# full_access mode a reviewed+granted chat transport is allowed to forward the
+# same raw owner commands that the local UI accepts.
 _COMMAND_TRANSLATIONS: dict[str, str] = {
-    "/status": "show status",
-    "/bg status": "background consciousness status",
-    "/bg start": "start background consciousness",
-    "/bg stop": "stop background consciousness",
-    "/bg": "background consciousness status",
+    "/status": "/status",
+    "/bg status": "/bg status",
+    "/bg start": "/bg start",
+    "/bg stop": "/bg stop",
+    "/bg": "/bg",
 }
-
-# Commands that are NEVER forwarded even as translations — too dangerous.
-_DANGEROUS_COMMANDS = frozenset({"/panic", "/restart", "/review", "/evolve on", "/evolve off", "/evolve"})
 
 _COMMAND_MODE_STRICT = "strict"
 _COMMAND_MODE_SAFE = "safe_commands"
@@ -35,9 +31,8 @@ _COMMAND_MODE_FULL = "full_access"
 _VALID_COMMAND_MODES = frozenset({_COMMAND_MODE_STRICT, _COMMAND_MODE_SAFE, _COMMAND_MODE_FULL})
 
 
-# Which translation keys are available in each mode
+# Which translation keys are available in safe mode (full_access forwards raw)
 _SAFE_TRANSLATION_KEYS = frozenset({"/status", "/bg status", "/bg"})
-_FULL_TRANSLATION_KEYS = frozenset(_COMMAND_TRANSLATIONS.keys())
 
 # Callback data → (translated_text, minimum_required_mode) for inline keyboard
 # buttons. These are intentionally non-slash strings so no slash command ever
@@ -60,6 +55,12 @@ def _load_settings(api) -> Dict[str, Any]:
         return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
     except Exception:
         return {}
+
+
+def _save_settings_dict(api, settings: Dict[str, Any]) -> None:
+    path = _state_file(api, "settings.json")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(settings, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def _is_silent_mode_enabled(settings: Dict[str, Any]) -> bool:
@@ -122,25 +123,16 @@ def _setting_int(settings: Dict[str, Any], key: str, default: int, *, minimum: i
 
 
 def _translate_command(text: str, command_mode: str) -> str | None:
-    """Translate a slash command to safe natural-language text, or return None to reject.
-
-    Slash commands are NEVER injected as-is. Instead, allowed commands are
-    converted to plain text that the LLM interprets without hitting the
-    reserved supervisor command path. Returns the original text unchanged
-    if it is not a slash command.
-    """
+    """Return allowed chat text for a Telegram command, or None to reject."""
     if not _SLASH_COMMAND_RE.match(str(text or "")):
         return text  # Not a slash command — pass through unchanged
     normalized = str(text or "").strip().lower()
-    # Dangerous commands are always rejected
-    for dangerous in _DANGEROUS_COMMANDS:
-        if normalized == dangerous or normalized.startswith(dangerous + " "):
-            return None
     if command_mode == _COMMAND_MODE_STRICT:
         return None  # All slash commands blocked
+    if command_mode == _COMMAND_MODE_FULL:
+        return str(text or "").strip()
     # Determine which translations are available for this mode
-    allowed_keys = _SAFE_TRANSLATION_KEYS if command_mode == _COMMAND_MODE_SAFE else _FULL_TRANSLATION_KEYS
-    for cmd_key in sorted(allowed_keys, key=len, reverse=True):
+    for cmd_key in sorted(_SAFE_TRANSLATION_KEYS, key=len, reverse=True):
         if normalized == cmd_key or normalized.startswith(cmd_key + " "):
             return _COMMAND_TRANSLATIONS[cmd_key]
     return None  # Unrecognized slash command — reject
@@ -382,7 +374,19 @@ def _make_settings_save(api):
         payload = {key: data.get(key) for key in allowed if key in data}
         path = _state_file(api, "settings.json")
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        # Merge into existing settings rather than overwrite, so a partial save
+        # (e.g. setting only TELEGRAM_COMMAND_MODE) never wipes a pinned chat or
+        # other preferences on a re-run.
+        current: Dict[str, Any] = {}
+        if path.exists():
+            try:
+                loaded = json.loads(path.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    current = loaded
+            except Exception:
+                current = {}
+        current.update(payload)
+        path.write_text(json.dumps(current, ensure_ascii=False, indent=2), encoding="utf-8")
         return JSONResponse({"ok": True, "message": "Telegram settings saved. Toggle the skill to restart polling."})
     return _settings_save
 
@@ -661,7 +665,7 @@ def _make_poller(api):
                                     await client.answer_callback_query(cb_id, text=_LOCALIZED_TEXTS[lang]["restricted_safe"])
                                     continue
                                 await client.answer_callback_query(cb_id, text=_LOCALIZED_TEXTS[lang]["injecting_consciousness"])
-                                translated = "start background consciousness" if action == "bg_start" else "stop background consciousness"
+                                translated = "/bg start" if action == "bg_start" else "/bg stop"
                                 sender_name = _extract_sender_label(cb_sender, cb_chat_id)
                                 sender_label = f"Telegram ({sender_name})"
                                 await _inject(api, {
@@ -822,6 +826,16 @@ def _make_poller(api):
                     chat = message.get("chat") or {}
                     sender = message.get("from") or {}
                     chat_id = int(chat.get("id") or 0)
+                    if command_mode == _COMMAND_MODE_FULL and not pinned_chat:
+                        # Pin the first chat as the bot's conversation, but pin
+                        # SILENTLY and let the message flow through. The core
+                        # owner-external TOFU (server._process_bridge_updates)
+                        # owns the single "send the command again" confirmation
+                        # for slash commands; emitting our own prompt here would
+                        # force a confusing double registration.
+                        local_settings["TELEGRAM_CHAT_ID"] = str(chat_id)
+                        _save_settings_dict(api, local_settings)
+                        pinned_chat = str(chat_id)
                     if pinned_chat and str(chat_id) != pinned_chat:
                         continue
                     text = str(message.get("text") or message.get("caption") or "").strip()
