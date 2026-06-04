@@ -1,14 +1,19 @@
 ---
 name: anime_studio
 description: AI-powered 2D anime generator with VLM-verified assets, video analysis via Gemini, sequential keyframes, scene continuity chain, multi-model image/video generation, LLM-powered error recovery, and parallel asset+music pipeline
-version: 2.10.0
+version: 2.11.0
 type: extension
 entry: plugin.py
-permissions: [net, route, widget, ws_handler, tool, read_settings, subprocess]
+permissions: [net, route, widget, ws_handler, tool, read_settings, subprocess, companion_process]
 env_from_settings: [OPENROUTER_API_KEY]
 when_to_use: User wants to generate a short animated 2D anime cartoon, music video, or animated scene with consistent characters, VLM verification, and narrative continuity.
 timeout_sec: 300
 dependencies: [Pillow]
+companion_processes:
+  - name: anime_worker
+    command: [python3, scripts/anime_worker.py]
+    runtime: python3
+    restart_policy: on_failure
 ui_tab:
   tab_id: studio
   title: Anime Studio
@@ -89,12 +94,23 @@ ui_tab:
             condition_key: has_warnings
 ---
 
-# Anime Studio v2.7
+# Anime Studio v2.11
 
 A professional-grade 2D anime cartoon generator with **VLM-verified assets**,
 **video analysis via Gemini 3.1 Pro**, **sequential keyframes for continuity**,
 **multi-model image/video generation**, **LLM-powered error recovery**,
 **smart prompt condensation**, and **parallel asset + music pipeline**.
+
+## What's New in v2.11
+
+- **Companion-process pipeline (out-of-process safe)** — The generation pipeline now
+  runs in a host-supervised `anime_worker` companion process instead of a thread
+  spawned inside the route handler. Routes only enqueue a job (file-backed job store)
+  and poll status; the companion runs each job and relays progress to the browser
+  through the Host Service WS bridge. This fixes the skill on Ouroboros >= v6.15.0,
+  where isolated-dependency extensions dispatch routes in short-lived per-call
+  children that cannot host a long-running pipeline thread. Requires the
+  `companion_process` permission.
 
 ## What's New in v2.7
 

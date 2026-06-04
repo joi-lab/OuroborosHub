@@ -1,8 +1,8 @@
 {
-  "description": "Official Ouroboros skills catalog.",
-  "name": "OuroborosHub",
-  "raw_base_url": "https://raw.githubusercontent.com/razzant/OuroborosHub/main",
   "schema_version": 1,
+  "name": "OuroborosHub",
+  "description": "Official Ouroboros skills catalog.",
+  "raw_base_url": "https://raw.githubusercontent.com/joi-lab/OuroborosHub/main",
   "skills": [
     {
       "description": "Agent-to-Agent protocol bridge for Ouroboros. Provides a local A2A-compatible server plus client tools for discovering and messaging other A2A agents.",
@@ -53,8 +53,8 @@
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "d5dfb8069348d664681ed48728504ead674a53adbb9c13e844afb6b9245a6716",
-          "size": 7977
+          "sha256": "0d7bd6b36ad9981d334f63fc9743bfe22024961761b4262be7b782c4756c767f",
+          "size": 8772
         },
         {
           "path": "__init__.py",
@@ -88,13 +88,18 @@
         },
         {
           "path": "plugin.py",
-          "sha256": "0e7ccf3b19414193474f7dff7d7560537bbe972915c663043e55ee0a3ff978b8",
-          "size": 24791
+          "sha256": "40398d273680ac5d2fd29c17a3a8f7d919e2d39681e3473be4af18fe8c8559a4",
+          "size": 16777
         },
         {
           "path": "prompts.py",
           "sha256": "2e4330bef6f4527d1492b106a97b76fee891134a50aff020def236608aeccae1",
           "size": 15149
+        },
+        {
+          "path": "scripts/anime_worker.py",
+          "sha256": "6d81d3dab03051ad69680fa93d4337bf95f60498cbd3a09d5f9e8fbc12b60281",
+          "size": 7998
         }
       ],
       "install_specs": [
@@ -103,7 +108,7 @@
       "name": "anime_studio",
       "slug": "anime_studio",
       "type": "extension",
-      "version": "2.10.0",
+      "version": "2.11.0",
       "when_to_use": "User wants to generate a short animated 2D anime cartoon, music video, or animated scene with consistent characters, VLM verification, and narrative continuity."
     },
     {
