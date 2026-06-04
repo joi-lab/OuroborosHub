@@ -1,7 +1,7 @@
 ---
 name: anime_studio
 description: AI-powered 2D anime generator with VLM-verified assets, video analysis via Gemini, sequential keyframes, scene continuity chain, multi-model image/video generation, LLM-powered error recovery, and parallel asset+music pipeline
-version: 2.11.0
+version: 2.12.0
 type: extension
 entry: plugin.py
 permissions: [net, route, widget, ws_handler, tool, read_settings, subprocess, companion_process]
@@ -94,12 +94,25 @@ ui_tab:
             condition_key: has_warnings
 ---
 
-# Anime Studio v2.11
+# Anime Studio v2.12
 
 A professional-grade 2D anime cartoon generator with **VLM-verified assets**,
 **video analysis via Gemini 3.1 Pro**, **sequential keyframes for continuity**,
 **multi-model image/video generation**, **LLM-powered error recovery**,
 **smart prompt condensation**, and **parallel asset + music pipeline**.
+
+## What's New in v2.12
+
+- **Robust VLM/LLM JSON handling** — Image and video VLM calls now use compressed
+  image payloads, JSON mode, tolerant JSON extraction, bounded multi-image inputs,
+  and retries for transient provider failures. Storyboard, scene simplification,
+  and failure-advisor JSON parsing share the same hardened parser.
+
+- **Provider-resilient generation** — If the default `gpt-image-2` image path
+  returns empty choices or transient failures, Anime Studio falls back to
+  `nanobanana` so character sheets, locations, and keyframes can still complete.
+  Video generation no longer forces model-generated audio, avoiding Seedance audio
+  moderation failures when music/dialogue are handled elsewhere in the pipeline.
 
 ## What's New in v2.11
 
@@ -170,8 +183,8 @@ A professional-grade 2D anime cartoon generator with **VLM-verified assets**,
 
 | Model | Purpose |
 |-------|---------|
-| `openai/gpt-5.4-image-2` | Character sheets, keyframes (default) |
-| `google/gemini-3.1-flash-image-preview` | Character sheets, keyframes (nanobanana option) |
+| `openai/gpt-image-2` | Character sheets, locations, keyframes (default, with fallback on transient failures) |
+| `google/gemini-3.1-flash-image-preview` | Character sheets, locations, keyframes (nanobanana option and fallback) |
 | `anthropic/claude-sonnet-4.6` | Scenario generation + image VLM verification |
 | `google/gemini-3.5-flash` | **Error advisor + prompt condensation** — analyzes failures, condenses long prompts for models with character limits |
 | `google/gemini-3.1-pro-preview` | **Video VLM verification** (multi-frame analysis) |

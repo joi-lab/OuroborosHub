@@ -146,7 +146,7 @@ def register(api):
     # survives the per-call out-of-process child that handles the route.
     api.register_companion_process("anime_worker")
 
-    logger.info("Anime Studio v2.11.0 extension registered (companion-backed pipeline)")
+    logger.info("Anime Studio v2.12.0 extension registered (companion-backed pipeline)")
 
 
 # ─── Job store (file-backed; shared with the companion) ─────────────

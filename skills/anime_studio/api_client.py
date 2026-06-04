@@ -21,6 +21,10 @@ logger = logging.getLogger("anime_studio.api")
 OPENROUTER_BASE = "https://openrouter.ai/api/v1"
 VIDEO_POLL_INTERVAL = 5  # seconds
 VIDEO_MAX_WAIT = 1200  # 20 min max wait per clip
+VLM_MAX_IMAGES = 6
+VLM_RETRIES = 2
+VLM_RETRY_STATUS = {400, 408, 409, 425, 429, 500, 502, 503, 504}
+CHAT_RETRIES = 2
 
 
 def _safe_filename(filename: str) -> str:
@@ -66,6 +70,142 @@ class OpenRouterClient:
             "X-Title": "Anime Studio",
         }
 
+    # ─── Robust JSON / VLM Helpers ─────────────────────────────────
+
+    @staticmethod
+    def _strip_json_fences(text: str) -> str:
+        text = (text or "").strip()
+        if not text.startswith("```"):
+            return text
+        text = text.split("\n", 1)[1] if "\n" in text else text[3:]
+        if text.endswith("```"):
+            text = text[:-3]
+        return text.strip()
+
+    @staticmethod
+    def _extract_balanced_json_object(text: str) -> str:
+        """Extract the first balanced JSON object from a model response."""
+        text = OpenRouterClient._strip_json_fences(text)
+        for start, char in enumerate(text):
+            if char != "{":
+                continue
+            depth = 0
+            in_string = False
+            escaped = False
+            for idx in range(start, len(text)):
+                ch = text[idx]
+                if in_string:
+                    if escaped:
+                        escaped = False
+                    elif ch == "\\":
+                        escaped = True
+                    elif ch == '"':
+                        in_string = False
+                    continue
+                if ch == '"':
+                    in_string = True
+                elif ch == "{":
+                    depth += 1
+                elif ch == "}":
+                    depth -= 1
+                    if depth == 0:
+                        return text[start:idx + 1]
+        return text
+
+    def parse_json_response(self, text: str) -> dict:
+        """Parse a JSON object from raw LLM output with fence/object fallback."""
+        stripped = self._strip_json_fences(text)
+        try:
+            data = json.loads(stripped)
+        except (json.JSONDecodeError, ValueError):
+            data = json.loads(self._extract_balanced_json_object(stripped))
+        if isinstance(data, list) and len(data) == 1 and isinstance(data[0], dict):
+            data = data[0]
+        if not isinstance(data, dict):
+            raise ValueError("LLM response JSON root is not an object")
+        return data
+
+    def _vlm_image_parts(self, image_paths: list[str]) -> list[dict]:
+        parts: list[dict] = []
+        for path in image_paths[:VLM_MAX_IMAGES]:
+            try:
+                parts.append({
+                    "type": "image_url",
+                    "image_url": {"url": self.get_image_url(path, compress=True)},
+                })
+            except Exception as e:
+                logger.warning(f"Failed to load VLM image {path}: {e}")
+        return parts
+
+    async def _vlm_json_request(
+        self,
+        *,
+        label: str,
+        model: str,
+        content_parts: list[dict],
+        default: dict,
+        max_tokens: int = 1536,
+    ) -> dict:
+        """Post a VLM request and parse JSON robustly; return default on failure."""
+        payload = {
+            "model": model,
+            "messages": [{"role": "user", "content": content_parts}],
+            "max_tokens": max_tokens,
+            "temperature": 0.1,
+            "response_format": {"type": "json_object"},
+        }
+        last_error: Exception | None = None
+        async with httpx.AsyncClient(timeout=90) as client:
+            for attempt in range(VLM_RETRIES + 1):
+                try:
+                    resp = await client.post(
+                        f"{OPENROUTER_BASE}/chat/completions",
+                        headers=self._headers(),
+                        json=payload,
+                    )
+                    try:
+                        resp.raise_for_status()
+                    except httpx.HTTPStatusError as exc:
+                        last_error = exc
+                        status = exc.response.status_code
+                        body = exc.response.text[:300]
+                        logger.warning(f"{label} VLM HTTP {status}: {body}")
+                        if attempt < VLM_RETRIES and status in VLM_RETRY_STATUS:
+                            await asyncio.sleep(1.5 * (attempt + 1))
+                            continue
+                        break
+                    data = resp.json()
+                    if not data.get("choices"):
+                        last_error = RuntimeError(f"no choices in response: {data.get('error', {})}")
+                        if attempt < VLM_RETRIES:
+                            await asyncio.sleep(1.0 * (attempt + 1))
+                            continue
+                        break
+                    text = data["choices"][0]["message"]["content"]
+                    return self.parse_json_response(text)
+                except (json.JSONDecodeError, ValueError) as exc:
+                    last_error = exc
+                    logger.warning(f"{label} VLM returned non-JSON: {exc}")
+                    if attempt < VLM_RETRIES:
+                        await asyncio.sleep(0.5 * (attempt + 1))
+                        continue
+                    break
+                except Exception as exc:
+                    last_error = exc
+                    logger.warning(f"{label} VLM call failed: {exc}")
+                    if attempt < VLM_RETRIES:
+                        await asyncio.sleep(1.5 * (attempt + 1))
+                        continue
+                    break
+        result = dict(default)
+        if "vlm_error" in result:
+            result["vlm_error"] = True
+        if last_error and "issues" in result:
+            result["issues"] = [f"VLM error: {last_error}"]
+        elif last_error and "reason" in result and not result.get("reason"):
+            result["reason"] = f"VLM error: {last_error}"
+        return result
+
     # ─── LLM Chat ───────────────────────────────────────────────────
 
     async def chat(
@@ -91,17 +231,35 @@ class OpenRouterClient:
         }
         if json_mode:
             payload["response_format"] = {"type": "json_object"}
+        last_error: Exception | None = None
         async with httpx.AsyncClient(timeout=300) as client:
-            resp = await client.post(
-                f"{OPENROUTER_BASE}/chat/completions",
-                headers=self._headers(),
-                json=payload,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            if not data.get("choices"):
-                raise RuntimeError("No choices in LLM response")
-            return data["choices"][0]["message"]["content"]
+            for attempt in range(CHAT_RETRIES + 1):
+                try:
+                    resp = await client.post(
+                        f"{OPENROUTER_BASE}/chat/completions",
+                        headers=self._headers(),
+                        json=payload,
+                    )
+                    resp.raise_for_status()
+                    data = resp.json()
+                    if not data.get("choices"):
+                        raise RuntimeError(f"No choices in LLM response: {data.get('error', {})}")
+                    content = (data["choices"][0]["message"].get("content") or "").strip()
+                    if not content:
+                        raise RuntimeError("Empty LLM response content")
+                    if json_mode:
+                        self.parse_json_response(content)
+                    return content
+                except Exception as exc:
+                    last_error = exc
+                    status = exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None
+                    should_retry = status is None or status in VLM_RETRY_STATUS
+                    if attempt < CHAT_RETRIES and should_retry:
+                        logger.warning(f"LLM chat retry {attempt + 1} for {model}: {exc}")
+                        await asyncio.sleep(1.0 * (attempt + 1))
+                        continue
+                    break
+        raise last_error or RuntimeError("LLM chat failed")
 
     # ─── Image Generation (GPT-Image-2) ────────────────────────────
 
@@ -252,53 +410,20 @@ class OpenRouterClient:
         """
         from .prompts import VLM_VERIFY_IMAGE_PROMPT
 
-        image_url = self.get_image_url(image_path)
-
         verify_prompt = VLM_VERIFY_IMAGE_PROMPT.format(
             original_prompt=original_prompt,
             character_ref_description=character_ref_description,
         )
-
-        try:
-            async with httpx.AsyncClient(timeout=60) as client:
-                resp = await client.post(
-                    f"{OPENROUTER_BASE}/chat/completions",
-                    headers=self._headers(),
-                    json={
-                        "model": "anthropic/claude-sonnet-4.6",
-                        "messages": [
-                            {"role": "user", "content": [
-                                {"type": "text", "text": verify_prompt},
-                                {"type": "image_url", "image_url": {"url": image_url}},
-                            ]},
-                        ],
-                        "max_tokens": 1024,
-                        "temperature": 0.1,
-                    },
-                )
-                resp.raise_for_status()
-                data = resp.json()
-
-            if "choices" not in data or not data["choices"]:
-                err = data.get("error", {})
-                logger.warning(f"VLM verification: no choices in response, error={err}")
-                return {"passed": True, "issues": [], "suggestion": "", "vlm_error": True}
-
-            text = data["choices"][0]["message"]["content"].strip()
-            if text.startswith("```"):
-                text = text.split("\n", 1)[1] if "\n" in text else text[3:]
-                if text.endswith("```"):
-                    text = text[:-3]
-                text = text.strip()
-
-            result = json.loads(text)
-            return result
-        except (json.JSONDecodeError, ValueError) as e:
-            logger.warning(f"VLM verification returned non-JSON: {e}")
-            return {"passed": False, "issues": [f"VLM parse error: {e}"], "suggestion": "", "vlm_error": True}
-        except Exception as e:
-            logger.warning(f"VLM verification call failed: {e}")
-            return {"passed": False, "issues": [f"VLM call failed: {e}"], "suggestion": "", "vlm_error": True}
+        content_parts = [{"type": "text", "text": verify_prompt}, *self._vlm_image_parts([image_path])]
+        if len(content_parts) < 2:
+            return {"passed": True, "issues": [], "suggestion": "", "vlm_error": True}
+        return await self._vlm_json_request(
+            label="image verification",
+            model="anthropic/claude-sonnet-4.6",
+            content_parts=content_parts,
+            max_tokens=1536,
+            default={"passed": False, "issues": [], "suggestion": "", "vlm_error": True},
+        )
 
     # ─── VLM Compare Two Images ─────────────────────────────────────
 
@@ -309,48 +434,22 @@ class OpenRouterClient:
         prompt: str,
     ) -> dict:
         """Compare two images via VLM. Returns parsed JSON from the model."""
-        url1 = self.get_image_url(image_path_1)
-        url2 = self.get_image_url(image_path_2)
-
-        try:
-            async with httpx.AsyncClient(timeout=60) as client:
-                resp = await client.post(
-                    f"{OPENROUTER_BASE}/chat/completions",
-                    headers=self._headers(),
-                    json={
-                        "model": "anthropic/claude-sonnet-4.6",
-                        "messages": [
-                            {"role": "user", "content": [
-                                {"type": "text", "text": prompt},
-                                {"type": "text", "text": "Image 1:"},
-                                {"type": "image_url", "image_url": {"url": url1}},
-                                {"type": "text", "text": "Image 2:"},
-                                {"type": "image_url", "image_url": {"url": url2}},
-                            ]},
-                        ],
-                        "max_tokens": 512,
-                        "temperature": 0.1,
-                    },
-                )
-                resp.raise_for_status()
-                data = resp.json()
-
-            if "choices" not in data or not data["choices"]:
-                err = data.get("error", {})
-                logger.warning(f"VLM compare: no choices in response, error={err}")
-                return {"winner": 1, "reason": f"no choices in response: {err}"}
-
-            text = data["choices"][0]["message"]["content"].strip()
-            if text.startswith("```"):
-                text = text.split("\n", 1)[1] if "\n" in text else text[3:]
-                if text.endswith("```"):
-                    text = text[:-3]
-                text = text.strip()
-
-            return json.loads(text)
-        except Exception as e:
-            logger.warning(f"VLM compare failed: {e}")
-            return {"winner": 1, "reason": "comparison failed, defaulting to first"}
+        images = self._vlm_image_parts([image_path_1, image_path_2])
+        if len(images) < 2:
+            return {"winner": 1, "reason": "comparison skipped, defaulting to first"}
+        return await self._vlm_json_request(
+            label="image comparison",
+            model="anthropic/claude-sonnet-4.6",
+            content_parts=[
+                {"type": "text", "text": prompt},
+                {"type": "text", "text": "Image 1:"},
+                images[0],
+                {"type": "text", "text": "Image 2:"},
+                images[1],
+            ],
+            max_tokens=768,
+            default={"winner": 1, "reason": "comparison failed, defaulting to first"},
+        )
 
     # ─── VLM Multi-Image Analysis ───────────────────────────────────
 
@@ -361,46 +460,18 @@ class OpenRouterClient:
         model: str = "google/gemini-3.1-pro-preview",
     ) -> dict:
         """Send multiple images to a VLM for cross-frame/cross-scene analysis."""
-        content_parts = [{"type": "text", "text": prompt}]
-        for path in image_paths:
-            try:
-                url = self.get_image_url(path)
-                content_parts.append({"type": "image_url", "image_url": {"url": url}})
-            except Exception as e:
-                logger.warning(f"Failed to load image {path}: {e}")
+        content_parts = [{"type": "text", "text": prompt}, *self._vlm_image_parts(image_paths)]
 
         if len(content_parts) < 2:
             return {"consistent": True, "worst_scene_index": None, "drift_description": "", "severity": "none"}
 
-        try:
-            async with httpx.AsyncClient(timeout=90) as client:
-                resp = await client.post(
-                    f"{OPENROUTER_BASE}/chat/completions",
-                    headers=self._headers(),
-                    json={
-                        "model": model,
-                        "messages": [{"role": "user", "content": content_parts}],
-                        "max_tokens": 1024,
-                        "temperature": 0.1,
-                    },
-                )
-                resp.raise_for_status()
-                data = resp.json()
-
-            if not data.get("choices"):
-                return {"consistent": True, "worst_scene_index": None, "drift_description": "", "severity": "none"}
-
-            text = data["choices"][0]["message"]["content"].strip()
-            if text.startswith("```"):
-                text = text.split("\n", 1)[1] if "\n" in text else text[3:]
-                if text.endswith("```"):
-                    text = text[:-3]
-                text = text.strip()
-
-            return json.loads(text)
-        except Exception as e:
-            logger.warning(f"Multi-image VLM analysis failed: {e}")
-            return {"consistent": True, "worst_scene_index": None, "drift_description": "", "severity": "none"}
+        return await self._vlm_json_request(
+            label="multi-image analysis",
+            model=model,
+            content_parts=content_parts,
+            max_tokens=2048,
+            default={"consistent": True, "worst_scene_index": None, "drift_description": "", "severity": "none"},
+        )
 
     # ─── VLM Verification (Video via Gemini 3.1 Pro) ────────────────
 
@@ -432,57 +503,21 @@ class OpenRouterClient:
             camera_direction=camera_direction,
         )
 
-        # Build multi-image message content
-        content_parts = [{"type": "text", "text": verify_prompt}]
-        for i, frame_path in enumerate(frame_paths):
-            try:
-                frame_url = self.get_image_url(frame_path)
-                content_parts.append({
-                    "type": "image_url",
-                    "image_url": {"url": frame_url},
-                })
-            except Exception as e:
-                logger.warning(f"Failed to load frame {i}: {e}")
+        content_parts = [{"type": "text", "text": verify_prompt}, *self._vlm_image_parts(frame_paths)]
 
         if len(content_parts) < 2:
             return {"passed": True, "score": 7, "issues": [], "suggestion": ""}
 
-        try:
-            async with httpx.AsyncClient(timeout=90) as client:
-                resp = await client.post(
-                    f"{OPENROUTER_BASE}/chat/completions",
-                    headers=self._headers(),
-                    json={
-                        "model": "google/gemini-3.1-pro-preview",
-                        "messages": [{"role": "user", "content": content_parts}],
-                        "max_tokens": 1024,
-                        "temperature": 0.1,
-                    },
-                )
-                resp.raise_for_status()
-                data = resp.json()
-
-            if not data.get("choices"):
-                return {"passed": False, "score": 4, "issues": ["No choices in response"], "suggestion": "", "vlm_error": True}
-
-            text = data["choices"][0]["message"]["content"].strip()
-            if text.startswith("```"):
-                text = text.split("\n", 1)[1] if "\n" in text else text[3:]
-                if text.endswith("```"):
-                    text = text[:-3]
-                text = text.strip()
-
-            result = json.loads(text)
-            # Normalize: score >= 7 means passed
-            if "score" in result:
-                result["passed"] = result["score"] >= 7
-            return result
-        except (json.JSONDecodeError, ValueError) as e:
-            logger.warning(f"Video VLM returned non-JSON: {e}")
-            return {"passed": False, "score": 4, "issues": [f"VLM parse error: {e}"], "suggestion": "", "vlm_error": True}
-        except Exception as e:
-            logger.warning(f"Video VLM verification failed: {e}")
-            return {"passed": False, "score": 4, "issues": [f"VLM call failed: {e}"], "suggestion": "", "vlm_error": True}
+        result = await self._vlm_json_request(
+            label="video verification",
+            model="google/gemini-3.1-pro-preview",
+            content_parts=content_parts,
+            max_tokens=2048,
+            default={"passed": False, "score": 4, "issues": [], "suggestion": "", "vlm_error": True},
+        )
+        if "score" in result:
+            result["passed"] = result["score"] >= 7
+        return result
 
     # ─── Video Generation ───────────────────────────────────────────
 
@@ -727,7 +762,7 @@ class OpenRouterClient:
 
         return image_b64
 
-    def _compress_image_for_api(self, filepath: str, max_dim: int = 720, quality: int = 85) -> tuple[str, str]:
+    def _compress_image_for_api(self, filepath: str, max_dim: int = 1280, quality: int = 85) -> tuple[str, str]:
         """Compress and resize image for API payload size reduction.
 
         Returns (base64_string, mime_type).
@@ -775,7 +810,7 @@ class OpenRouterClient:
         """Convert local file to data URL for API input references.
 
         Args:
-            compress: If True, resize to 720p and convert to JPEG for smaller payloads.
+            compress: If True, resize to ~1280px max dimension and convert to JPEG for smaller payloads.
         """
         if compress:
             b64, mime = self._compress_image_for_api(filepath)

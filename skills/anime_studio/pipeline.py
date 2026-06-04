@@ -51,10 +51,11 @@ TIMEOUT_IMAGE = 400
 TIMEOUT_MUSIC = 200
 TIMEOUT_VIDEO = 660
 TIMEOUT_VERIFY = 45
-TIMEOUT_VIDEO_VERIFY = 90
+TIMEOUT_VIDEO_VERIFY = 180
 
 MAX_VERIFY_RETRIES = 2
 MAX_VIDEO_VERIFY_RETRIES = 2  # Raised from 1: video is the most expensive asset
+IMAGE_GENERATION_RETRIES = 1
 
 # Multi-dimensional scoring: weighted average threshold
 MULTIDIM_PASS_THRESHOLD = 6.5
@@ -240,16 +241,31 @@ class Pipeline:
 
     async def _generate_image(self, job: Job, prompt: str, filename: str, aspect_ratio: str = "16:9") -> str:
         """Route image generation to configured model."""
-        model_name = job.settings.image_model
-        if model_name == "nanobanana":
-            return await self.client.generate_image_nanobanana(
-                prompt=prompt, filename=filename, aspect_ratio=aspect_ratio,
-            )
-        openrouter_id = self._IMAGE_MODEL_MAP.get(model_name, model_name)
-        return await self.client.generate_image(
-            prompt=prompt, filename=filename, aspect_ratio=aspect_ratio,
-            model=openrouter_id,
-        )
+        last_error: Exception | None = None
+        model_names = [job.settings.image_model]
+        if job.settings.image_model != "nanobanana":
+            model_names.append("nanobanana")
+        for model_name in model_names:
+            for attempt in range(IMAGE_GENERATION_RETRIES + 1):
+                try:
+                    if model_name == "nanobanana":
+                        return await self.client.generate_image_nanobanana(
+                            prompt=prompt, filename=filename, aspect_ratio=aspect_ratio,
+                        )
+                    openrouter_id = self._IMAGE_MODEL_MAP.get(model_name, model_name)
+                    return await self.client.generate_image(
+                        prompt=prompt, filename=filename, aspect_ratio=aspect_ratio,
+                        model=openrouter_id,
+                    )
+                except Exception as exc:
+                    last_error = exc
+                    if attempt >= IMAGE_GENERATION_RETRIES:
+                        break
+                    logger.warning(f"Image generation retry {attempt + 1} for {filename} via {model_name}: {exc}")
+                    await asyncio.sleep(2.0 * (attempt + 1))
+            if model_name != model_names[-1]:
+                logger.warning(f"Image model {model_name} failed for {filename}; falling back to {model_names[-1]}")
+        raise last_error or RuntimeError(f"Image generation failed for {filename}")
 
     # ─── Character Identity Block Builder ───
 
@@ -498,19 +514,14 @@ class Pipeline:
                 self.client.chat(
                     messages=[{"role": "user", "content": prompt}],
                     model="anthropic/claude-sonnet-4.6",
-                    max_toks=1024,
+                    max_toks=1536,
                     temperature=0.3,
+                    json_mode=True,
                 ),
                 timeout_sec=60,
                 description=f"Simplify scene {scene.index}",
             )
-            text = response.strip()
-            if text.startswith("```"):
-                text = text.split("\n", 1)[1] if "\n" in text else text[3:]
-                if text.endswith("```"):
-                    text = text[:-3]
-                text = text.strip()
-            data = json.loads(text)
+            data = self.client.parse_json_response(response)
             return (
                 data.get("simplified_description", scene.description),
                 data.get("simplified_camera", scene.camera_direction),
@@ -728,7 +739,7 @@ class Pipeline:
                 json_mode=True,
             )
             try:
-                data = json.loads(response)
+                data = self.client.parse_json_response(response)
                 scenes = []
                 for s in data["scenes"]:
                     scenes.append(Scene(
@@ -746,7 +757,7 @@ class Pipeline:
                     scenes=scenes,
                     music_cues=[MusicCue(**m) for m in data["music_cues"]],
                 )
-            except (json.JSONDecodeError, KeyError, TypeError) as e:
+            except (json.JSONDecodeError, ValueError, KeyError, TypeError) as e:
                 last_error = e
                 logger.warning(
                     f"Scenario parse failed (attempt {attempt}/{max_attempts}): {e}"
@@ -946,37 +957,34 @@ class Pipeline:
             '- "skip" — if the error is fundamental and no model can help (invalid prompt, impossible request)\n\n'
             'Return ONLY valid JSON: {"action": "...", "reason": "...", "suggested_model": "model_id_or_null"}'
         )
-        try:
-            response = await run_with_timeout(
-                self.client.chat(
-                    messages=[{"role": "user", "content": prompt}],
-                    model="google/gemini-3.5-flash",
-                    max_toks=256,
-                    temperature=0.1,
-                    json_mode=True,
-                ),
-                timeout_sec=30,
-                description="Failure advisor",
-            )
-            text = response.strip()
-            if text.startswith("```"):
-                text = text.split("\n", 1)[1] if "\n" in text else text[3:]
-                if text.endswith("```"):
-                    text = text[:-3]
-                text = text.strip()
-            result = json.loads(text)
-            action = result.get("action", "skip")
-            if action not in ("retry_same_model", "switch_model", "skip"):
-                action = "skip"
-            suggested = result.get("suggested_model")
-            if action == "switch_model" and suggested not in alternatives:
-                suggested = alternatives[0] if alternatives else None
-                if not suggested:
+        last_error: Exception | None = None
+        for model in ("google/gemini-3.5-flash", "anthropic/claude-sonnet-4.6"):
+            try:
+                response = await run_with_timeout(
+                    self.client.chat(
+                        messages=[{"role": "user", "content": prompt}],
+                        model=model,
+                        max_toks=384,
+                        temperature=0.1,
+                        json_mode=True,
+                    ),
+                    timeout_sec=45,
+                    description=f"Failure advisor ({model})",
+                )
+                result = self.client.parse_json_response(response)
+                action = result.get("action", "skip")
+                if action not in ("retry_same_model", "switch_model", "skip"):
                     action = "skip"
-            return {"action": action, "reason": result.get("reason", ""), "suggested_model": suggested}
-        except Exception as e:
-            logger.warning(f"Failure advisor call failed: {e}")
-            return {"action": "skip", "reason": f"Advisor unavailable: {e}", "suggested_model": None}
+                suggested = result.get("suggested_model")
+                if action == "switch_model" and suggested not in alternatives:
+                    suggested = alternatives[0] if alternatives else None
+                    if not suggested:
+                        action = "skip"
+                return {"action": action, "reason": result.get("reason", ""), "suggested_model": suggested}
+            except Exception as e:
+                last_error = e
+                logger.warning(f"Failure advisor call failed via {model}: {e}")
+        return {"action": "skip", "reason": f"Advisor unavailable: {last_error}", "suggested_model": None}
 
     # ─── Phase 3: Video Animation ──────────────────────────────────
 
@@ -1068,7 +1076,7 @@ class Pipeline:
                             input_references=references if references else None,
                             frame_images=frame_images,
                             model=job.settings.video_model,
-                            generate_audio=True,
+                            generate_audio=False,
                         ),
                         timeout_sec=TIMEOUT_VIDEO,
                         description=f"Video scene {scene.index} (attempt {attempt+1})",
@@ -1154,7 +1162,7 @@ class Pipeline:
                                     input_references=references if references else None,
                                     frame_images=frame_images,
                                     model=job.settings.video_model,
-                                    generate_audio=True,
+                                    generate_audio=False,
                                 ),
                                 timeout_sec=TIMEOUT_VIDEO,
                                 description=f"Advisor retry scene {scene.index}",
@@ -1179,7 +1187,7 @@ class Pipeline:
                                     input_references=references if references else None,
                                     frame_images=frame_images,
                                     model=suggested_model,
-                                    generate_audio=True,
+                                    generate_audio=False,
                                 ),
                                 timeout_sec=TIMEOUT_VIDEO,
                                 description=f"Scene {scene.index} with {suggested_model}",
@@ -1259,7 +1267,7 @@ class Pipeline:
                     input_references=references if references else None,
                     frame_images=frame_images,
                     model=job.settings.video_model,
-                    generate_audio=True,
+                    generate_audio=False,
                 ),
                 timeout_sec=TIMEOUT_VIDEO,
                 description=f"Regenerate scene {scene.index} (identity fix)",

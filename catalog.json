@@ -53,8 +53,8 @@
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "0d7bd6b36ad9981d334f63fc9743bfe22024961761b4262be7b782c4756c767f",
-          "size": 8772
+          "sha256": "2fa4fcdd002383529cad26f6f4e40135f91c295c8fcecd1ab5a4490392f4c0fe",
+          "size": 9580
         },
         {
           "path": "__init__.py",
@@ -63,8 +63,8 @@
         },
         {
           "path": "api_client.py",
-          "sha256": "617f26d6fc5d89fea31c982c258612823e3f0df99887477bed839c0fc19dab83",
-          "size": 33283
+          "sha256": "49b8ba023b52cc99d5a065e10e809cc21c9e70b75ba37f6c0468a8935f51f5fc",
+          "size": 34549
         },
         {
           "path": "ffmpeg_bootstrap.py",
@@ -78,8 +78,8 @@
         },
         {
           "path": "pipeline.py",
-          "sha256": "7631684cf4b626213f1b0ca95b62bc7b89482d2f78887cf181e0fd789bb4fd19",
-          "size": 63158
+          "sha256": "355e782e66999a3f8fb3185ea8af2e7217fc21e3f8a57cd1f0be9c6d366d19a9",
+          "size": 64009
         },
         {
           "path": "pipeline_test.txt",
@@ -88,7 +88,7 @@
         },
         {
           "path": "plugin.py",
-          "sha256": "40398d273680ac5d2fd29c17a3a8f7d919e2d39681e3473be4af18fe8c8559a4",
+          "sha256": "8ab6a5f0b43cfc2ed0bf40e1f74a8170955ef8045f57ce0021e101d035e9faca",
           "size": 16777
         },
         {
@@ -100,6 +100,11 @@
           "path": "scripts/anime_worker.py",
           "sha256": "6d81d3dab03051ad69680fa93d4337bf95f60498cbd3a09d5f9e8fbc12b60281",
           "size": 7998
+        },
+        {
+          "path": "tests/test_api_client_vlm_helpers.py",
+          "sha256": "05664cbe3999ab66af4b3732d575376ae0c2387d3b8201ab3d3b5c3033915b03",
+          "size": 1139
         }
       ],
       "install_specs": [
@@ -108,7 +113,7 @@
       "name": "anime_studio",
       "slug": "anime_studio",
       "type": "extension",
-      "version": "2.11.0",
+      "version": "2.12.0",
       "when_to_use": "User wants to generate a short animated 2D anime cartoon, music video, or animated scene with consistent characters, VLM verification, and narrative continuity."
     },
     {
