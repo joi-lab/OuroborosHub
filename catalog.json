@@ -1,8 +1,8 @@
 {
-  "schema_version": 1,
-  "name": "OuroborosHub",
   "description": "Official Ouroboros skills catalog.",
+  "name": "OuroborosHub",
   "raw_base_url": "https://raw.githubusercontent.com/joi-lab/OuroborosHub/main",
+  "schema_version": 1,
   "skills": [
     {
       "description": "Agent-to-Agent protocol bridge for Ouroboros. Provides a local A2A-compatible server plus client tools for discovering and messaging other A2A agents.",
@@ -137,29 +137,27 @@
       "when_to_use": "User wants to inspect, triage, add, annotate, or manage Ouroboros improvement backlog items from a reviewed widget."
     },
     {
-      "description": "Web search via DuckDuckGo — free, no API key required. Returns titles, URLs, and snippets. Requires the `ddgs` Python package (pip install ddgs).",
+      "description": "Web search via DuckDuckGo — free, no API key required. Returns titles, URLs, and snippets.",
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "deb28194a4e73ec904e9f8659aa13284482de4ca6e79d266ec0487d504bf9942",
+          "sha256": "350a4e9a15a4135ddab6bfa376e1b3094bca9974e34f8fa5db8c31d7e066846a",
           "size": 1733
         },
         {
           "path": "plugin.py",
-          "sha256": "0815813e5102b4e036fbc6f7929f9057335de3b0c55f57d5b371eb58132ce0bc",
-          "size": 5307
+          "sha256": "8e6658c3069d9a399bf1dbdb3d1c3b732d019e276d06588eae9a3f33a9ff0d8e",
+          "size": 5697
         }
       ],
       "install_specs": [
-        {
-          "kind": "pip",
-          "package": "ddgs"
-        }
+        "ddgs"
       ],
       "name": "duckduckgo",
       "slug": "duckduckgo",
       "type": "extension",
-      "version": "0.1.1"
+      "version": "0.1.2",
+      "when_to_use": "User asks to search the web, find information, look up facts, or research a topic — and no OpenAI key is available for web_search."
     },
     {
       "description": "Generate a music clip from a text prompt via OpenRouter's Google Lyria model and play it directly inside the widget. Files are persisted to the skill's private state directory and streamed through an extension route for both inline playback and download.",
