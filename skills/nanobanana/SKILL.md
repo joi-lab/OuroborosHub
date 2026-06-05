@@ -1,7 +1,7 @@
 ---
 name: nanobanana
 description: Generate images from a text prompt via OpenRouter's image generation API (Nano Banana / Gemini Flash Image). Displays the result inside the widget and saves to disk for download.
-version: 0.2.3
+version: 0.2.4
 type: extension
 runtime: python3
 entry: plugin.py
@@ -38,8 +38,6 @@ ui_tab:
             options:
               - value: "google/gemini-3.1-flash-image-preview"
                 label: "Nano Banana (Gemini 3.1 Flash)"
-              - value: "google/gemini-3.1-flash-image-preview"
-                label: "Nano Banana 2 (Gemini 3.1 Flash)"
               - value: "google/gemini-3-pro-image-preview"
                 label: "Nano Banana Pro (Gemini 3 Pro)"
       - type: status
@@ -69,7 +67,7 @@ a prompt, pick a model, press **Generate**, and the image appears directly in
 the card. From v0.2.0 the image is also **saved to disk** and a **Download image**
 button appears below it.
 
-Backed by OpenRouter's image generation endpoint. Three Google models available:
+Backed by OpenRouter's image generation endpoint. Two Google models available:
 the default is **Nano Banana** (`google/gemini-3.1-flash-image-preview`).
 
 ## Persistence and download (v0.2.0)

@@ -1,8 +1,8 @@
 {
-  "schema_version": 1,
-  "name": "OuroborosHub",
   "description": "Official Ouroboros skills catalog.",
+  "name": "OuroborosHub",
   "raw_base_url": "https://raw.githubusercontent.com/joi-lab/OuroborosHub/main",
+  "schema_version": 1,
   "skills": [
     {
       "description": "Agent-to-Agent protocol bridge for Ouroboros. Provides a local A2A-compatible server plus client tools for discovering and messaging other A2A agents.",
@@ -185,19 +185,20 @@
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "4626b72ea4c3756fb322da69c47f8ea80f144e8d4e0bf151e39180428dec88c4",
-          "size": 4739
+          "sha256": "fce5d7117e7c9802ff2feddd0d5e40487120a0cfae8e7f2e1ce430f2922b76c1",
+          "size": 4616
         },
         {
           "path": "plugin.py",
-          "sha256": "913d94658fd5440096904973175cfc25c33b898c3595de04835a55ef56535a0c",
-          "size": 24862
+          "sha256": "aa4f888059de43717b3257b14f5ed14be5a89e1951babed622de3b8269b6f8f6",
+          "size": 25586
         }
       ],
       "name": "nanobanana",
       "slug": "nanobanana",
       "type": "extension",
-      "version": "0.2.3"
+      "version": "0.2.4",
+      "when_to_use": "User wants to generate or render an image from a text description, right now, inside the web UI. Also saves the image to disk so it can be downloaded."
     },
     {
       "description": "Deep web research via OpenRouter web_search server tool. Uses any model + grounded search with citations. Requires OPENROUTER_API_KEY in Settings.",
