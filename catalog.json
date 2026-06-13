@@ -1,8 +1,8 @@
 {
-  "description": "Official Ouroboros skills catalog.",
-  "name": "OuroborosHub",
-  "raw_base_url": "https://raw.githubusercontent.com/joi-lab/OuroborosHub/main",
   "schema_version": 1,
+  "name": "OuroborosHub",
+  "description": "Official Ouroboros skills catalog.",
+  "raw_base_url": "https://raw.githubusercontent.com/joi-lab/OuroborosHub/main",
   "skills": [
     {
       "description": "Agent-to-Agent protocol bridge for Ouroboros. Provides a local A2A-compatible server plus client tools for discovering and messaging other A2A agents.",
@@ -242,38 +242,18 @@
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "df1ea2a06539161f4acc3668fec5af10b2940fcb505a24558a06f51a05572e1a",
-          "size": 5162
+          "sha256": "6ce3914106cfcabeda011d0747c482559a3bd9d5f522e0ea1af7492584eae76d",
+          "size": 2701
         },
         {
           "path": "lib/telegram_api.py",
-          "sha256": "978c0a21f42baf5ea815d0089bbc8294d8882bbdc5ade99ed899fcdcedfc9c83",
-          "size": 24386
-        },
-        {
-          "path": "lib/telegram_health.py",
-          "sha256": "25b84e613e978c233d77c5762b1c2ae01d29676e906170ad9cd70f4da96f3681",
-          "size": 5864
-        },
-        {
-          "path": "lib/telegram_notifier.py",
-          "sha256": "9ff598b9a124e08f6fef857839a9b0accb8414f5575c2f2d149daaf56af9acb4",
-          "size": 5817
-        },
-        {
-          "path": "lib/telegram_state.py",
-          "sha256": "71d4388a8c29cdf5d9a770e3eafbf4a6eebb8cc731d8564a3c26fe4a2399dcdc",
-          "size": 8969
+          "sha256": "5d93dc5802db96ee00cbcc2a09b24170a705683fafa38120f8fb6399a4ed9bf4",
+          "size": 23741
         },
         {
           "path": "plugin.py",
-          "sha256": "43b3fe5c0a736ae8a21f37fd266ea621d2e4f95ffa2802e22a804a5376b51e3b",
-          "size": 61030
-        },
-        {
-          "path": "tests/test_health_tasks.py",
-          "sha256": "67736ca51880ab1029b419251aaabf0698e86d0dcd14cf33ac906fdfc8d38da2",
-          "size": 3200
+          "sha256": "7ff7f425a66a8316763bbd56eaa35b61697e35dee1864cd03a6455c89fd7563e",
+          "size": 57438
         },
         {
           "path": "tests/test_markdown_to_html.py",
@@ -281,30 +261,15 @@
           "size": 5300
         },
         {
-          "path": "tests/test_model_budget_pickers.py",
-          "sha256": "3e57b86c0af64e6a69e92c26445250e0a89a783a2e177150dc983e9d3870eac7",
-          "size": 4124
-        },
-        {
-          "path": "tests/test_notifications.py",
-          "sha256": "975bf845cd8dada05d41c3d718e052dfc5b9d9f0a91d665a38f537233e2cf6b9",
-          "size": 3671
-        },
-        {
-          "path": "tests/test_subagent_cards.py",
-          "sha256": "d04e52d611225da440bc394c2bc314ea83012d133673f730b11b79404303e77d",
-          "size": 7070
-        },
-        {
           "path": "tests/test_telegram_bridge_safety.py",
-          "sha256": "15fce1f7a0cabd6f7fe9e7b9e6c344713aee02c1e61c79733a7ad9c104a96b84",
-          "size": 12727
+          "sha256": "33a8bc773f127c78061e39a05f005a4cb52873176cef91ad8fde5df3a6998989",
+          "size": 8221
         }
       ],
       "name": "telegram-bridge",
       "slug": "telegram-bridge",
       "type": "extension",
-      "version": "2.5.0",
+      "version": "2.2.0",
       "when_to_use": "User wants to communicate with Ouroboros through Telegram."
     },
     {

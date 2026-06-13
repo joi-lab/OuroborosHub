@@ -93,14 +93,7 @@ class TelegramClient:
         async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.post(f"{self.api_base}/{method}", data=data, files=files)
             if response.status_code >= 400:
-                # Surface Telegram's description so callers can distinguish
-                # benign cases (e.g. "message is not modified") from real errors.
-                try:
-                    desc = str((response.json() or {}).get("description") or "").strip()
-                except Exception:
-                    desc = ""
-                suffix = f": {desc}" if desc else ""
-                raise RuntimeError(f"Telegram API {method} returned HTTP {response.status_code}{suffix}")
+                raise RuntimeError(f"Telegram API {method} returned HTTP {response.status_code}")
             payload = response.json()
         if not payload.get("ok"):
             raise RuntimeError(payload.get("description") or f"Telegram API error: {method}")
@@ -139,11 +132,7 @@ class TelegramClient:
         try:
             await self.call("editMessageText", data=data, timeout=20)
             return True
-        except Exception as exc:
-            # "message is not modified" means the bubble already shows this exact
-            # text — treat it as success so the caller does NOT post a duplicate.
-            if "not modified" in str(exc).lower():
-                return True
+        except Exception:
             return False
 
     async def send_chat_action(self, chat_id: int, action: str = "typing") -> None:

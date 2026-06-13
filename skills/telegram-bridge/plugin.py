@@ -11,13 +11,6 @@ import httpx
 from starlette.responses import JSONResponse
 
 from .lib.telegram_api import TelegramClient, markdown_to_telegram_html, _LOCALIZED_TEXTS
-from .lib.telegram_state import (
-    _state_file, _load_settings, _save_settings_dict, _is_silent_mode_enabled,
-    _get_silent_msg, _set_silent_msg, _clear_silent_msg, _subagent_cards_enabled,
-    _mirror_progress_enabled, _render_subagent_card, _data_dir,
-)
-from .lib.telegram_health import _collect_health, _build_menu_tasks
-from .lib.telegram_notifier import _make_notifier
 
 _SLASH_COMMAND_RE = re.compile(r"^\s*/[A-Za-z]")
 
@@ -50,6 +43,75 @@ _CALLBACK_MAP: dict[str, tuple[str, str]] = {
     "cmd:bg_start":  ("start background consciousness", _COMMAND_MODE_FULL),
     "cmd:bg_stop":   ("stop background consciousness", _COMMAND_MODE_FULL),
 }
+
+
+def _state_file(api, name: str) -> pathlib.Path:
+    return pathlib.Path(api.get_state_dir()) / name
+
+
+def _load_settings(api) -> Dict[str, Any]:
+    path = _state_file(api, "settings.json")
+    try:
+        return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    except Exception:
+        return {}
+
+
+def _save_settings_dict(api, settings: Dict[str, Any]) -> None:
+    path = _state_file(api, "settings.json")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(settings, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _is_silent_mode_enabled(settings: Dict[str, Any]) -> bool:
+    """Silent mode replaces successive outbound thoughts via editMessageText
+    rather than spamming new messages. Default: off."""
+    raw = str(settings.get("TELEGRAM_SILENT_MODE") or "off").strip().lower()
+    return raw in ("on", "true", "1", "yes")
+
+
+def _load_silent_state(api) -> Dict[str, int]:
+    """Load per-chat last outbound message id mapping. Returns {} if missing/corrupt."""
+    path = _state_file(api, "silent_state.json")
+    try:
+        if path.exists():
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                out: Dict[str, int] = {}
+                for key, value in data.items():
+                    try:
+                        out[str(key)] = int(value)
+                    except (TypeError, ValueError):
+                        continue
+                return out
+    except Exception:
+        pass
+    return {}
+
+
+def _save_silent_state(api, data: Dict[str, int]) -> None:
+    path = _state_file(api, "silent_state.json")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    tmp.replace(path)
+
+
+def _get_silent_msg(api, chat_id: int) -> int:
+    return int(_load_silent_state(api).get(str(chat_id)) or 0)
+
+
+def _set_silent_msg(api, chat_id: int, message_id: int) -> None:
+    state = _load_silent_state(api)
+    state[str(chat_id)] = int(message_id)
+    _save_silent_state(api, state)
+
+
+def _clear_silent_msg(api, chat_id: int) -> None:
+    state = _load_silent_state(api)
+    if str(chat_id) in state:
+        state.pop(str(chat_id), None)
+        _save_silent_state(api, state)
 
 
 def _setting_int(settings: Dict[str, Any], key: str, default: int, *, minimum: int = 1, maximum: int = 100) -> int:
@@ -90,9 +152,6 @@ def _build_menu_keyboard(command_mode: str, lang: str = "en") -> tuple[str, list
         [
             {"text": t["btn_metrics"], "callback_data": "nav:status"},
             {"text": t["btn_mind"], "callback_data": "nav:mind"},
-        ],
-        [
-            {"text": "📋 Задачи" if lang == "ru" else "📋 Tasks", "callback_data": "nav:tasks"},
         ],
         [
             {"text": t["btn_settings"], "callback_data": "nav:settings"},
@@ -137,7 +196,7 @@ def _build_menu_mind(command_mode: str, lang: str = "en", bg_enabled: bool = Fal
 
 def _load_recent_thoughts(api) -> str:
     """Read the last few blocks from progress.jsonl and build a text snapshot."""
-    progress_file = _data_dir(api) / "logs" / "progress.jsonl"
+    progress_file = pathlib.Path(api.get_state_dir()).parent.parent.parent / "logs" / "progress.jsonl"
     if not progress_file.exists():
         return "_No thoughts log created yet._"
     try:
@@ -198,74 +257,14 @@ async def _transcribe_voice(api, ogg_bytes: bytes) -> str:
 
 def _get_current_model(api) -> str:
     """Read the active model from parent settings.json."""
-    settings_file = _data_dir(api) / "settings.json"
+    settings_file = pathlib.Path(api.get_state_dir()).parent.parent.parent / "settings.json"
     if settings_file.exists():
         try:
             sett = json.loads(settings_file.read_text(encoding="utf-8"))
-            val = sett.get("OUROBOROS_MODEL")
-            if val:
-                return str(val)
+            return str(sett.get("OUROBOROS_MODEL") or "google/gemini-3.5-flash")
         except Exception:
             pass
-    return "unavailable"
-
-
-# Models offered as buttons when TELEGRAM_MODEL_CHOICES is not set. Model IDs go
-# stale fast, so the real list is owner-configurable (a setting), not hardcoded.
-_DEFAULT_MODEL_CHOICES = (
-    "anthropic/claude-opus-4.8",
-    "anthropic/claude-sonnet-4.6",
-    "openai/gpt-5.5",
-    "google/gemini-3.5-flash",
-)
-
-
-def _get_current_budget(api) -> float:
-    """Read TOTAL_BUDGET from parent settings.json (0.0 if unset/unreadable)."""
-    settings_file = _data_dir(api) / "settings.json"
-    if settings_file.exists():
-        try:
-            sett = json.loads(settings_file.read_text(encoding="utf-8"))
-            val = sett.get("TOTAL_BUDGET")
-            if val is not None:
-                return float(val)
-        except Exception:
-            pass
-    return 0.0
-
-
-def _model_choices(api) -> list:
-    """Models shown as buttons: owner-set TELEGRAM_MODEL_CHOICES (comma-separated)
-    or the default list. Empty/garbage entries are dropped."""
-    raw = str(_load_settings(api).get("TELEGRAM_MODEL_CHOICES") or "").strip()
-    if raw:
-        items = [m.strip() for m in raw.split(",") if m.strip()]
-        if items:
-            return items
-    return list(_DEFAULT_MODEL_CHOICES)
-
-
-def _model_change_command(model_id: str, lang: str = "en") -> str:
-    """Owner-facing NL command the Model button injects. The skill never writes
-    the core settings.json itself (path-confinement) — it forwards an owner
-    request through the already-approved inject_chat path and the agent applies
-    the change via the host's guarded settings flow."""
-    return (
-        f"Смени основную модель (OUROBOROS_MODEL) на {model_id}, остальные слоты не трогай."
-        if lang == "ru"
-        else f"Change the main model (OUROBOROS_MODEL) to {model_id}; leave the other slots unchanged."
-    )
-
-
-def _budget_change_command(new_budget: float, lang: str = "en") -> str:
-    """Owner-facing NL command the Budget button injects (absolute target, the
-    skill having read the current value). Applied by the agent, not written by
-    the skill — same path-confinement rationale as _model_change_command."""
-    return (
-        f"Подними общий бюджет (TOTAL_BUDGET) до ${new_budget:.2f}."
-        if lang == "ru"
-        else f"Set the total budget (TOTAL_BUDGET) to ${new_budget:.2f}."
-    )
+    return "google/gemini-3.5-flash"
 
 
 def _build_menu_settings(api, command_mode: str, lang: str = "en") -> tuple[str, list[list[dict]]]:
@@ -279,14 +278,78 @@ def _build_menu_settings(api, command_mode: str, lang: str = "en") -> tuple[str,
             {"text": t["btn_language"], "callback_data": "nav:language"},
         ],
         [
-            {"text": silent_label, "callback_data": "cmd_act:toggle_silent"},
+            {"text": t["btn_model"], "callback_data": "nav:model"},
+            {"text": t["btn_budget"], "callback_data": "nav:budget"},
         ],
         [
-            {"text": ("🤖 Модель" if lang == "ru" else "🤖 Model"), "callback_data": "nav:model"},
-            {"text": ("💰 Бюджет" if lang == "ru" else "💰 Budget"), "callback_data": "nav:budget"},
+            {"text": silent_label, "callback_data": "cmd_act:toggle_silent"},
         ],
         [{"text": t["btn_back"], "callback_data": "nav:menu"}]
     ]
+    return header, keyboard
+
+
+def _build_menu_model(api, command_mode: str, lang: str = "en") -> tuple[str, list[list[dict]]]:
+    """Return model selection panel."""
+    t = _LOCALIZED_TEXTS[lang]
+    current_model = _get_current_model(api)
+    header = t["model_title"].format(current_model=current_model)
+    keyboard = []
+    # NOTE: Model-switch buttons disabled by owner decision (v2.1.2).
+    # Routing core settings mutations through inject_chat from Telegram
+    # callbacks turns the bot into an owner-control surface — GPT-5.5 review
+    # flagged this as inject_chat_minimization critical. Panel stays as a
+    # read-only view of the current model; switch in Web UI → Settings.
+    # if command_mode == _COMMAND_MODE_FULL:
+    #     keyboard.append([
+    #         {"text": "Gemini 3.5 Flash", "callback_data": "cmd_act:set_model:google/gemini-3.5-flash"},
+    #         {"text": "Claude 3.5 Sonnet", "callback_data": "cmd_act:set_model:anthropic/claude-sonnet-4.6"},
+    #     ])
+    #     keyboard.append([
+    #         {"text": "GPT-5.5 Pro", "callback_data": "cmd_act:set_model:openai/gpt-5.5-pro"},
+    #         {"text": "GPT-5.5 Mini", "callback_data": "cmd_act:set_model:openai/gpt-5.5-mini"},
+    #     ])
+    keyboard.append([{"text": t["btn_back"], "callback_data": "nav:settings"}])
+    return header, keyboard
+
+
+def _build_menu_budget(api, command_mode: str, lang: str = "en") -> tuple[str, list[list[dict]]]:
+    """Return spending limit panel."""
+    t = _LOCALIZED_TEXTS[lang]
+    spent_usd = 0.0
+    state_file = pathlib.Path(api.get_state_dir()).parent.parent.parent / "state" / "state.json"
+    if state_file.exists():
+        try:
+            state_data = json.loads(state_file.read_text(encoding="utf-8"))
+            spent_usd = float(state_data.get("spent_usd") or 0.0)
+        except Exception:
+            pass
+            
+    settings_file = pathlib.Path(api.get_state_dir()).parent.parent.parent / "settings.json"
+    total_budget = 800.0
+    if settings_file.exists():
+        try:
+            sett = json.loads(settings_file.read_text(encoding="utf-8"))
+            total_budget = float(sett.get("TOTAL_BUDGET") or 800.0)
+        except Exception:
+            pass
+            
+    rem = max(0.0, total_budget - spent_usd)
+    header = t["budget_title"].format(total_budget=total_budget, spent_usd=spent_usd, rem=rem)
+    
+    keyboard = []
+    # NOTE: Budget-increase buttons disabled by owner decision (v2.1.2).
+    # Same reason as set_model: injecting "please raise TOTAL_BUDGET" via
+    # inject_chat from a remote Telegram button is owner-control through a
+    # user-facing transport channel. Panel stays read-only; change budget in
+    # Web UI → Settings → Advanced → Runtime Limits.
+    # if command_mode == _COMMAND_MODE_FULL:
+    #     keyboard.append([
+    #         {"text": "+$10", "callback_data": "cmd_act:add_budget:10"},
+    #         {"text": "+$50", "callback_data": "cmd_act:add_budget:50"},
+    #         {"text": "+$100", "callback_data": "cmd_act:add_budget:100"},
+    #     ])
+    keyboard.append([{"text": t["btn_back"], "callback_data": "nav:settings"}])
     return header, keyboard
 
 
@@ -304,41 +367,10 @@ def _build_language_keyboard(lang: str = "en") -> tuple[str, list[list[dict]]]:
     return header, rows
 
 
-def _build_model_keyboard(api, lang: str = "en") -> tuple[str, list[list[dict]]]:
-    """Model picker: one button per TELEGRAM_MODEL_CHOICES entry (✓ on the active
-    one). callback_data is the INDEX, never the model id, so it stays under
-    Telegram's 64-byte callback_data cap even for long slugs."""
-    current = _get_current_model(api)
-    choices = _model_choices(api)
-    header = ("🤖 Выбор модели\nТекущая: " if lang == "ru" else "🤖 Choose model\nCurrent: ") + current
-    rows = []
-    for idx, model_id in enumerate(choices):
-        short = model_id.split("/", 1)[-1]
-        mark = "✓ " if model_id == current else ""
-        rows.append([{"text": f"{mark}{short}", "callback_data": f"set_model:{idx}"}])
-    rows.append([{"text": _LOCALIZED_TEXTS[lang]["btn_back"], "callback_data": "nav:settings"}])
-    return header, rows
-
-
-def _build_budget_keyboard(api, lang: str = "en") -> tuple[str, list[list[dict]]]:
-    """Budget picker: bump the current TOTAL_BUDGET by a preset increment."""
-    current = _get_current_budget(api)
-    header = ("💰 Бюджет (TOTAL_BUDGET)\nТекущий: $" if lang == "ru" else "💰 Budget (TOTAL_BUDGET)\nCurrent: $") + f"{current:.2f}"
-    rows = [
-        [
-            {"text": "+$50", "callback_data": "set_budget:50"},
-            {"text": "+$100", "callback_data": "set_budget:100"},
-            {"text": "+$500", "callback_data": "set_budget:500"},
-        ],
-        [{"text": _LOCALIZED_TEXTS[lang]["btn_back"], "callback_data": "nav:settings"}],
-    ]
-    return header, rows
-
-
 def _make_settings_save(api):
     async def _settings_save(request):
         data = await request.json()
-        allowed = {"TELEGRAM_CHAT_ID", "TELEGRAM_MAX_UPDATES_PER_POLL", "TELEGRAM_MIRROR_MODE", "TELEGRAM_COMMAND_MODE", "TELEGRAM_LANGUAGE", "TELEGRAM_SILENT_MODE", "TELEGRAM_SUBAGENT_CARDS", "TELEGRAM_MIRROR_PROGRESS", "TELEGRAM_NOTIFY_TASKS", "TELEGRAM_NOTIFY_BUDGET", "TELEGRAM_MODEL_CHOICES"}
+        allowed = {"TELEGRAM_CHAT_ID", "TELEGRAM_MAX_UPDATES_PER_POLL", "TELEGRAM_MIRROR_MODE", "TELEGRAM_COMMAND_MODE", "TELEGRAM_LANGUAGE", "TELEGRAM_SILENT_MODE"}
         payload = {key: data.get(key) for key in allowed if key in data}
         path = _state_file(api, "settings.json")
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -391,11 +423,6 @@ def _target_chat(settings: Dict[str, Any], event: Dict[str, Any]) -> int:
 
 
 async def _inject(api, payload: Dict[str, Any]) -> None:
-    settings = _load_settings(api)
-    pinned_chat = str(settings.get("TELEGRAM_CHAT_ID") or os.environ.get("TELEGRAM_CHAT_ID") or "").strip()
-    if not pinned_chat:
-        api.log("warning", "Host inject refused: TELEGRAM_CHAT_ID is not configured or bound.")
-        return
     port = os.environ.get("OUROBOROS_HOST_SERVICE_PORT", "8767")
     async with httpx.AsyncClient(timeout=60) as client:
         response = await client.post(
@@ -449,7 +476,7 @@ def _extract_sender_label(sender: dict, fallback_chat_id: int) -> str:
 
 def _is_bg_consciousness_active(api) -> bool:
     """Check if background consciousness is actively enabled in state.json."""
-    state_file = _data_dir(api) / "state" / "state.json"
+    state_file = pathlib.Path(api.get_state_dir()).parent.parent.parent / "state" / "state.json"
     if state_file.exists():
         try:
             state_data = json.loads(state_file.read_text(encoding="utf-8"))
@@ -461,58 +488,38 @@ def _is_bg_consciousness_active(api) -> bool:
 
 def _compile_status_text(api, lang: str = "en") -> str:
     """Generate a clean HTML metrics block from state/settings."""
-    spent_usd = None
-    branch = "unavailable"
-    bg_enabled = None
+    spent_usd = 0.0
+    branch = "ouroboros"
+    bg_enabled = False
     
-    state_file = _data_dir(api) / "state" / "state.json"
+    state_file = pathlib.Path(api.get_state_dir()).parent.parent.parent / "state" / "state.json"
     if state_file.exists():
         try:
             state_data = json.loads(state_file.read_text(encoding="utf-8"))
-            if state_data.get("spent_usd") is not None:
-                spent_usd = float(state_data["spent_usd"])
-            branch = str(state_data.get("current_branch") or "unavailable")
-            if state_data.get("bg_consciousness_enabled") is not None:
-                bg_enabled = bool(state_data["bg_consciousness_enabled"])
+            spent_usd = float(state_data.get("spent_usd") or 0.0)
+            branch = str(state_data.get("current_branch") or "ouroboros")
+            bg_enabled = bool(state_data.get("bg_consciousness_enabled") or False)
         except Exception:
             pass
             
-    settings_file = _data_dir(api) / "settings.json"
-    total_budget = None
+    settings_file = pathlib.Path(api.get_state_dir()).parent.parent.parent / "settings.json"
+    total_budget = 800.0
     if settings_file.exists():
         try:
             sett = json.loads(settings_file.read_text(encoding="utf-8"))
-            if sett.get("TOTAL_BUDGET") is not None:
-                total_budget = float(sett["TOTAL_BUDGET"])
+            total_budget = float(sett.get("TOTAL_BUDGET") or 800.0)
         except Exception:
             pass
             
+    rem = max(0.0, total_budget - spent_usd)
     t = _LOCALIZED_TEXTS[lang]
-    
-    bg_status_raw = "unavailable"
-    if bg_enabled is not None:
-        bg_status_raw = t["bg_active_label"] if bg_enabled else t["bg_sleeping_label"]
-        
-    spent_spec = "unavailable" if spent_usd is None else f"{spent_usd:.4f}"
-    total_spec = "unavailable" if total_budget is None else f"{total_budget:.2f}"
-    rem_spec = "unavailable" if (spent_usd is None or total_budget is None) else f"{max(0.0, total_budget - spent_usd):.4f}"
-    
-    template = t["metrics_budget_status"]
-    template = template.replace("{spent_usd:.4f}", "{spent_usd_str}")
-    template = template.replace("{total_budget:.2f}", "{total_budget_str}")
-    template = template.replace("{rem:.4f}", "{rem_str}")
-    
-    status_str = template.format(
-        spent_usd_str=spent_spec,
-        total_budget_str=total_spec,
-        rem_str=rem_spec,
+    status_str = t["metrics_budget_status"].format(
+        spent_usd=spent_usd,
+        total_budget=total_budget,
+        rem=rem,
         branch=branch,
-        bg_status=bg_status_raw
+        bg_status=t["bg_active_label"] if bg_enabled else t["bg_sleeping_label"]
     )
-    # Current model folded into the status view (the standalone Model panel was a
-    # read-only display and is removed). Change the model in the Web UI settings.
-    status_str += f"\n🤖 {_get_current_model(api)}"
-    status_str += "\n" + _collect_health(api, lang)
     return status_str
 
 
@@ -523,7 +530,7 @@ def _make_poller(api):
         client = TelegramClient(protected_settings.get("TELEGRAM_BOT_TOKEN", ""))
         pinned_chat = str(local_settings.get("TELEGRAM_CHAT_ID") or os.environ.get("TELEGRAM_CHAT_ID") or "").strip()
         max_updates = _setting_int(local_settings, "TELEGRAM_MAX_UPDATES_PER_POLL", 20, minimum=1, maximum=100)
-        command_mode = str(local_settings.get("TELEGRAM_COMMAND_MODE") or _COMMAND_MODE_FULL).strip().lower()
+        command_mode = str(local_settings.get("TELEGRAM_COMMAND_MODE") or _COMMAND_MODE_STRICT).strip().lower()
         if command_mode not in _VALID_COMMAND_MODES:
             command_mode = _COMMAND_MODE_STRICT
         lang = str(local_settings.get("TELEGRAM_LANGUAGE") or "en").strip().lower()
@@ -559,8 +566,7 @@ def _make_poller(api):
                 updates = await client.get_updates(offset)
                 if updates:
                     local_settings = _load_settings(api)
-                    pinned_chat = str(local_settings.get("TELEGRAM_CHAT_ID") or os.environ.get("TELEGRAM_CHAT_ID") or "").strip()
-                    command_mode = str(local_settings.get("TELEGRAM_COMMAND_MODE") or _COMMAND_MODE_FULL).strip().lower()
+                    command_mode = str(local_settings.get("TELEGRAM_COMMAND_MODE") or _COMMAND_MODE_STRICT).strip().lower()
                     if command_mode not in _VALID_COMMAND_MODES:
                         command_mode = _COMMAND_MODE_STRICT
                     lang = str(local_settings.get("TELEGRAM_LANGUAGE") or "en").strip().lower()
@@ -572,36 +578,6 @@ def _make_poller(api):
                     if update_id >= offset:
                         offset = update_id + 1
 
-                    # Owner binding (TOFU) for ALL command modes: the first chat
-                    # to interact pins as the owner channel; thereafter only that
-                    # chat is served. Without this, strict/safe mode with no
-                    # TELEGRAM_CHAT_ID would let arbitrary chats reach _inject.
-                    # Covers both the message and callback paths.
-                    _cb = update.get("callback_query") or {}
-                    _msg = update.get("message") or {}
-                    _inbound_chat = int(
-                        ((_cb.get("message") or {}).get("chat") or {}).get("id")
-                        or (_msg.get("chat") or {}).get("id") or 0
-                    )
-                    # No resolvable chat (non-message/callback update type, or a
-                    # malformed chat.id) → drop it: never reach _inject unbound.
-                    if not _inbound_chat:
-                        continue
-                    if not pinned_chat:
-                        local_settings["TELEGRAM_CHAT_ID"] = str(_inbound_chat)
-                        _save_settings_dict(api, local_settings)
-                        pinned_chat = str(_inbound_chat)
-                    if str(_inbound_chat) != pinned_chat:
-                        if _cb:
-                            try:
-                                await client.answer_callback_query(
-                                    str(_cb.get("id") or ""),
-                                    text=_LOCALIZED_TEXTS[lang]["not_authorized"],
-                                )
-                            except Exception:
-                                pass
-                        continue
-
                     # --- Handle callback queries (inline button presses) ---
                     callback_query = update.get("callback_query")
                     if callback_query:
@@ -612,7 +588,7 @@ def _make_poller(api):
                         cb_chat = cb_message.get("chat") or {}
                         cb_chat_id = int(cb_chat.get("id") or 0)
                         cb_sender = callback_query.get("from") or {}
-                        if not pinned_chat or str(cb_chat_id) != pinned_chat:
+                        if pinned_chat and str(cb_chat_id) != pinned_chat:
                             await client.answer_callback_query(cb_id, text=_LOCALIZED_TEXTS[lang]["not_authorized"])
                             continue
 
@@ -634,17 +610,14 @@ def _make_poller(api):
                             elif target == "language":
                                 header, keyboard = _build_language_keyboard(lang)
                                 await client.edit_message_text_with_inline_keyboard(cb_chat_id, cb_message_id, header, keyboard)
-                            elif target == "tasks":
-                                header, keyboard = _build_menu_tasks(api, command_mode, lang)
-                                await client.edit_message_text_with_inline_keyboard(cb_chat_id, cb_message_id, header, keyboard)
                             elif target == "settings":
                                 header, keyboard = _build_menu_settings(api, command_mode, lang)
                                 await client.edit_message_text_with_inline_keyboard(cb_chat_id, cb_message_id, header, keyboard)
                             elif target == "model":
-                                header, keyboard = _build_model_keyboard(api, lang)
+                                header, keyboard = _build_menu_model(api, command_mode, lang)
                                 await client.edit_message_text_with_inline_keyboard(cb_chat_id, cb_message_id, header, keyboard)
                             elif target == "budget":
-                                header, keyboard = _build_budget_keyboard(api, lang)
+                                header, keyboard = _build_menu_budget(api, command_mode, lang)
                                 await client.edit_message_text_with_inline_keyboard(cb_chat_id, cb_message_id, header, keyboard)
                             continue
 
@@ -717,6 +690,84 @@ def _make_poller(api):
                                 await client.edit_message_text_with_inline_keyboard(cb_chat_id, cb_message_id, header, keyboard)
                                 continue
 
+                            # NOTE: set_model: and add_budget: callback handlers disabled
+                            # (v2.1.2). Buttons that produced these callbacks are also
+                            # commented out in _build_menu_model / _build_menu_budget.
+                            # Reason: routing settings.json mutations through inject_chat
+                            # from a remote Telegram button is owner-control through a
+                            # user-facing transport channel (GPT-5.5 critical finding,
+                            # inject_chat_minimization). Stale callbacks fall through to
+                            # the unknown-action path and are silently ignored.
+                            #
+                            # elif action.startswith("set_model:"):
+                            #     if command_mode != _COMMAND_MODE_FULL:
+                            #         await client.answer_callback_query(cb_id, text=_LOCALIZED_TEXTS[lang]["restricted_safe"])
+                            #         continue
+                            #     model_name = action.split(":", 1)[1]
+                            #     await client.answer_callback_query(cb_id, text=_LOCALIZED_TEXTS[lang]["requesting_model"].format(model=model_name))
+                            #     sender_name = _extract_sender_label(cb_sender, cb_chat_id)
+                            #     sender_label = f"Telegram ({sender_name})"
+                            #     await _inject(api, {
+                            #         "text": f"Please change the main Ouroboros model (OUROBOROS_MODEL, and also OUROBOROS_MODEL_CODE since the user wants a powerful editing model) to '{model_name}' inside settings.json, apply settings, and let me know.",
+                            #         "chat_id": cb_chat_id,
+                            #         "user_id": int(cb_sender.get("id") or cb_chat_id or 1),
+                            #         "source": "telegram-bridge",
+                            #         "sender_label": sender_label,
+                            #         "transport": {
+                            #             "kind": "telegram",
+                            #             "conversation_id": str(cb_chat_id),
+                            #             "sender_label": sender_label,
+                            #         },
+                            #         "image_base64": "",
+                            #         "image_mime": "",
+                            #         "image_caption": "",
+                            #     })
+                            #     await asyncio.sleep(0.8)
+                            #     header, keyboard = _build_menu_model(api, command_mode, lang)
+                            #     await client.edit_message_text_with_inline_keyboard(cb_chat_id, cb_message_id, header, keyboard)
+                            #     continue
+                            #
+                            # elif action.startswith("add_budget:"):
+                            #     if command_mode != _COMMAND_MODE_FULL:
+                            #         await client.answer_callback_query(cb_id, text=_LOCALIZED_TEXTS[lang]["restricted_safe"])
+                            #         continue
+                            #     amount_str = action.split(":", 1)[1]
+                            #     try:
+                            #         amount = float(amount_str)
+                            #     except ValueError:
+                            #         amount = 10.0
+                            #     await client.answer_callback_query(cb_id, text=_LOCALIZED_TEXTS[lang]["requesting_budget"].format(amount=amount))
+                            #     settings_file = pathlib.Path(api.get_state_dir()).parent.parent.parent / "settings.json"
+                            #     current_budget = 800.0
+                            #     if settings_file.exists():
+                            #         try:
+                            #             sett = json.loads(settings_file.read_text(encoding="utf-8"))
+                            #             current_budget = float(sett.get("TOTAL_BUDGET") or 800.0)
+                            #         except Exception:
+                            #             pass
+                            #     new_budget = current_budget + amount
+                            #     sender_name = _extract_sender_label(cb_sender, cb_chat_id)
+                            #     sender_label = f"Telegram ({sender_name})"
+                            #     await _inject(api, {
+                            #         "text": f"Please update settings.json to increase the TOTAL_BUDGET limit from {current_budget} to {new_budget} (adding {amount}), and reload the settings so it takes effect.",
+                            #         "chat_id": cb_chat_id,
+                            #         "user_id": int(cb_sender.get("id") or cb_chat_id or 1),
+                            #         "source": "telegram-bridge",
+                            #         "sender_label": sender_label,
+                            #         "transport": {
+                            #             "kind": "telegram",
+                            #             "conversation_id": str(cb_chat_id),
+                            #             "sender_label": sender_label,
+                            #         },
+                            #         "image_base64": "",
+                            #         "image_mime": "",
+                            #         "image_caption": "",
+                            #     })
+                            #     await asyncio.sleep(0.8)
+                            #     header, keyboard = _build_menu_budget(api, command_mode, lang)
+                            #     await client.edit_message_text_with_inline_keyboard(cb_chat_id, cb_message_id, header, keyboard)
+                            #     continue
+
                         # --- Handle language selection buttons ---
                         if cb_data.startswith("set_lang:"):
                             new_lang = cb_data.split(":", 1)[1]
@@ -734,74 +785,6 @@ def _make_poller(api):
                                 header, keyboard = _build_menu_keyboard(command_mode, lang)
                                 await client.edit_message_text_with_inline_keyboard(cb_chat_id, cb_message_id, header, keyboard)
                                 continue
-
-                        # --- Model selection buttons ---
-                        # The skill does NOT write the core settings.json itself
-                        # (path-confinement). It injects an owner-visible request
-                        # via the already-approved inject_chat path; the agent
-                        # applies the change through the guarded settings flow.
-                        # Gated to full_access + the pinned owner chat (verified
-                        # above), same envelope as the /bg control buttons.
-                        if cb_data.startswith("set_model:"):
-                            if command_mode != _COMMAND_MODE_FULL:
-                                await client.answer_callback_query(cb_id, text=_LOCALIZED_TEXTS[lang]["restricted_safe"])
-                                continue
-                            choices = _model_choices(api)
-                            try:
-                                model_id = choices[int(cb_data.split(":", 1)[1])]
-                            except (ValueError, IndexError):
-                                await client.answer_callback_query(cb_id, text=_LOCALIZED_TEXTS[lang]["unknown_command"])
-                                continue
-                            await client.answer_callback_query(cb_id, text=f"📨 {model_id}")
-                            sender_name = _extract_sender_label(cb_sender, cb_chat_id)
-                            sender_label = f"Telegram ({sender_name})"
-                            await _inject(api, {
-                                "text": _model_change_command(model_id, lang),
-                                "chat_id": cb_chat_id,
-                                "user_id": int(cb_sender.get("id") or cb_chat_id or 1),
-                                "source": "telegram-bridge",
-                                "sender_label": sender_label,
-                                "transport": {
-                                    "kind": "telegram",
-                                    "conversation_id": str(cb_chat_id),
-                                    "sender_label": sender_label,
-                                },
-                                "image_base64": "",
-                                "image_mime": "",
-                                "image_caption": "",
-                            })
-                            continue
-
-                        # --- Budget increment buttons (inject owner request; no core write) ---
-                        if cb_data.startswith("set_budget:"):
-                            if command_mode != _COMMAND_MODE_FULL:
-                                await client.answer_callback_query(cb_id, text=_LOCALIZED_TEXTS[lang]["restricted_safe"])
-                                continue
-                            try:
-                                delta = float(cb_data.split(":", 1)[1])
-                            except ValueError:
-                                await client.answer_callback_query(cb_id, text=_LOCALIZED_TEXTS[lang]["unknown_command"])
-                                continue
-                            new_budget = round(_get_current_budget(api) + delta, 2)
-                            await client.answer_callback_query(cb_id, text=f"📨 ${new_budget:.2f}")
-                            sender_name = _extract_sender_label(cb_sender, cb_chat_id)
-                            sender_label = f"Telegram ({sender_name})"
-                            await _inject(api, {
-                                "text": _budget_change_command(new_budget, lang),
-                                "chat_id": cb_chat_id,
-                                "user_id": int(cb_sender.get("id") or cb_chat_id or 1),
-                                "source": "telegram-bridge",
-                                "sender_label": sender_label,
-                                "transport": {
-                                    "kind": "telegram",
-                                    "conversation_id": str(cb_chat_id),
-                                    "sender_label": sender_label,
-                                },
-                                "image_base64": "",
-                                "image_mime": "",
-                                "image_caption": "",
-                            })
-                            continue
 
                         # Look up the button in the safe callback map — only
                         # pre-translated natural-language text can reach _inject.
@@ -843,9 +826,18 @@ def _make_poller(api):
                     chat = message.get("chat") or {}
                     sender = message.get("from") or {}
                     chat_id = int(chat.get("id") or 0)
-                    # Owner binding + filtering is already enforced at the top of
-                    # the update loop (TOFU for all command modes), so chat_id is
-                    # guaranteed to equal the pinned owner chat here.
+                    if command_mode == _COMMAND_MODE_FULL and not pinned_chat:
+                        # Pin the first chat as the bot's conversation, but pin
+                        # SILENTLY and let the message flow through. The core
+                        # owner-external TOFU (server._process_bridge_updates)
+                        # owns the single "send the command again" confirmation
+                        # for slash commands; emitting our own prompt here would
+                        # force a confusing double registration.
+                        local_settings["TELEGRAM_CHAT_ID"] = str(chat_id)
+                        _save_settings_dict(api, local_settings)
+                        pinned_chat = str(chat_id)
+                    if pinned_chat and str(chat_id) != pinned_chat:
+                        continue
                     text = str(message.get("text") or message.get("caption") or "").strip()
                     caption = str(message.get("caption") or "").strip()
 
@@ -961,31 +953,9 @@ def _make_outbound(api):
             chat_id = _target_chat(local_settings, event)
             if not chat_id:
                 return
-            lang = str(local_settings.get("TELEGRAM_LANGUAGE") or "en").strip().lower()
-
-            # Subagent lifecycle → one dedicated bubble per subagent, edited in
-            # place across its lifecycle (not a flood of new messages). Since 6.22
-            # the supervisor emits one is_progress chat.outbound per subagent state
-            # transition; mirroring them raw spams the chat / collapses over the
-            # real reply in silent mode.
-            sub_event = str(event.get("subagent_event") or "").strip().lower()
-            if sub_event:
-                if _subagent_cards_enabled(local_settings):
-                    await _render_subagent_card(api, client, chat_id, event, sub_event, lang)
-                return
-
-            # Generic (non-subagent) progress telemetry → dropped by default; the
-            # typing indicator already signals "working". Opt in via the toggle.
-            if event.get("is_progress") and not _mirror_progress_enabled(local_settings):
-                return
-
             text = str(event.get("text") or "").strip()
             if not text:
                 return
-            # Honor the host's markdown hint: plain text (markdown=False) is sent
-            # verbatim so literal *, _, `, [] aren't mis-parsed as Telegram
-            # formatting; an absent/True hint renders markdown→HTML as before.
-            parse_mode = "" if event.get("markdown") is False else "HTML"
 
             silent_on = _is_silent_mode_enabled(local_settings)
             tracked_msg_id = _get_silent_msg(api, chat_id) if silent_on else 0
@@ -994,8 +964,8 @@ def _make_outbound(api):
             # editMessageText returns False on any failure (too old, deleted,
             # identical content, parse error) so we fall back to sendMessage.
             if silent_on and tracked_msg_id:
-                edited = await client.edit_message_text(chat_id, tracked_msg_id, text, parse_mode=parse_mode)
-                if not edited and parse_mode:
+                edited = await client.edit_message_text(chat_id, tracked_msg_id, text)
+                if not edited:
                     edited = await client.edit_message_text(chat_id, tracked_msg_id, text, parse_mode="")
                 if edited:
                     return
@@ -1004,9 +974,9 @@ def _make_outbound(api):
                 _clear_silent_msg(api, chat_id)
 
             try:
-                msg_id = await client.send_message(chat_id, text, parse_mode=parse_mode)
+                msg_id = await client.send_message(chat_id, text)
             except Exception as format_exc:
-                api.log("warning", f"Telegram outbound send failed ({format_exc}), retrying with plain text...")
+                api.log("warning", f"Telegram outbound HTML send failed ({format_exc}), retrying with plain text...")
                 msg_id = await client.send_message(chat_id, text, parse_mode="")
 
             if silent_on and msg_id:
@@ -1077,7 +1047,6 @@ def _make_video(api):
 
 def register(api):
     api.register_supervised_task("poller", _make_poller(api), restart_policy="on_failure", max_restarts=10)
-    api.register_supervised_task("notifier", _make_notifier(api), restart_policy="on_failure", max_restarts=10)
     api.subscribe_event("chat.outbound", _make_outbound(api))
     api.subscribe_event("chat.typing", _make_typing(api))
     api.subscribe_event("chat.photo", _make_photo(api))
@@ -1114,11 +1083,11 @@ def register(api):
                          "placeholder": "en"},
                         {"name": "TELEGRAM_COMMAND_MODE", "label": "Command mode", "type": "select",
                          "options": [
-                             {"value": "full_access", "label": "Full access (default) — raw owner commands incl. /panic, /restart"},
-                             {"value": "safe_commands", "label": "Safe — allow /status, /bg status only"},
                              {"value": "strict", "label": "Strict — block all slash commands from Telegram"},
+                             {"value": "safe_commands", "label": "Safe — allow /status, /bg status only"},
+                             {"value": "full_access", "label": "Full access — safe commands + bg start/stop"},
                          ],
-                         "placeholder": "full_access"},
+                         "placeholder": "strict"},
                         {"name": "TELEGRAM_MIRROR_MODE", "label": "Mirror mode", "type": "select",
                          "options": [
                              {"value": "all", "label": "Mirror all messages (web + Telegram)"},
@@ -1133,32 +1102,6 @@ def register(api):
                              {"value": "on", "label": "On — replace the previous thought in-place"},
                          ],
                          "placeholder": "off"},
-                        {"name": "TELEGRAM_SUBAGENT_CARDS", "label": "Subagent cards", "type": "select",
-                         "options": [
-                             {"value": "on", "label": "On — one updating message per subagent"},
-                             {"value": "off", "label": "Off — hide subagent activity"},
-                         ],
-                         "placeholder": "on"},
-                        {"name": "TELEGRAM_MIRROR_PROGRESS", "label": "Mirror progress telemetry", "type": "select",
-                         "options": [
-                             {"value": "off", "label": "Off — replies only (recommended)"},
-                             {"value": "on", "label": "On — also mirror raw progress notes"},
-                         ],
-                         "placeholder": "off"},
-                        {"name": "TELEGRAM_NOTIFY_TASKS", "label": "Notify on task completion", "type": "select",
-                         "options": [
-                             {"value": "off", "label": "Off"},
-                             {"value": "on", "label": "On — ✅ Task done · cost · rounds"},
-                         ],
-                         "placeholder": "off"},
-                        {"name": "TELEGRAM_NOTIFY_BUDGET", "label": "Notify on budget thresholds", "type": "select",
-                         "options": [
-                             {"value": "off", "label": "Off"},
-                             {"value": "on", "label": "On — ⚠️ at 80% / 90% / 100%"},
-                         ],
-                         "placeholder": "off"},
-                        {"name": "TELEGRAM_MODEL_CHOICES", "label": "Model buttons (comma-separated model IDs)", "type": "text",
-                         "placeholder": "anthropic/claude-opus-4.8, anthropic/claude-sonnet-4.6, openai/gpt-5.5, google/gemini-3.5-flash"},
                     ],
                     "submit_label": "Save Telegram settings",
                 }
