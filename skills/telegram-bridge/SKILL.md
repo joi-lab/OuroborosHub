@@ -1,7 +1,7 @@
 ---
 name: telegram-bridge
 description: Bidirectional Telegram bot bridge for Ouroboros with configurable command modes, inline keyboard control panel, and optional silent (edit-in-place) mirror.
-version: 2.2.0
+version: 2.5.1
 type: extension
 entry: plugin.py
 runtime: python3
@@ -24,14 +24,58 @@ from Telegram (configure in Settings → Telegram Bridge):
 
 | Mode | Allowed commands | Blocked |
 |------|-----------------|---------|
-| **strict** (default) | None — all slash commands blocked | Everything with `/` |
+| **strict** | None — all slash commands blocked | Everything with `/` |
 | **safe_commands** | `/status`, `/bg`, `/bg status` | Mutating commands |
-| **full_access** | Raw owner commands including `/panic`, `/restart`, `/review`, `/evolve`, `/bg` | Unknown commands only |
+| **full_access** (default) | Raw owner commands including `/panic`, `/restart`, `/review`, `/evolve`, `/bg` | Unknown commands only |
 
 **Important:** In `full_access`, this reviewed transport is a first-class owner
 chat surface. Slash commands are forwarded as raw chat text through the Host
 Service after the skill passes review, grants, enablement, token, rate-limit,
 and chat/user binding checks.
+
+## Subagent Activity
+
+Ouroboros emits a progress event for every subagent state change (a parallel
+swarm can fan out dozens). Instead of flooding Telegram with one bubble per
+event, the bridge gives **each subagent a single message that is edited in
+place** across its lifecycle (`🔵 queued → 🟡 running → ✅ done · $cost`). Each
+card shows a status header **plus the latest work note** — the live commentary
+you see in the Ouroboros web UI (e.g. "I will read lines 710–765 of llm.py…") —
+so the bubble updates as the subagent works rather than posting a new line per
+note. (An identical-text edit that Telegram rejects with "message is not
+modified" is treated as a no-op, never as a reason to post a duplicate.) The
+"Ouroboros is typing…" indicator covers the overall working signal, and your
+real replies stay clean, separate messages.
+
+Two settings (Settings → Telegram Bridge):
+
+- **Subagent cards** (default *on*) — one updating message per subagent. Turn
+  *off* to hide subagent activity entirely.
+- **Mirror progress telemetry** (default *on*) — streams the main agent's
+  progress notes (thinking, searches, cost lines). In silent mode it edits one
+  bubble in place; otherwise it posts one message per note. Set *off* for a
+  clean replies-only chat.
+
+## Push Notifications
+
+Beyond mirroring chat replies, the bridge can send **proactive** notifications to
+the pinned chat — useful for background/scheduled tasks that finish without you
+watching. A separate `notifier` supervised task reads durable state files every
+30s (read-only) and pushes structured one-liners. Both are **off by default**
+(opt-in via Settings → Telegram Bridge):
+
+- **Notify on task completion** — when a task writes its summary, push
+  `✅ Task <id> done · <rounds>r · $<cost>` (cost from `task_results/<id>.json`
+  when available; `⚠️` instead of `✅` for non-completed outcomes). Enabling the
+  toggle primes against the existing backlog, so you only get notified about
+  tasks that finish *after* you turn it on — no flood of old summaries.
+- **Notify on budget thresholds** — push `⚠️ Budget: N%` once when cumulative
+  spend crosses 80% / 90% / 100% of `TOTAL_BUDGET`. Each threshold fires once;
+  raising the budget (or a spend reset) re-arms the lower thresholds.
+
+Notifications require a pinned `TELEGRAM_CHAT_ID`; with no pinned chat the
+notifier stays idle. Dedupe/threshold state lives in the skill's own state dir
+(`notif_state.json`), never in core settings.
 
 ## Inline Keyboard
 
