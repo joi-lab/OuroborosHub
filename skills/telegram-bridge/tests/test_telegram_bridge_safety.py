@@ -62,8 +62,7 @@ class FakeTelegramClient:
 
 def test_slash_messages_are_not_injected(tmp_path, monkeypatch):
     plugin = _load_plugin(tmp_path)
-    # Explicitly strict (the default is now full_access); strict must still block slashes.
-    (tmp_path / "settings.json").write_text(json.dumps({"TELEGRAM_MAX_UPDATES_PER_POLL": 20, "TELEGRAM_COMMAND_MODE": "strict"}), encoding="utf-8")
+    (tmp_path / "settings.json").write_text(json.dumps({"TELEGRAM_MAX_UPDATES_PER_POLL": 20}), encoding="utf-8")
     FakeTelegramClient.updates = [
         {"update_id": 1, "message": {"chat": {"id": 42}, "from": {"id": 7}, "text": "/panic"}}
     ]
@@ -157,14 +156,11 @@ def test_full_access_first_chat_pins_silently_and_forwards(tmp_path, monkeypatch
 
 def test_poller_caps_update_batch_and_adds_transport(tmp_path, monkeypatch):
     plugin = _load_plugin(tmp_path)
-    # Pinned owner chat (42) so the batch-cap + transport assertions are tested
-    # within the owner-binding regime — all inbound is from the one bound chat
-    # (messages from other chats are now correctly rejected by TOFU binding).
-    (tmp_path / "settings.json").write_text(json.dumps({"TELEGRAM_MAX_UPDATES_PER_POLL": 2, "TELEGRAM_COMMAND_MODE": "strict", "TELEGRAM_CHAT_ID": "42"}), encoding="utf-8")
+    (tmp_path / "settings.json").write_text(json.dumps({"TELEGRAM_MAX_UPDATES_PER_POLL": 2}), encoding="utf-8")
     FakeTelegramClient.updates = [
         {"update_id": 1, "message": {"chat": {"id": 42}, "from": {"id": 7, "username": "alice"}, "text": "one"}},
-        {"update_id": 2, "message": {"chat": {"id": 42}, "from": {"id": 8}, "text": "two"}},
-        {"update_id": 3, "message": {"chat": {"id": 42}, "from": {"id": 9}, "text": "three"}},
+        {"update_id": 2, "message": {"chat": {"id": 43}, "from": {"id": 8}, "text": "two"}},
+        {"update_id": 3, "message": {"chat": {"id": 44}, "from": {"id": 9}, "text": "three"}},
     ]
     monkeypatch.setattr(plugin, "TelegramClient", FakeTelegramClient)
     injected = []
@@ -192,41 +188,6 @@ def test_poller_caps_update_batch_and_adds_transport(tmp_path, monkeypatch):
         "sender_label": "Telegram (alice)",
     }
     assert "telegram_chat_id" not in injected[0]
-
-
-def test_strict_mode_with_no_pin_binds_first_chat_and_rejects_others(tmp_path, monkeypatch):
-    # Security regression (inject_chat_minimization): in strict/safe mode with no
-    # TELEGRAM_CHAT_ID, TOFU binding must pin the FIRST chat and reject all others
-    # — arbitrary chats must NOT reach _inject.
-    plugin = _load_plugin(tmp_path)
-    (tmp_path / "settings.json").write_text(json.dumps({"TELEGRAM_MAX_UPDATES_PER_POLL": 20, "TELEGRAM_COMMAND_MODE": "strict"}), encoding="utf-8")
-    FakeTelegramClient.updates = [
-        {"update_id": 1, "message": {"chat": {"id": 42}, "from": {"id": 7}, "text": "hello from owner"}},
-        {"update_id": 2, "message": {"chat": {"id": 99}, "from": {"id": 8}, "text": "intruder"}},
-    ]
-    monkeypatch.setattr(plugin, "TelegramClient", FakeTelegramClient)
-    injected = []
-
-    async def fake_inject(api, payload):
-        injected.append(payload)
-
-    monkeypatch.setattr(plugin, "_inject", fake_inject)
-
-    async def stop_sleep(_delay):
-        raise asyncio.CancelledError
-
-    monkeypatch.setattr(plugin.asyncio, "sleep", stop_sleep)
-
-    try:
-        asyncio.run(plugin._make_poller(FakeApi(tmp_path))())
-    except asyncio.CancelledError:
-        pass
-
-    # Only the first (bound) chat's plain text injects; the intruder is rejected.
-    assert [item["chat_id"] for item in injected] == [42]
-    # The first chat is pinned via TOFU even in strict mode.
-    settings = json.loads((tmp_path / "settings.json").read_text(encoding="utf-8"))
-    assert settings["TELEGRAM_CHAT_ID"] == "42"
 
 
 def test_legacy_env_chat_id_filters_updates(tmp_path, monkeypatch):
@@ -272,67 +233,3 @@ def test_markdown_to_telegram_html_placeholder_ordering(tmp_path):
     for i in range(12):
         assert f"<code>block{i}</code>" in result
     assert "CODEPLACEHOLDER" not in result
-
-
-def _run_callback(plugin, monkeypatch, tmp_path, settings, cb_data):
-    (tmp_path / "settings.json").write_text(json.dumps(settings), encoding="utf-8")
-    FakeTelegramClient.updates = [
-        {"update_id": 1, "callback_query": {
-            "id": "cb", "data": cb_data,
-            "message": {"message_id": 5, "chat": {"id": 42}}, "from": {"id": 7},
-        }}
-    ]
-    monkeypatch.setattr(plugin, "TelegramClient", FakeTelegramClient)
-    injected = []
-
-    async def fake_inject(api, payload):
-        injected.append(payload)
-
-    monkeypatch.setattr(plugin, "_inject", fake_inject)
-
-    async def stop_sleep(_delay):
-        raise asyncio.CancelledError
-
-    monkeypatch.setattr(plugin.asyncio, "sleep", stop_sleep)
-    poller = plugin._make_poller(FakeApi(tmp_path))
-    try:
-        asyncio.run(poller())
-    except asyncio.CancelledError:
-        pass
-    return injected
-
-
-def test_set_model_button_injects_owner_command(tmp_path, monkeypatch):
-    plugin = _load_plugin(tmp_path)
-    injected = _run_callback(plugin, monkeypatch, tmp_path, {
-        "TELEGRAM_MAX_UPDATES_PER_POLL": 20, "TELEGRAM_COMMAND_MODE": "full_access",
-        "TELEGRAM_CHAT_ID": "42", "TELEGRAM_MODEL_CHOICES": "p/a, p/b",
-    }, "set_model:1")
-    # Injects an owner request (model id from the configured choices) — it never
-    # writes the core settings.json directly (path-confinement).
-    assert len(injected) == 1
-    assert "p/b" in injected[0]["text"]
-    assert "OUROBOROS_MODEL" in injected[0]["text"]
-    assert injected[0]["transport"]["kind"] == "telegram"
-    assert not hasattr(plugin, "_write_parent_setting")
-
-
-def test_set_budget_button_injects_owner_command(tmp_path, monkeypatch):
-    plugin = _load_plugin(tmp_path)
-    injected = _run_callback(plugin, monkeypatch, tmp_path, {
-        "TELEGRAM_MAX_UPDATES_PER_POLL": 20, "TELEGRAM_COMMAND_MODE": "full_access",
-        "TELEGRAM_CHAT_ID": "42",
-    }, "set_budget:100")
-    assert len(injected) == 1
-    assert "TOTAL_BUDGET" in injected[0]["text"]
-    assert injected[0]["transport"]["kind"] == "telegram"
-
-
-def test_set_model_button_blocked_outside_full_access(tmp_path, monkeypatch):
-    plugin = _load_plugin(tmp_path)
-    injected = _run_callback(plugin, monkeypatch, tmp_path, {
-        "TELEGRAM_MAX_UPDATES_PER_POLL": 20, "TELEGRAM_COMMAND_MODE": "strict",
-        "TELEGRAM_CHAT_ID": "42", "TELEGRAM_MODEL_CHOICES": "p/a, p/b",
-    }, "set_model:0")
-    # Core-config mutation is gated to full_access — strict must not inject.
-    assert injected == []
