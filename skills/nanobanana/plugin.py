@@ -64,13 +64,12 @@ _MAX_PROMPT_LEN = 4096
 _DEFAULT_MODEL = "google/gemini-3.1-flash-image-preview"
 _ALLOWED_MODELS = {
     "google/gemini-3.1-flash-image-preview",
-    "google/gemini-3.1-flash-image-preview",
     "google/gemini-3-pro-image-preview",
 }
 
 # Strict filename guard for media/download routes.
-# Matches: img_<12 hex chars>.<png|jpeg|jpg|webp>
-_IMAGE_ID_RE = re.compile(r"^img_[a-f0-9]{12}\.(?:png|jpeg|jpg|webp)$")
+# Matches: img_<12 hex chars>.<png|jpeg|jpg|webp|gif>
+_IMAGE_ID_RE = re.compile(r"^img_[a-f0-9]{12}\.(?:png|jpeg|jpg|webp|gif)$")
 
 # Allowed MIME types for generated images.
 _MIME_BY_EXT: Dict[str, str] = {
@@ -78,6 +77,7 @@ _MIME_BY_EXT: Dict[str, str] = {
     "jpeg": "image/jpeg",
     "jpg": "image/jpeg",
     "webp": "image/webp",
+    "gif": "image/gif",
 }
 
 
@@ -380,10 +380,6 @@ _UI_RENDER: Dict[str, Any] = {
                             "label": "Nano Banana (Gemini 3.1 Flash)",
                         },
                         {
-                            "value": "google/gemini-3.1-flash-image-preview",
-                            "label": "Nano Banana 2 (Gemini 3.1 Flash)",
-                        },
-                        {
                             "value": "google/gemini-3-pro-image-preview",
                             "label": "Nano Banana Pro (Gemini 3 Pro)",
                         },
@@ -432,7 +428,12 @@ def register(api: Any) -> None:
     """PluginAPI v1 entry point. Called exactly once per load."""
     jobs: Dict[str, Dict[str, Any]] = {}
     tasks: Dict[str, asyncio.Task[Any]] = {}
-    loop = asyncio.get_running_loop()
+    # register() is invoked SYNCHRONOUSLY by the extension loader, where there
+    # is no running event loop. Calling asyncio.get_running_loop() here raised
+    # "RuntimeError: no running event loop" and aborted the whole load. The loop
+    # is only needed by _cleanup_jobs() to cancel in-flight tasks, so capture it
+    # lazily in the async route (where a running loop is guaranteed) instead.
+    loop: Optional[asyncio.AbstractEventLoop] = None
     _MAX_JOBS = 25
 
     def _prune_jobs() -> None:
@@ -443,7 +444,15 @@ def register(api: Any) -> None:
     def _cleanup_jobs() -> None:
         for job_id, task in list(tasks.items()):
             if not task.done():
-                loop.call_soon_threadsafe(task.cancel)
+                # loop is set lazily by _route_generate; whenever a task exists
+                # the loop has been captured. Guard + fallback stay defensive.
+                if loop is not None:
+                    try:
+                        loop.call_soon_threadsafe(task.cancel)
+                    except Exception:
+                        task.cancel()
+                else:
+                    task.cancel()
                 jobs[job_id] = {
                     "status": "error",
                     "error": "generation cancelled because extension unloaded",
@@ -523,6 +532,10 @@ def register(api: Any) -> None:
 
     async def _route_generate(request: Request) -> JSONResponse:
         """POST /api/extensions/nanobanana/generate"""
+        nonlocal loop
+        if loop is None:
+            # We are inside the running event loop here, so this is safe.
+            loop = asyncio.get_running_loop()
         try:
             payload = await request.json()
         except Exception:
