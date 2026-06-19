@@ -32,7 +32,12 @@ def _search(query: str, max_results: int = _DEFAULT_RESULTS) -> Dict[str, Any]:
     if len(cleaned) > 400:
         return {"error": "query too long (max 400 chars)"}
 
-    max_results = min(max(1, int(max_results or _DEFAULT_RESULTS)), _MAX_RESULTS_CAP)
+    try:
+        max_results_int = int(max_results)
+    except (TypeError, ValueError):
+        max_results_int = _DEFAULT_RESULTS
+
+    max_results = min(max(1, max_results_int), _MAX_RESULTS_CAP)
 
     try:
         from ddgs import DDGS
@@ -72,7 +77,15 @@ async def _route_search(request: Request) -> JSONResponse:
         return JSONResponse({"error": "invalid JSON body"}, status_code=400)
 
     query = str(body.get("query", "")).strip()
-    max_results = int(body.get("max_results", _DEFAULT_RESULTS) or _DEFAULT_RESULTS)
+    
+    raw_max_results = body.get("max_results")
+    if raw_max_results is None or str(raw_max_results).strip() == "":
+        max_results = _DEFAULT_RESULTS
+    else:
+        try:
+            max_results = int(raw_max_results)
+        except (TypeError, ValueError):
+            return JSONResponse({"error": "max_results must be an integer"}, status_code=400)
 
     payload = await asyncio.to_thread(_search, query, max_results)
     status = 200 if "error" not in payload else 502
