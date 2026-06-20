@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import pathlib
 import inspect
@@ -43,6 +44,8 @@ try:
     _A2A_SDK_AVAILABLE = True
 except Exception:
     _A2A_SDK_AVAILABLE = False
+
+logger = logging.getLogger("a2a_daemon")
 
 STATE_DIR = pathlib.Path(os.environ.get("OUROBOROS_SKILL_STATE_DIR") or ".")
 
@@ -188,11 +191,16 @@ def _agent_card() -> Dict[str, Any]:
                 "description": str(func.get("description") or "")[:200],
                 "tags": [name.split("_", 1)[0] if "_" in name else "tool"],
             })
+    base_url = f"http://{A2A_HOST}:{A2A_PORT}/"
     return {
         "name": A2A_AGENT_NAME,
         "description": A2A_AGENT_DESCRIPTION,
-        "url": f"http://{A2A_HOST}:{A2A_PORT}/",
+        "url": base_url,
         "version": "1.0.0",
+        # A2: advertise the A2A v0.3 transport interface so v0.3-aware clients can negotiate.
+        "protocolVersion": "0.3.0",
+        "preferredTransport": "JSONRPC",
+        "additionalInterfaces": [{"url": base_url, "transport": "JSONRPC"}],
         "capabilities": {"streaming": True},
         "defaultInputModes": ["text/plain"],
         "defaultOutputModes": ["text/plain"],
@@ -290,6 +298,9 @@ class OuroborosExecutor(AgentExecutor if _A2A_SDK_AVAILABLE else object):
         result = event_queue.enqueue_event(task)
         if inspect.isawaitable(result):
             await result
+        # A1: a single final Task event terminates the stream (the executor does not emit
+        # intermediate updates — interop, not progress streaming). Make it observable.
+        logger.info("a2a executor finalized task %s (state=completed)", task_id)
 
     async def cancel(self, context: RequestContext, event_queue: EventQueue) -> None:
         task = Task(
@@ -356,14 +367,25 @@ def _build_app() -> Starlette:
             task_store=InMemoryTaskStore(),
             agent_card=card,
         )
+        logger.info("a2a daemon using SDK agent-card routes")
+        # A2: serve the v0.3-complete DICT card at BOTH well-known paths, registered BEFORE
+        # the SDK helper so Starlette first-match makes it authoritative. The SDK AgentCard
+        # object deliberately omits the v0.3 transport fields (protocolVersion /
+        # preferredTransport / additionalInterfaces — kept out for SDK-version safety), so it
+        # must NOT own the v0.3 path; the dict card carries them. The SDK's own card route is
+        # then a harmless shadow, and the JSON-RPC handler still holds the card object.
         routes = [
             Route("/health", health, methods=["GET"]),
+            Route("/.well-known/agent.json", agent_card, methods=["GET"]),
+            Route("/.well-known/agent-card.json", agent_card, methods=["GET"]),
             *create_agent_card_routes(card),
             *create_jsonrpc_routes(handler, "/", enable_v0_3_compat=True),
         ]
         return Starlette(routes=routes, middleware=[Middleware(_A2AAuthMiddleware)])
+    logger.info("a2a daemon using fallback (no SDK) agent-card routes")
     return Starlette(
         routes=[
+            Route("/.well-known/agent.json", agent_card, methods=["GET"]),
             Route("/.well-known/agent-card.json", agent_card, methods=["GET"]),
             Route("/health", health, methods=["GET"]),
             Route("/", jsonrpc, methods=["POST"]),
