@@ -49,6 +49,31 @@
       "version": "1.0.0"
     },
     {
+      "slug": "agentrq-bridge",
+      "name": "AgentRQ Bridge",
+      "description": "AgentRQ integration: structured HITL task board, permission gating, and real-time workspace bridge via MCP Streamable HTTP",
+      "version": "0.1.0",
+      "type": "extension",
+      "when_to_use": "User wants to interact with an AgentRQ workspace: pull tasks, create tasks for human review, reply to task threads, update task status, or request human permission for sensitive actions.",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "sha256": "6f14a56b4739a0eac1282916254118f3a73897d2d400ca93fe6bead7dc2476ab",
+          "size": 3240
+        },
+        {
+          "path": "listener.py",
+          "sha256": "06da0a02d2ac1ef74e03bc3b6062f7130c11f01c85103f25166d13956873fd71",
+          "size": 16538
+        },
+        {
+          "path": "plugin.py",
+          "sha256": "0a7119ef358407c94723ecc67a06aba64ffb45f718e44f630ac57c0eff019050",
+          "size": 16606
+        }
+      ]
+    },
+    {
       "description": "AI-powered 2D anime generator with VLM-verified assets, video analysis via Gemini, sequential keyframes, scene continuity chain, multi-model image/video generation, LLM-powered error recovery, and parallel asset+music pipeline",
       "files": [
         {
@@ -135,6 +160,20 @@
       "type": "extension",
       "version": "0.1.0",
       "when_to_use": "User wants to inspect, triage, add, annotate, or manage Ouroboros improvement backlog items from a reviewed widget."
+    },
+    {
+      "slug": "bank-ops-director",
+      "name": "bank-ops-director",
+      "version": "0.5.0",
+      "type": "instruction",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "sha256": "ba7480fa807bd4db79bcabac76342790807df05acb42905d7b866c5ecc429649",
+          "size": 14289
+        }
+      ],
+      "description": "Навигатор по операционной работе с банком: приостановления и блокировки счёта (115-ФЗ, ст. 76 НК, арест, заморозка), картотека и неоплаченные требования, сертификаты ЭП/ЭЦП и доступ к банк-клиенту (ДБО), доверенности. Прототип на данных-образце: показывает статус компании, даёт сводку по счёту и ставит ежедневную сводку на расписание."
     },
     {
       "description": "Web search via DuckDuckGo — free, no API key required. Returns titles, URLs, and snippets.",
@@ -411,20 +450,6 @@
       "slug": "weather",
       "type": "extension",
       "version": "0.2.1"
-    },
-    {
-      "slug": "bank-ops-director",
-      "name": "bank-ops-director",
-      "version": "0.5.0",
-      "type": "instruction",
-      "files": [
-        {
-          "path": "SKILL.md",
-          "sha256": "ba7480fa807bd4db79bcabac76342790807df05acb42905d7b866c5ecc429649",
-          "size": 14289
-        }
-      ],
-      "description": "Навигатор по операционной работе с банком: приостановления и блокировки счёта (115-ФЗ, ст. 76 НК, арест, заморозка), картотека и неоплаченные требования, сертификаты ЭП/ЭЦП и доступ к банк-клиенту (ДБО), доверенности. Прототип на данных-образце: показывает статус компании, даёт сводку по счёту и ставит ежедневную сводку на расписание."
     }
   ]
 }
