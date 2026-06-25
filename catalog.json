@@ -49,12 +49,7 @@
       "version": "1.0.0"
     },
     {
-      "slug": "agentrq-bridge",
-      "name": "AgentRQ Bridge",
       "description": "AgentRQ integration: structured HITL task board, permission gating, and real-time workspace bridge via MCP Streamable HTTP",
-      "version": "0.1.0",
-      "type": "extension",
-      "when_to_use": "User wants to interact with an AgentRQ workspace: pull tasks, create tasks for human review, reply to task threads, update task status, or request human permission for sensitive actions.",
       "files": [
         {
           "path": "SKILL.md",
@@ -71,7 +66,12 @@
           "sha256": "0a7119ef358407c94723ecc67a06aba64ffb45f718e44f630ac57c0eff019050",
           "size": 16606
         }
-      ]
+      ],
+      "name": "AgentRQ Bridge",
+      "slug": "agentrq-bridge",
+      "type": "extension",
+      "version": "0.1.0",
+      "when_to_use": "User wants to interact with an AgentRQ workspace: pull tasks, create tasks for human review, reply to task threads, update task status, or request human permission for sensitive actions."
     },
     {
       "description": "AI-powered 2D anime generator with VLM-verified assets, video analysis via Gemini, sequential keyframes, scene continuity chain, multi-model image/video generation, LLM-powered error recovery, and parallel asset+music pipeline",
@@ -162,10 +162,7 @@
       "when_to_use": "User wants to inspect, triage, add, annotate, or manage Ouroboros improvement backlog items from a reviewed widget."
     },
     {
-      "slug": "bank-ops-director",
-      "name": "bank-ops-director",
-      "version": "0.5.0",
-      "type": "instruction",
+      "description": "Навигатор по операционной работе с банком: приостановления и блокировки счёта (115-ФЗ, ст. 76 НК, арест, заморозка), картотека и неоплаченные требования, сертификаты ЭП/ЭЦП и доступ к банк-клиенту (ДБО), доверенности. Прототип на данных-образце: показывает статус компании, даёт сводку по счёту и ставит ежедневную сводку на расписание.",
       "files": [
         {
           "path": "SKILL.md",
@@ -173,7 +170,10 @@
           "size": 14289
         }
       ],
-      "description": "Навигатор по операционной работе с банком: приостановления и блокировки счёта (115-ФЗ, ст. 76 НК, арест, заморозка), картотека и неоплаченные требования, сертификаты ЭП/ЭЦП и доступ к банк-клиенту (ДБО), доверенности. Прототип на данных-образце: показывает статус компании, даёт сводку по счёту и ставит ежедневную сводку на расписание."
+      "name": "bank-ops-director",
+      "slug": "bank-ops-director",
+      "type": "instruction",
+      "version": "0.5.0"
     },
     {
       "description": "Web search via DuckDuckGo — free, no API key required. Returns titles, URLs, and snippets.",
@@ -433,24 +433,24 @@
       "when_to_use": "User wants to generate a photorealistic cinematic video, film scene, documentary, live-action style video, or realistic narrative with consistent characters, Gemini multimodal quality control, and Hollywood-grade production quality. Separate from anime_studio which generates 2D anime cartoons."
     },
     {
-      "description": "Live weather widget — looks up current conditions for any city via wttr.in (no API key).",
+      "description": "Wide polished weather widget — current conditions, compact forecast, astronomy, and resilient wttr.in cache (no API key).",
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "167d302fb60ef46aa79ae55419564c47d7a0bb23aa6c8ecb6c7ea0992768ce7e",
-          "size": 3431
+          "sha256": "199e7406eba3cc9f63f8af6a03f61b4a37e2dd90ceee35205984e370ec24f97c",
+          "size": 3971
         },
         {
           "path": "plugin.py",
-          "sha256": "6905c5f6f2332ad36665140c34cae2dad53feb7f74bd4784fed625d605f6461e",
-          "size": 6880
+          "sha256": "3f47fe4ab5c72816f651547f621dfe802de1069421b6cc2908ddfc5811bc3265",
+          "size": 22658
         }
       ],
       "name": "weather",
       "slug": "weather",
       "type": "extension",
-      "version": "0.2.2",
-      "when_to_use": "User asks about weather, temperature, forecast, or current conditions in a specific city."
+      "version": "0.3.2",
+      "when_to_use": "User asks about weather, temperature, forecast, current conditions, wind, humidity, sunrise/sunset, or a weather dashboard for a city."
     }
   ]
 }
