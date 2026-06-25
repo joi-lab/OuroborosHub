@@ -276,6 +276,45 @@
       "version": "1.0.0"
     },
     {
+      "description": "Информация о клиенте и счетах Сбербанка через прямой REST API Sber API — организация, реквизиты, список счетов.",
+      "files": [
+        {
+          "path": "lib/__init__.py",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "size": 0
+        },
+        {
+          "path": "lib/api_client.py",
+          "sha256": "d7d62ed667a2716f902d1f36d6dca35aa0f045f63c15e920cc97640c90fe772b",
+          "size": 3397
+        },
+        {
+          "path": "lib/tls_store.py",
+          "sha256": "1c529af1f11673d95691193551cb5f0285364d4f877184b9cc65a96949900e87",
+          "size": 4395
+        },
+        {
+          "path": "plugin.py",
+          "sha256": "f6df341f7384e8e972cd11e10aab05d8480786ce44e02862ebc55673c39b823a",
+          "size": 8866
+        },
+        {
+          "path": "SKILL.md",
+          "sha256": "ebc289adfa899940eadec3b7c43a303fecbbdd3f2386cc8e7476aae6e7b50382",
+          "size": 3816
+        }
+      ],
+      "install_specs": [
+        "httpx",
+        "cryptography"
+      ],
+      "name": "sber_client_info",
+      "slug": "sber_client_info",
+      "type": "extension",
+      "version": "0.3.2",
+      "when_to_use": "Пользователь просит информацию о компании, реквизиты, ИНН, ОГРН, список счетов или данные клиента в Сбербанке."
+    },
+    {
       "description": "Bidirectional Telegram bot bridge for Ouroboros with configurable command modes, inline keyboard control panel, and optional silent (edit-in-place) mirror.",
       "files": [
         {
