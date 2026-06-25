@@ -15,12 +15,20 @@ def discover(url: str) -> str:
     import httpx
 
     base = str(url or "").rstrip("/")
-    try:
-        response = httpx.get(f"{base}/.well-known/agent-card.json", auth=_auth(), timeout=10)
-        response.raise_for_status()
-        card = response.json()
-    except Exception as exc:
-        return json.dumps({"error": f"Failed to fetch agent card: {exc}"})
+    # A2: try the v0.3 well-known path first, then fall back to the legacy one, so this client
+    # interoperates with peers that publish either name.
+    card = None
+    last_err: Any = None
+    for path in ("/.well-known/agent-card.json", "/.well-known/agent.json"):
+        try:
+            response = httpx.get(f"{base}{path}", auth=_auth(), timeout=10)
+            response.raise_for_status()
+            card = response.json()
+            break
+        except Exception as exc:
+            last_err = exc
+    if card is None:
+        return json.dumps({"error": f"Failed to fetch agent card: {last_err}"})
     return json.dumps({
         "name": card.get("name", ""),
         "description": card.get("description", ""),
@@ -78,3 +86,10 @@ def status(url: str, task_id: str) -> str:
     except Exception as exc:
         return json.dumps({"error": f"Request failed: {exc}"})
     return json.dumps(data, ensure_ascii=False, indent=2)
+
+
+def stream(url: str, message: str, task_id: str = "", context_id: str = "") -> str:
+    """A1: optional streaming entrypoint. The Ouroboros A2A executor emits a SINGLE final Task
+    event (interop, not incremental progress), so streaming degrades to a normal send() that
+    returns the completed task. Provided so a stream-only caller has a working method."""
+    return send(url, message, task_id, context_id)
