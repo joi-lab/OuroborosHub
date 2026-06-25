@@ -48,5 +48,5 @@ for skill_dir in skill_dirs:
     if front.get('install_specs'):
         entry['install_specs'] = front.get('install_specs')
     skills.append(entry)
-catalog = {'schema_version': 1, 'name': 'OuroborosHub', 'description': 'Official Ouroboros skills catalog.', 'raw_base_url': 'https://raw.githubusercontent.com/joi-lab/OuroborosHub/main', 'skills': skills}
+catalog = {'schema_version': 1, 'name': 'OuroborosHub', 'description': 'Official Ouroboros skills catalog.', 'raw_base_url': 'https://raw.githubusercontent.com/razzant/OuroborosHub/main', 'skills': skills}
 catalog_path.write_text(json.dumps(catalog, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')

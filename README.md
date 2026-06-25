@@ -1,6 +1,6 @@
 # OuroborosHub
 
-**OuroborosHub is the official skills catalog for [Ouroboros](https://github.com/joi-lab/ouroboros-desktop).**
+**OuroborosHub is the official skills catalog for [Ouroboros](https://github.com/razzant/ouroboros).**
 
 Ouroboros is a self-modifying desktop AI agent. Skills extend it with new tools, HTTP routes, widgets, scripts, and task-specific capabilities. This repository is the curated catalog the desktop app reads when you open **Skills -> OuroborosHub**.
 
@@ -25,7 +25,7 @@ The source of truth is [`catalog.json`](catalog.json). The actual skill payloads
 
 You normally do not need to clone this repository.
 
-1. Install or run [Ouroboros Desktop](https://github.com/joi-lab/ouroboros-desktop).
+1. Install or run [Ouroboros Desktop](https://github.com/razzant/ouroboros).
 2. Open **Skills**.
 3. Open the **OuroborosHub** tab.
 4. Pick a skill and click **Install**.
@@ -38,9 +38,9 @@ Some skills may ask for owner-approved key grants before they can run. For examp
 
 Start in the main Ouroboros repository:
 
-- [Creating Skills for Ouroboros](https://github.com/joi-lab/ouroboros-desktop/blob/ouroboros/docs/CREATING_SKILLS.md) - practical author guide for `SKILL.md`, `PluginAPI`, widgets, review, grants, and publishing.
-- [Skill Review Checklist](https://github.com/joi-lab/ouroboros-desktop/blob/ouroboros/docs/CHECKLISTS.md#skill-review-checklist) - what the reviewer models check before a skill can pass.
-- [Architecture Reference](https://github.com/joi-lab/ouroboros-desktop/blob/ouroboros/docs/ARCHITECTURE.md) - how the skill loader, review state, extension loader, widgets, and marketplace surfaces work.
+- [Creating Skills for Ouroboros](https://github.com/razzant/ouroboros/blob/ouroboros/docs/CREATING_SKILLS.md) - practical author guide for `SKILL.md`, `PluginAPI`, widgets, review, grants, and publishing.
+- [Skill Review Checklist](https://github.com/razzant/ouroboros/blob/ouroboros/docs/CHECKLISTS.md#skill-review-checklist) - what the reviewer models check before a skill can pass.
+- [Architecture Reference](https://github.com/razzant/ouroboros/blob/ouroboros/docs/ARCHITECTURE.md) - how the skill loader, review state, extension loader, widgets, and marketplace surfaces work.
 
 Skills are reviewed code. Keep them small, explicit, and honest about permissions.
 
@@ -93,7 +93,7 @@ You can also edit `catalog.json` manually when needed. A minimal entry looks lik
 File paths are resolved as:
 
 ```text
-https://raw.githubusercontent.com/joi-lab/OuroborosHub/main/skills/<slug>/<path>
+https://raw.githubusercontent.com/razzant/OuroborosHub/main/skills/<slug>/<path>
 ```
 
 `SKILL.md` must be present for every skill.
@@ -129,8 +129,8 @@ skills/<slug>/SKILL.md        # every skill starts here
 
 ## Related repositories
 
-- [Ouroboros Desktop](https://github.com/joi-lab/ouroboros-desktop) - the main application.
-- [Creating Skills for Ouroboros](https://github.com/joi-lab/ouroboros-desktop/blob/ouroboros/docs/CREATING_SKILLS.md) - skill authoring guide.
+- [Ouroboros Desktop](https://github.com/razzant/ouroboros) - the main application.
+- [Creating Skills for Ouroboros](https://github.com/razzant/ouroboros/blob/ouroboros/docs/CREATING_SKILLS.md) - skill authoring guide.
 - [Original Ouroboros](https://github.com/joi-lab/ouroboros) - the earlier Colab/Telegram version.
 
 ## License
