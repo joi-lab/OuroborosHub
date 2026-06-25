@@ -437,19 +437,20 @@
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "3e26d2a479996e8f5dba6d781c9d7423bf4bf50acb3bcf5e0aecd3bc8b34d003",
-          "size": 2355
+          "sha256": "167d302fb60ef46aa79ae55419564c47d7a0bb23aa6c8ecb6c7ea0992768ce7e",
+          "size": 3431
         },
         {
           "path": "plugin.py",
-          "sha256": "24b1776c4d61e8922be350958040392ead985dcce06e7717b713d5449aabfe1b",
-          "size": 7063
+          "sha256": "6905c5f6f2332ad36665140c34cae2dad53feb7f74bd4784fed625d605f6461e",
+          "size": 6880
         }
       ],
       "name": "weather",
       "slug": "weather",
       "type": "extension",
-      "version": "0.2.1"
+      "version": "0.2.2",
+      "when_to_use": "User asks about weather, temperature, forecast, or current conditions in a specific city."
     }
   ]
 }
