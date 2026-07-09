@@ -276,17 +276,17 @@
       "version": "1.0.0"
     },
     {
-      "description": "Bidirectional Telegram bot bridge for Ouroboros with configurable command modes, inline keyboard control panel, and optional silent (edit-in-place) mirror.",
+      "description": "Bidirectional Telegram bot bridge for Ouroboros with configurable command modes, inline keyboard control panel, file/document delivery, and optional silent (edit-in-place) mirror.",
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "6e3f868e2c25458059216738b90ae519f75e9e3993ef18cbf2fb1dc43cb38338",
-          "size": 5207
+          "sha256": "24d7b7e609ce6ef5c26f33a572411f69b333a1757b275b36d01ba0a1f841bf8a",
+          "size": 6672
         },
         {
           "path": "lib/telegram_api.py",
-          "sha256": "978c0a21f42baf5ea815d0089bbc8294d8882bbdc5ade99ed899fcdcedfc9c83",
-          "size": 24386
+          "sha256": "73dd6a1879c1a4b560a53c559af91da5528250c8fbe77d25c21ec3f412d0748a",
+          "size": 26967
         },
         {
           "path": "lib/telegram_health.py",
@@ -300,13 +300,13 @@
         },
         {
           "path": "lib/telegram_state.py",
-          "sha256": "bb583d20df23c75c95032c18f67cd27320b98fc967e5cff01f264ffae03b7dcd",
-          "size": 9080
+          "sha256": "c197d98f4e110e1876476c40e1ed7b2c4e538e1a96ddb81ababbd2b7d4033f01",
+          "size": 10380
         },
         {
           "path": "plugin.py",
-          "sha256": "4b714866aa230eb5487f5d53ed92ea3d7a84000d10cfc0afdd7f22c58077358e",
-          "size": 61040
+          "sha256": "400d5654ed10ec5b0f9eb9b22690e581fd39e1916f70e57207a01344bb3d24d9",
+          "size": 69587
         },
         {
           "path": "tests/test_health_tasks.py",
@@ -320,8 +320,8 @@
         },
         {
           "path": "tests/test_model_budget_pickers.py",
-          "sha256": "3e57b86c0af64e6a69e92c26445250e0a89a783a2e177150dc983e9d3870eac7",
-          "size": 4124
+          "sha256": "4c24152bca1ccd2c1737fcbffdf46f1533ddaa9e6dcb7a84724cb7ab71a52a0e",
+          "size": 5942
         },
         {
           "path": "tests/test_notifications.py",
@@ -335,14 +335,14 @@
         },
         {
           "path": "tests/test_telegram_bridge_safety.py",
-          "sha256": "15fce1f7a0cabd6f7fe9e7b9e6c344713aee02c1e61c79733a7ad9c104a96b84",
-          "size": 12727
+          "sha256": "0d180f77f2a63601df9f8ad080ca1dd8915d40d6166d697d6039129bfeb53458",
+          "size": 16386
         }
       ],
       "name": "telegram-bridge",
       "slug": "telegram-bridge",
       "type": "extension",
-      "version": "2.5.1",
+      "version": "2.6.0",
       "when_to_use": "User wants to communicate with Ouroboros through Telegram."
     },
     {

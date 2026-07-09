@@ -336,3 +336,85 @@ def test_set_model_button_blocked_outside_full_access(tmp_path, monkeypatch):
     }, "set_model:0")
     # Core-config mutation is gated to full_access — strict must not inject.
     assert injected == []
+
+
+def _run_updates(plugin, monkeypatch, tmp_path, settings, updates):
+    """Feed a LIST of updates to ONE poller run (so an arm→consume pair is
+    processed by a single live poller, not across a simulated restart)."""
+    (tmp_path / "settings.json").write_text(json.dumps(settings), encoding="utf-8")
+    FakeTelegramClient.updates = updates
+    monkeypatch.setattr(plugin, "TelegramClient", FakeTelegramClient)
+    injected = []
+
+    async def fake_inject(api, payload):
+        injected.append(payload)
+
+    monkeypatch.setattr(plugin, "_inject", fake_inject)
+
+    async def stop_sleep(_delay):
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(plugin.asyncio, "sleep", stop_sleep)
+    poller = plugin._make_poller(FakeApi(tmp_path))
+    try:
+        asyncio.run(poller())
+    except asyncio.CancelledError:
+        pass
+    return injected
+
+
+_FULL = {"TELEGRAM_MAX_UPDATES_PER_POLL": 20, "TELEGRAM_COMMAND_MODE": "full_access", "TELEGRAM_CHAT_ID": "42"}
+
+
+def _arm_then(text):
+    """Updates batch: tap 'Custom amount' then send `text`."""
+    return [
+        {"update_id": 1, "callback_query": {"id": "cb", "data": "set_budget:custom",
+                                            "message": {"message_id": 5, "chat": {"id": 42}}, "from": {"id": 7}}},
+        {"update_id": 2, "message": {"chat": {"id": 42}, "from": {"id": 7}, "text": text}},
+    ]
+
+
+def test_custom_budget_arms_then_injects(tmp_path, monkeypatch):
+    plugin = _load_plugin(tmp_path)
+    injected = _run_updates(plugin, monkeypatch, tmp_path, _FULL, _arm_then("250"))
+    assert len(injected) == 1
+    assert "TOTAL_BUDGET" in injected[0]["text"] and "250" in injected[0]["text"]
+    assert plugin._get_pending_input(FakeApi(tmp_path), 42) == ""  # consumed (one-shot)
+
+
+def test_custom_budget_cancel(tmp_path, monkeypatch):
+    plugin = _load_plugin(tmp_path)
+    injected = _run_updates(plugin, monkeypatch, tmp_path, _FULL, _arm_then("cancel"))
+    assert injected == []  # cancel does not inject
+
+
+def test_custom_budget_invalid_input_clears_without_trapping(tmp_path, monkeypatch):
+    plugin = _load_plugin(tmp_path)
+    injected = _run_updates(plugin, monkeypatch, tmp_path, _FULL, _arm_then("not a number"))
+    assert injected == []  # garbage → no inject, chat not trapped (one-shot cleared)
+
+
+def test_custom_budget_slash_falls_through(tmp_path, monkeypatch):
+    # A slash command while armed = implicit cancel → it still forwards normally.
+    plugin = _load_plugin(tmp_path)
+    injected = _run_updates(plugin, monkeypatch, tmp_path, _FULL, _arm_then("/panic"))
+    assert len(injected) == 1
+    assert injected[0]["text"] == "/panic"  # raw-command forward, NOT a budget change
+
+
+def test_pending_input_dropped_on_restart(tmp_path, monkeypatch):
+    # Arm pending in one poller run, then a fresh poller (restart) must drop it
+    # so the first post-restart message is not mis-consumed as a budget amount.
+    plugin = _load_plugin(tmp_path)
+    _run_updates(plugin, monkeypatch, tmp_path, _FULL, [
+        {"update_id": 1, "callback_query": {"id": "cb", "data": "set_budget:custom",
+                                            "message": {"message_id": 5, "chat": {"id": 42}}, "from": {"id": 7}}},
+    ])
+    assert plugin._get_pending_input(FakeApi(tmp_path), 42) == "budget"  # armed
+    injected = _run_updates(plugin, monkeypatch, tmp_path, _FULL, [
+        {"update_id": 2, "message": {"chat": {"id": 42}, "from": {"id": 7}, "text": "250"}},
+    ])
+    # startup-clear dropped pending → "250" forwarded as an ordinary message
+    assert len(injected) == 1
+    assert injected[0]["text"] == "250" and "TOTAL_BUDGET" not in injected[0]["text"]

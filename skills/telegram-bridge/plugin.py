@@ -15,6 +15,7 @@ from .lib.telegram_state import (
     _state_file, _load_settings, _save_settings_dict, _is_silent_mode_enabled,
     _get_silent_msg, _set_silent_msg, _clear_silent_msg, _subagent_cards_enabled,
     _mirror_progress_enabled, _render_subagent_card, _data_dir,
+    _set_pending_input, _get_pending_input, _clear_pending_input,
 )
 from .lib.telegram_health import _collect_health, _build_menu_tasks
 from .lib.telegram_notifier import _make_notifier
@@ -268,6 +269,49 @@ def _budget_change_command(new_budget: float, lang: str = "en") -> str:
     )
 
 
+def _parse_budget_amount(text: str):
+    """Parse an owner-typed custom budget amount ($). Tolerates a leading $,
+    spaces, and comma decimals. Returns a positive float capped at a sane max,
+    or None if it is not a valid number — the value is only ever injected as an
+    owner NL request, never written to settings.json directly."""
+    raw = str(text or "").strip().lstrip("$").replace(" ", "")
+    # Disambiguate a single comma: '250,50' (RU decimal) vs '1,000' (thousands).
+    # A lone comma with 1-2 trailing digits and no dot is a decimal point;
+    # otherwise commas are thousands separators and are stripped.
+    if raw.count(",") == 1 and "." not in raw and len(raw.split(",")[1]) in (1, 2):
+        raw = raw.replace(",", ".")
+    else:
+        raw = raw.replace(",", "")
+    try:
+        val = round(float(raw), 2)   # round BEFORE validating so $0.001 → 0.00 is rejected
+    except (TypeError, ValueError):
+        return None
+    if not (0 < val <= 1_000_000):
+        return None
+    return val
+
+
+def _bot_commands(command_mode: str) -> list:
+    """Telegram '/' menu command list. Owner-control commands appear only in
+    full_access — they already forward via the raw-command path, so listing them
+    here just makes them discoverable/tappable (no new authority)."""
+    cmds = [
+        {"command": "menu", "description": "Interactive panel / Меню"},
+        {"command": "language", "description": "Select language / Выбор языка"},
+        {"command": "status", "description": "Request status / Статус"},
+        {"command": "help", "description": "Usage guide / Справка"},
+    ]
+    if command_mode == _COMMAND_MODE_FULL:
+        cmds += [
+            {"command": "evolve", "description": "Start an evolution campaign / Запустить эволюцию"},
+            {"command": "bg", "description": "Background consciousness on/off / Фоновое сознание"},
+            {"command": "review", "description": "Run a self-review / Само-ревью"},
+            {"command": "restart", "description": "Restart the agent / Перезапуск"},
+            {"command": "panic", "description": "Emergency stop / Аварийный стоп"},
+        ]
+    return cmds
+
+
 def _build_menu_settings(api, command_mode: str, lang: str = "en") -> tuple[str, list[list[dict]]]:
     """Return (header_text, inline_keyboard_rows) for the Settings panel."""
     t = _LOCALIZED_TEXTS[lang]
@@ -330,6 +374,7 @@ def _build_budget_keyboard(api, lang: str = "en") -> tuple[str, list[list[dict]]
             {"text": "+$100", "callback_data": "set_budget:100"},
             {"text": "+$500", "callback_data": "set_budget:500"},
         ],
+        [{"text": ("✏️ Своя сумма" if lang == "ru" else "✏️ Custom amount"), "callback_data": "set_budget:custom"}],
         [{"text": _LOCALIZED_TEXTS[lang]["btn_back"], "callback_data": "nav:settings"}],
     ]
     return header, rows
@@ -531,20 +576,25 @@ def _make_poller(api):
             lang = "en"
         offset = _load_offset(api)
 
+        # Drop any stale one-shot pending-input (e.g. a "custom budget" the owner
+        # armed but never completed before a restart) so the first post-restart
+        # message is not mis-consumed as a budget amount.
+        if pinned_chat:
+            try:
+                _clear_pending_input(api, int(pinned_chat))
+            except (ValueError, TypeError):
+                pass
+
         # Validate token and configure commands before entering poll loop
         try:
             await client.call("getMe")
             
-            # Set the command menu list for the blue bottom-left Menu button
+            # Set the command menu list for the blue bottom-left Menu button.
+            # The owner-control commands (evolve/bg/review/restart/panic) only
+            # appear in full_access — they already forward via the raw-command
+            # path; listing them here just makes them discoverable/tappable.
             try:
-                await client.call("setMyCommands", data={
-                    "commands": json.dumps([
-                        {"command": "menu", "description": "Interactive panel / Меню"},
-                        {"command": "language", "description": "Select language / Выбор языка"},
-                        {"command": "status", "description": "Request status / Статус"},
-                        {"command": "help", "description": "Usage guide / Справка"}
-                    ])
-                })
+                await client.call("setMyCommands", data={"commands": json.dumps(_bot_commands(command_mode))})
                 api.log("info", "Telegram bot commands configured successfully")
             except Exception as exc:
                 api.log("warning", f"Failed to set Telegram bot commands: {exc}")
@@ -777,8 +827,20 @@ def _make_poller(api):
                             if command_mode != _COMMAND_MODE_FULL:
                                 await client.answer_callback_query(cb_id, text=_LOCALIZED_TEXTS[lang]["restricted_safe"])
                                 continue
+                            arg = cb_data.split(":", 1)[1]
+                            if arg == "custom":
+                                # Arm a one-shot: the owner's NEXT message is read
+                                # as a $ amount and injected as an owner request
+                                # (no direct write). Cleared on the next message.
+                                _set_pending_input(api, cb_chat_id, "budget")
+                                await client.answer_callback_query(cb_id)
+                                await client.send_message(cb_chat_id, (
+                                    "Введи сумму бюджета в $ (например 250) или «отмена»."
+                                    if lang == "ru" else
+                                    "Send the budget amount in $ (e.g. 250), or 'cancel'."))
+                                continue
                             try:
-                                delta = float(cb_data.split(":", 1)[1])
+                                delta = float(arg)
                             except ValueError:
                                 await client.answer_callback_query(cb_id, text=_LOCALIZED_TEXTS[lang]["unknown_command"])
                                 continue
@@ -848,6 +910,45 @@ def _make_poller(api):
                     # guaranteed to equal the pinned owner chat here.
                     text = str(message.get("text") or message.get("caption") or "").strip()
                     caption = str(message.get("caption") or "").strip()
+
+                    # --- Pending one-shot input (e.g. custom budget amount) ---
+                    # Armed by the "Custom amount" budget button (full_access only).
+                    # The amount is injected as an owner request, never written to
+                    # settings.json directly (path-confinement).
+                    if _get_pending_input(api, chat_id) == "budget":
+                        _clear_pending_input(api, chat_id)  # one-shot: always consume, never trap the chat
+                        low = text.strip().lower()
+                        if low in ("cancel", "/cancel", "отмена", "отменить"):
+                            await client.send_message(chat_id, ("Отменено." if lang == "ru" else "Cancelled."))
+                            continue
+                        # A non-cancel slash command or media while armed is an
+                        # implicit cancel: fall through (no continue) so /menu,
+                        # voice, photos, etc. still work instead of being swallowed.
+                        if not (_SLASH_COMMAND_RE.match(text) or message.get("voice") or message.get("photo")):
+                            if command_mode != _COMMAND_MODE_FULL:  # defensive: arming is full_access-gated
+                                continue
+                            amount = _parse_budget_amount(text)
+                            if amount is None:
+                                await client.send_message(chat_id, (
+                                    "Ожидал число — ввод бюджета отменён. Нажми «Своя сумма» снова."
+                                    if lang == "ru" else
+                                    "Expected a number — custom budget cancelled. Tap Custom again."))
+                                continue
+                            sender_name = _extract_sender_label(sender, chat_id)
+                            sender_label = f"Telegram ({sender_name})"
+                            await _inject(api, {
+                                "text": _budget_change_command(amount, lang),
+                                "chat_id": chat_id,
+                                "user_id": int(sender.get("id") or chat_id or 1),
+                                "source": "telegram-bridge",
+                                "sender_label": sender_label,
+                                "transport": {"kind": "telegram", "conversation_id": str(chat_id), "sender_label": sender_label},
+                                "image_base64": "",
+                                "image_mime": "",
+                                "image_caption": "",
+                            })
+                            await client.send_message(chat_id, f"📨 ${amount:.2f}")
+                            continue
 
                     # Handle /menu command locally — always allowed
                     cleaned_text = text.lower().strip()
@@ -925,6 +1026,17 @@ def _make_poller(api):
                         if file_id:
                             image_base64, image_mime = await client.download_photo(file_id)
                     if not safe_text and not image_base64:
+                        # Acknowledge unsupported inbound attachments instead of
+                        # silently swallowing them. Inbound file INGESTION is not
+                        # yet wired on the host side (only text/voice/photo), so
+                        # tell the user rather than leaving them wondering.
+                        if message.get("document") or message.get("video") or message.get("audio") or message.get("sticker"):
+                            await client.send_message(
+                                chat_id,
+                                ("Пока я не умею принимать файлы/видео/аудио — поддерживаются текст, голос и фото."
+                                 if lang == "ru" else
+                                 "I can't accept files/video/audio yet — supported input: text, voice, and photos."),
+                            )
                         continue
                     sender_name = _extract_sender_label(sender, chat_id)
                     sender_label = f"Telegram ({sender_name})"
@@ -1075,6 +1187,31 @@ def _make_video(api):
     return handle
 
 
+def _make_document(api):
+    async def handle(event: Dict[str, Any]) -> None:
+        try:
+            protected_settings = api.get_settings(["TELEGRAM_BOT_TOKEN"])
+            local_settings = _load_settings(api)
+            client = TelegramClient(protected_settings.get("TELEGRAM_BOT_TOKEN", ""))
+            chat_id = _target_chat(local_settings, event)
+            file_base64 = str(event.get("file_base64") or "").strip()
+            if chat_id and file_base64:
+                # Media/files cannot replace a text bubble — reset silent tracking.
+                _clear_silent_msg(api, chat_id)
+                import base64 as _base64
+                filename = str(event.get("filename") or "file")
+                caption = str(event.get("caption") or "")
+                await client.send_document(
+                    chat_id,
+                    _base64.b64decode(file_base64),
+                    filename=filename,
+                    caption=caption,
+                )
+        except Exception as exc:
+            api.log("error", f"Telegram document error: {exc}")
+    return handle
+
+
 def register(api):
     api.register_supervised_task("poller", _make_poller(api), restart_policy="on_failure", max_restarts=10)
     api.register_supervised_task("notifier", _make_notifier(api), restart_policy="on_failure", max_restarts=10)
@@ -1085,6 +1222,10 @@ def register(api):
         api.subscribe_event("chat.video", _make_video(api))
     except Exception as exc:
         api.log("warning", f"Could not subscribe to chat.video: {exc}")
+    try:
+        api.subscribe_event("chat.document", _make_document(api))
+    except Exception as exc:
+        api.log("warning", f"Could not subscribe to chat.document: {exc}")
     api.register_route("settings/save", handler=_make_settings_save(api), methods=("POST",))
     api.register_settings_section(
         "telegram",

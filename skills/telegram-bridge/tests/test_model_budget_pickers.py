@@ -68,6 +68,44 @@ def test_budget_change_command_text(tmp_path):
     assert "TOTAL_BUDGET" in en and "550.00" in en
 
 
+def test_parse_budget_amount(tmp_path):
+    plugin, _ = _setup(tmp_path)
+    assert plugin._parse_budget_amount("250") == 250.0
+    assert plugin._parse_budget_amount("  $42 ") == 42.0
+    assert plugin._parse_budget_amount("250.50") == 250.5
+    assert plugin._parse_budget_amount("$1,000") == 1000.0   # comma = thousands sep
+    assert plugin._parse_budget_amount("$1,000.50") == 1000.5
+    assert plugin._parse_budget_amount("250,50") == 250.5    # RU decimal comma
+    assert plugin._parse_budget_amount("1,5") == 1.5         # RU decimal comma
+    # rejects
+    assert plugin._parse_budget_amount("abc") is None
+    assert plugin._parse_budget_amount("") is None
+    assert plugin._parse_budget_amount("0") is None          # must be > 0
+    assert plugin._parse_budget_amount("0.001") is None      # rounds to $0.00 → rejected
+    assert plugin._parse_budget_amount("-5") is None
+    assert plugin._parse_budget_amount("99999999") is None   # over the 1,000,000 cap
+
+
+def test_budget_keyboard_has_custom_button(tmp_path):
+    plugin, api = _setup(tmp_path, parent_settings={"TOTAL_BUDGET": 100.0})
+    _, rows = plugin._build_budget_keyboard(api, "en")
+    flat = [b["callback_data"] for row in rows for b in row]
+    assert "set_budget:custom" in flat
+    assert "set_budget:50" in flat  # increments still there
+
+
+def test_bot_commands_gated_by_mode(tmp_path):
+    plugin, _ = _setup(tmp_path)
+    full = {c["command"] for c in plugin._bot_commands("full_access")}
+    safe = {c["command"] for c in plugin._bot_commands("safe_commands")}
+    # always present
+    assert {"menu", "status", "help"} <= full
+    assert {"menu", "status", "help"} <= safe
+    # owner-control commands only in full_access
+    assert {"evolve", "restart", "panic"} <= full
+    assert not ({"evolve", "restart", "panic"} & safe)
+
+
 def test_model_keyboard_marks_current_and_uses_index(tmp_path):
     plugin, api = _setup(
         tmp_path,

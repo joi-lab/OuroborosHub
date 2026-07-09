@@ -8,6 +8,43 @@ from typing import Any, Dict, Optional
 
 import httpx
 
+# Telegram hard-caps a single sendMessage at 4096 chars. We chunk the RAW text
+# (pre-HTML) on line/space boundaries below this so each chunk is converted and
+# sent independently — avoiding both the silent "message is too long" 400 that
+# dropped long replies and tag-splitting corruption from cutting inside HTML.
+_TELEGRAM_TEXT_LIMIT = 4096
+_TELEGRAM_CHUNK_RAW = 3500
+
+
+def _chunk_raw_text(text: str, limit: int = _TELEGRAM_CHUNK_RAW) -> list[str]:
+    """Split raw text into <=limit-char pieces on line, then space, boundaries."""
+    if len(text) <= limit:
+        return [text]
+    chunks: list[str] = []
+    buf = ""
+    for line in text.split("\n"):
+        while len(line) > limit:
+            # A single very long line: break on the last space within the window,
+            # else hard-cut at the limit.
+            cut = line.rfind(" ", 0, limit)
+            cut = cut if cut > 0 else limit
+            piece = line[:cut]
+            if buf:
+                chunks.append(buf)
+                buf = ""
+            chunks.append(piece)
+            line = line[cut:].lstrip(" ")
+        candidate = f"{buf}\n{line}" if buf else line
+        if len(candidate) > limit:
+            if buf:
+                chunks.append(buf)
+            buf = line
+        else:
+            buf = candidate
+    if buf:
+        chunks.append(buf)
+    return chunks or [""]
+
 
 def markdown_to_telegram_html(text: str) -> str:
     """Convert standard rich Markdown text into Telegram-compliant HTML syntax."""
@@ -111,16 +148,25 @@ class TelegramClient:
         return list(payload.get("result") or [])
 
     async def send_message(self, chat_id: int, text: str, parse_mode: str = "HTML") -> int:
-        """Send a plain text message. Returns the new message_id (0 on parse failure)."""
-        formatted = markdown_to_telegram_html(text) if parse_mode == "HTML" else text
-        data = {"chat_id": str(chat_id), "text": formatted}
-        if parse_mode:
-            data["parse_mode"] = parse_mode
-        payload = await self.call("sendMessage", data=data, timeout=20)
-        try:
-            return int((payload.get("result") or {}).get("message_id") or 0)
-        except (TypeError, ValueError):
-            return 0
+        """Send a text message, chunking past Telegram's 4096-char limit.
+
+        Long text is split on line/space boundaries and each chunk is sent as its
+        own message (converted independently so HTML tags never span a cut).
+        Returns the LAST chunk's message_id (0 on parse failure / empty input).
+        """
+        chunks = _chunk_raw_text(str(text or ""))
+        last_message_id = 0
+        for chunk in chunks:
+            formatted = markdown_to_telegram_html(chunk) if parse_mode == "HTML" else chunk
+            data = {"chat_id": str(chat_id), "text": formatted}
+            if parse_mode:
+                data["parse_mode"] = parse_mode
+            payload = await self.call("sendMessage", data=data, timeout=20)
+            try:
+                last_message_id = int((payload.get("result") or {}).get("message_id") or 0)
+            except (TypeError, ValueError):
+                last_message_id = 0
+        return last_message_id
 
     async def edit_message_text(self, chat_id: int, message_id: int, text: str, parse_mode: str = "HTML") -> bool:
         """Replace the text of an existing message in-place (silent mode). Returns True on success.
@@ -157,6 +203,20 @@ class TelegramClient:
         if parse_mode:
             data["parse_mode"] = parse_mode
         await self.call("sendPhoto", data=data, files=files, timeout=30)
+
+    async def send_document(
+        self, chat_id: int, file_bytes: bytes, filename: str = "file", *, caption: str = "", parse_mode: str = "HTML"
+    ) -> None:
+        """Send an arbitrary document/file to a chat via sendDocument."""
+        safe_name = (str(filename or "file").replace("\r", " ").replace("\n", " ").strip() or "file")
+        files = {"document": (safe_name, file_bytes, "application/octet-stream")}
+        formatted = markdown_to_telegram_html(caption) if (caption and parse_mode == "HTML") else caption
+        data = {"chat_id": str(chat_id)}
+        if formatted:
+            data["caption"] = formatted
+            if parse_mode:
+                data["parse_mode"] = parse_mode
+        await self.call("sendDocument", data=data, files=files, timeout=60)
 
     async def send_message_with_inline_keyboard(
         self, chat_id: int, text: str, keyboard: list[list[dict]], parse_mode: str = "HTML"
