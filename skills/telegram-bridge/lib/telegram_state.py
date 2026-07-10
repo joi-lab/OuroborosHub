@@ -93,6 +93,45 @@ def _clear_silent_msg(api, chat_id: int) -> None:
         _save_silent_state(api, state)
 
 
+def _load_pending_input(api) -> Dict[str, str]:
+    """Per-chat one-shot input mode (e.g. 'budget') awaiting the owner's next
+    typed message. Mirrors the silent-state store; values are short kind tags."""
+    path = _state_file(api, "pending_input.json")
+    try:
+        if path.exists():
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                return {str(k): str(v) for k, v in data.items()}
+    except Exception:
+        pass
+    return {}
+
+
+def _save_pending_input(api, data: Dict[str, str]) -> None:
+    path = _state_file(api, "pending_input.json")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    tmp.replace(path)
+
+
+def _set_pending_input(api, chat_id: int, kind: str) -> None:
+    state = _load_pending_input(api)
+    state[str(chat_id)] = str(kind)
+    _save_pending_input(api, state)
+
+
+def _get_pending_input(api, chat_id: int) -> str:
+    return _load_pending_input(api).get(str(chat_id), "")
+
+
+def _clear_pending_input(api, chat_id: int) -> None:
+    state = _load_pending_input(api)
+    if str(chat_id) in state:
+        state.pop(str(chat_id), None)
+        _save_pending_input(api, state)
+
+
 def _load_subagent_state(api) -> Dict[str, int]:
     """Per-(chat, subagent) Telegram message-id map so each subagent gets ONE
     bubble that is edited in place across its lifecycle instead of spamming."""

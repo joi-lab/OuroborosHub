@@ -1,13 +1,13 @@
 ---
 name: telegram-bridge
-description: Bidirectional Telegram bot bridge for Ouroboros with configurable command modes, inline keyboard control panel, and optional silent (edit-in-place) mirror.
-version: 2.5.1
+description: Bidirectional Telegram bot bridge for Ouroboros with configurable command modes, inline keyboard control panel, file/document delivery, and optional silent (edit-in-place) mirror.
+version: 2.6.0
 type: extension
 entry: plugin.py
 runtime: python3
 permissions: [net, read_settings, widget, route, supervised_task, subscribe_event, inject_chat]
 env_from_settings: [TELEGRAM_BOT_TOKEN, OPENAI_API_KEY]
-subscribe_events: [chat.outbound, chat.typing, chat.photo, chat.video]
+subscribe_events: [chat.outbound, chat.typing, chat.photo, chat.video, chat.document]
 when_to_use: User wants to communicate with Ouroboros through Telegram.
 timeout_sec: 60
 ---
@@ -31,7 +31,15 @@ from Telegram (configure in Settings → Telegram Bridge):
 **Important:** In `full_access`, this reviewed transport is a first-class owner
 chat surface. Slash commands are forwarded as raw chat text through the Host
 Service after the skill passes review, grants, enablement, token, rate-limit,
-and chat/user binding checks.
+and chat/user binding checks. In `full_access` the bot's `/` command menu also
+lists the owner-control commands (`/evolve`, `/bg`, `/review`, `/restart`,
+`/panic`) so they are discoverable and tappable.
+
+**Control panel** (`/menu` → Settings, full_access): pick the main model and the
+budget via inline buttons. Budget offers `+$50/＋$100/＋$500` increments and a
+**Custom amount** button — tap it and type any `$` amount in chat. Both model and
+budget changes are **injected as owner requests** (the agent applies them through
+the guarded settings flow); the skill never writes the core `settings.json`.
 
 ## Subagent Activity
 
@@ -92,6 +100,23 @@ messages within a single conversation turn are edited in place via
 `editMessageText` instead of posting new bubbles. Each new inbound user
 message (or sent photo/video) resets the silent chain so the next reply
 starts a fresh bubble. Default: off.
+
+## File Delivery
+
+When Ouroboros delivers a finished file (report, `.md`/`.csv`/`.html`, PDF,
+archive, code) via its `send_file` tool, the host publishes a `chat.document`
+event and this bridge forwards it to the pinned chat with Telegram's
+`sendDocument` (any file type, up to Telegram's bot limit). This is separate
+from photo/video mirroring (`chat.photo`/`chat.video`), which stay inline.
+
+Long text replies are chunked automatically: a message over Telegram's
+4096-character limit is split on line/space boundaries and sent as several
+messages instead of being silently dropped.
+
+Inbound files (documents/video/audio you send TO the bot) are **not** ingested
+yet — the bridge replies that only text, voice, and photos are supported rather
+than silently ignoring the message. Full inbound file ingestion is a planned
+host-side follow-up.
 
 ## Setup
 
