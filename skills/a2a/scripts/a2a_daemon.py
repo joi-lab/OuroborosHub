@@ -8,10 +8,11 @@ import pathlib
 import inspect
 import ipaddress
 import re
+import time
 import urllib.parse
 import uuid
 import base64
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 import httpx
 import uvicorn
@@ -48,6 +49,9 @@ except Exception:
 logger = logging.getLogger("a2a_daemon")
 
 STATE_DIR = pathlib.Path(os.environ.get("OUROBOROS_SKILL_STATE_DIR") or ".")
+
+# Card version — kept in step with the skill version (SKILL.md / catalog entry).
+A2A_CARD_VERSION = "1.1.0"
 
 
 def _is_loopback(host: str) -> bool:
@@ -110,9 +114,24 @@ def _load_settings() -> Dict[str, Any]:
 _SETTINGS = _load_settings()
 A2A_HOST = os.environ.get("A2A_HOST") or str(_SETTINGS.get("A2A_HOST") or "127.0.0.1")
 A2A_PORT = int(os.environ.get("A2A_PORT") or _SETTINGS.get("A2A_PORT") or "18800")
-A2A_AGENT_NAME = os.environ.get("A2A_AGENT_NAME") or str(_SETTINGS.get("A2A_AGENT_NAME") or "Ouroboros")
-A2A_AGENT_DESCRIPTION = os.environ.get("A2A_AGENT_DESCRIPTION") or str(_SETTINGS.get("A2A_AGENT_DESCRIPTION") or "Ouroboros A2A peer")
+
+# Distinguish an OPERATOR-SET name/description from the built-in default. When the
+# operator explicitly configures A2A_AGENT_NAME / A2A_AGENT_DESCRIPTION (env or
+# settings), that value WINS over the live /identity value. When neither is set,
+# the card is populated from the host /identity endpoint, falling back to these
+# defaults only if /identity is unavailable.
+_A2A_AGENT_NAME_EXPLICIT = (os.environ.get("A2A_AGENT_NAME") or str(_SETTINGS.get("A2A_AGENT_NAME") or "")).strip()
+_A2A_AGENT_DESCRIPTION_EXPLICIT = (os.environ.get("A2A_AGENT_DESCRIPTION") or str(_SETTINGS.get("A2A_AGENT_DESCRIPTION") or "")).strip()
+A2A_AGENT_NAME = _A2A_AGENT_NAME_EXPLICIT or "Ouroboros"
+A2A_AGENT_DESCRIPTION = _A2A_AGENT_DESCRIPTION_EXPLICIT or "Ouroboros A2A peer"
 A2A_SERVER_PASSWORD = (os.environ.get("A2A_SERVER_PASSWORD") or str(_SETTINGS.get("A2A_SERVER_PASSWORD") or "")).strip()
+
+# Bounded retry for the host tool-schema fetch: the companion can start before the
+# host chat-agent is ready, so a single attempt would too often yield an empty
+# capability list and collapse the card. A few short attempts smooth over startup.
+_TOOLS_FETCH_ATTEMPTS = 4
+_TOOLS_FETCH_BACKOFF_SEC = 0.5
+_HOST_FETCH_TIMEOUT_SEC = 5
 
 
 def _setting_int(name: str, default: int, *, minimum: int = 1, maximum: int = 600) -> int:
@@ -172,31 +191,108 @@ def _load_task(task_id: str) -> Dict[str, Any] | None:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def _agent_card() -> Dict[str, Any]:
-    tools = []
+def _fetch_identity() -> Dict[str, str]:
+    """Best-effort read of the host's real name/description from GET /identity.
+
+    Returns {} when the endpoint is unavailable so the caller can fall back to the
+    configured A2A_AGENT_NAME / A2A_AGENT_DESCRIPTION defaults.
+    """
     try:
-        response = httpx.get(f"{HOST_SERVICE_URL}/tools/schemas", headers=_host_headers(), timeout=5)
+        response = httpx.get(
+            f"{HOST_SERVICE_URL}/identity", headers=_host_headers(), timeout=_HOST_FETCH_TIMEOUT_SEC
+        )
         if response.status_code == 200:
-            tools = response.json().get("tools") or []
-    except Exception:
-        tools = []
+            data = response.json() or {}
+            return {
+                "name": str(data.get("name") or "").strip(),
+                "description": str(data.get("description") or "").strip(),
+            }
+        logger.warning("a2a agent-card: /identity returned status %s", response.status_code)
+    except Exception as exc:
+        logger.warning("a2a agent-card: /identity unavailable (%s)", exc)
+    return {}
+
+
+def _fetch_tool_schemas() -> List[Dict[str, Any]]:
+    """Fetch the host tool schemas with a short bounded retry.
+
+    The companion may start before the host chat-agent is ready, so a single
+    attempt too easily yields an empty list. Retry a few times with a small
+    backoff, then log a WARNING (never silently swallow) and return []. An empty
+    result is handled honestly by the card builder — it never collapses to a
+    contentless stub.
+    """
+    last_error = "no attempt made"
+    for attempt in range(_TOOLS_FETCH_ATTEMPTS):
+        try:
+            response = httpx.get(
+                f"{HOST_SERVICE_URL}/tools/schemas",
+                headers=_host_headers(),
+                timeout=_HOST_FETCH_TIMEOUT_SEC,
+            )
+            if response.status_code == 200:
+                return response.json().get("tools") or []
+            last_error = f"status {response.status_code}"
+        except Exception as exc:
+            last_error = str(exc)
+        if attempt + 1 < _TOOLS_FETCH_ATTEMPTS:
+            time.sleep(_TOOLS_FETCH_BACKOFF_SEC * (attempt + 1))
+    logger.warning(
+        "a2a agent-card: /tools/schemas unavailable after %d attempts (%s); "
+        "card will advertise the identity-derived capability entry only",
+        _TOOLS_FETCH_ATTEMPTS,
+        last_error,
+    )
+    return []
+
+
+def _resolve_identity() -> Dict[str, str]:
+    """Resolve the card's top-level name/description.
+
+    Operator-set A2A_AGENT_NAME / A2A_AGENT_DESCRIPTION win; otherwise the live
+    /identity value is used; otherwise the built-in defaults.
+    """
+    identity = _fetch_identity()
+    name = _A2A_AGENT_NAME_EXPLICIT or identity.get("name") or A2A_AGENT_NAME
+    description = _A2A_AGENT_DESCRIPTION_EXPLICIT or identity.get("description") or A2A_AGENT_DESCRIPTION
+    return {"name": name, "description": description}
+
+
+def _agent_card() -> Dict[str, Any]:
+    ident = _resolve_identity()
+    name = ident["name"]
+    description = ident["description"]
+
     skills = []
-    for schema in tools:
+    for schema in _fetch_tool_schemas():
         func = schema.get("function", schema) if isinstance(schema, dict) else {}
-        name = str(func.get("name") or "")
-        if name:
+        tool_name = str(func.get("name") or "")
+        if tool_name:
             skills.append({
-                "id": name,
-                "name": name,
+                "id": tool_name,
+                "name": tool_name,
                 "description": str(func.get("description") or "")[:200],
-                "tags": [name.split("_", 1)[0] if "_" in name else "tool"],
+                "tags": [tool_name.split("_", 1)[0] if "_" in tool_name else "tool"],
             })
+
+    # No contentless collapse: when the tool list is genuinely empty (host chat-agent
+    # not ready, empty registry, or a transient fetch failure), still advertise the
+    # REAL identity-derived description plus a single honest capability entry — never
+    # a bare "General" / "Ouroboros A2A peer" stub.
+    if not skills:
+        skills = [{
+            "id": "ouroboros",
+            "name": name,
+            "description": description or A2A_AGENT_DESCRIPTION,
+            "tags": ["ouroboros", "agent"],
+        }]
+
     base_url = f"http://{A2A_HOST}:{A2A_PORT}/"
     return {
-        "name": A2A_AGENT_NAME,
-        "description": A2A_AGENT_DESCRIPTION,
+        "name": name,
+        "description": description,
         "url": base_url,
-        "version": "1.0.0",
+        "version": A2A_CARD_VERSION,
         # A2: advertise the A2A v0.3 transport interface so v0.3-aware clients can negotiate.
         "protocolVersion": "0.3.0",
         "preferredTransport": "JSONRPC",
@@ -204,7 +300,7 @@ def _agent_card() -> Dict[str, Any]:
         "capabilities": {"streaming": True},
         "defaultInputModes": ["text/plain"],
         "defaultOutputModes": ["text/plain"],
-        "skills": skills or [{"id": "general", "name": "General", "description": A2A_AGENT_DESCRIPTION, "tags": ["general"]}],
+        "skills": skills,
     }
 
 

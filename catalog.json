@@ -9,13 +9,13 @@
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "3e58e5902f46fa6c0e9c33c704ad85cd00db06d289e67dddd13d3f6c514144dd",
-          "size": 1354
+          "sha256": "5e551835aedbbd6b9c26e19dc943b2418d64b0ed34e4051f3e7e6100fc23500a",
+          "size": 2005
         },
         {
           "path": "lib/client.py",
           "sha256": "9d56903e05213b7d44aa65e8f992a80f4b9b82646eaa7de967770eac8406f46d",
-          "size": 2410
+          "size": 3164
         },
         {
           "path": "plugin.py",
@@ -24,8 +24,13 @@
         },
         {
           "path": "scripts/a2a_daemon.py",
-          "sha256": "6a5885274e005b30229a037a176823c79aca31bd18ae036c6e09e5b285a1d412",
-          "size": 13321
+          "sha256": "b1037e203b5573cbee2d864a99bc95cc1e9ba8d65678e3e1138a15ee8554bc9d",
+          "size": 18837
+        },
+        {
+          "path": "tests/test_a2a_agent_card.py",
+          "sha256": "f4410cbd190efe8e0c4428c8b6ab3e57a586eb3042df26f2463c6f3478eba6ac",
+          "size": 6087
         },
         {
           "path": "tests/test_a2a_daemon_safety.py",
@@ -46,7 +51,8 @@
       "name": "a2a",
       "slug": "a2a",
       "type": "extension",
-      "version": "1.0.0"
+      "version": "1.1.0",
+      "when_to_use": "User asks to communicate with another A2A-compatible agent, discover an agent card, send an A2A message, check A2A task status, or expose this Ouroboros instance as an A2A peer."
     },
     {
       "description": "AgentRQ integration: structured HITL task board, permission gating, and real-time workspace bridge via MCP Streamable HTTP",

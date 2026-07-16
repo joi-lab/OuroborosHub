@@ -1,7 +1,7 @@
 ---
 name: a2a
 description: Agent-to-Agent protocol bridge for Ouroboros. Provides a local A2A-compatible server plus client tools for discovering and messaging other A2A agents.
-version: 1.0.0
+version: 1.1.0
 type: extension
 entry: plugin.py
 permissions: [net, tool, route, widget, read_settings, companion_process, inject_chat]
@@ -33,3 +33,15 @@ registers three client tools:
 The companion process talks back to the host through the loopback Host
 Service API using the reviewed `SkillToken` grant. It does not patch the
 core runtime and stores task state under the skill state directory.
+
+## Agent card
+
+The published Agent Card describes what this Ouroboros instance actually
+does. Its top-level name/description come from the host `GET /identity`
+endpoint (operator-set `A2A_AGENT_NAME` / `A2A_AGENT_DESCRIPTION` still
+win when configured), and its skill list is enumerated from the host tool
+schemas (`GET /tools/schemas`) with a short bounded retry so a
+companion that starts before the host chat-agent is ready still ends up
+with a populated card. If the tool list is genuinely empty the card still
+carries the real identity-derived description plus one honest capability
+entry — it never collapses to a contentless "General" stub.
