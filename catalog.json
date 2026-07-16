@@ -282,6 +282,30 @@
       "version": "1.0.0"
     },
     {
+      "description": "Анализирует дорожные карты проектов (.pptx) одной программы и строит эталонную дорожную карту-шаблон для новых проектов той же программы: визуальная диаграмма Ганта по кварталам (8 кварталов, 5 фаз PMI PMBOK 7), WBS по фазам из реальных работ исходников и чек-лист по ICB4 / PMBOK 7. Все артефакты на русском, текст вписывается в слайды.",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "sha256": "ec97affdfef2e785d74019433e807fc83d6914d8c2cab7b8130368942f3ee738",
+          "size": 4763
+        },
+        {
+          "path": "core.py",
+          "sha256": "3f469d53e63f896f980376ea495e1400d19b76f7351db7eb02f526882cae0065",
+          "size": 29818
+        },
+        {
+          "path": "plugin.py",
+          "sha256": "37cea71c71b7a215d8554d4258357a007d265bb672e645a73ccac3aa8b362e82",
+          "size": 11964
+        }
+      ],
+      "name": "roadmap_analyst",
+      "slug": "roadmap_analyst",
+      "type": "extension",
+      "version": "2.2.0"
+    },
+    {
       "description": "Bidirectional Telegram bot bridge for Ouroboros with configurable command modes, inline keyboard control panel, file/document delivery, and optional silent (edit-in-place) mirror.",
       "files": [
         {
