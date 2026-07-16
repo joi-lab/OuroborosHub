@@ -51,7 +51,7 @@ logger = logging.getLogger("a2a_daemon")
 STATE_DIR = pathlib.Path(os.environ.get("OUROBOROS_SKILL_STATE_DIR") or ".")
 
 # Card version — kept in step with the skill version (SKILL.md / catalog entry).
-A2A_CARD_VERSION = "1.1.0"
+A2A_CARD_VERSION = "1.1.1"
 
 
 def _is_loopback(host: str) -> bool:
@@ -126,12 +126,19 @@ A2A_AGENT_NAME = _A2A_AGENT_NAME_EXPLICIT or "Ouroboros"
 A2A_AGENT_DESCRIPTION = _A2A_AGENT_DESCRIPTION_EXPLICIT or "Ouroboros A2A peer"
 A2A_SERVER_PASSWORD = (os.environ.get("A2A_SERVER_PASSWORD") or str(_SETTINGS.get("A2A_SERVER_PASSWORD") or "")).strip()
 
-# Bounded retry for the host tool-schema fetch: the companion can start before the
-# host chat-agent is ready, so a single attempt would too often yield an empty
-# capability list and collapse the card. A few short attempts smooth over startup.
-_TOOLS_FETCH_ATTEMPTS = 4
+# Bounded retry for the host tool-schema fetch: the companion routinely starts
+# before the host chat-agent is built, so GET /tools/schemas answers 200 with an
+# EMPTY tools list for the first few seconds. An empty 200 must be retried like a
+# transient failure (not accepted as final), or the card collapses to the
+# identity-only entry. The window is generous enough to survive that startup race.
+_TOOLS_FETCH_ATTEMPTS = 8
 _TOOLS_FETCH_BACKOFF_SEC = 0.5
 _HOST_FETCH_TIMEOUT_SEC = 5
+
+# Last non-empty tool list seen this process. Once the card has populated, a later
+# transient empty fetch must never regress it back to the identity-only entry
+# (self-healing stability across per-request rebuilds and the startup bake).
+_LAST_GOOD_TOOLS: List[Dict[str, Any]] = []
 
 
 def _setting_int(name: str, default: int, *, minimum: int = 1, maximum: int = 600) -> int:
@@ -214,14 +221,19 @@ def _fetch_identity() -> Dict[str, str]:
 
 
 def _fetch_tool_schemas() -> List[Dict[str, Any]]:
-    """Fetch the host tool schemas with a short bounded retry.
+    """Fetch the host tool schemas, treating an empty list as "not ready yet".
 
-    The companion may start before the host chat-agent is ready, so a single
-    attempt too easily yields an empty list. Retry a few times with a small
-    backoff, then log a WARNING (never silently swallow) and return []. An empty
-    result is handled honestly by the card builder — it never collapses to a
-    contentless stub.
+    The companion routinely starts before the host chat-agent is built, so
+    GET /tools/schemas answers 200 {"tools": []} for the first few seconds. A
+    single 200 must NOT be accepted as final when the list is empty — that was
+    the regression that let the agent card collapse to the identity-only entry
+    on a peer whose host was still warming up. So an empty 200 is retried like a
+    transient failure; the last non-empty result is cached at module scope; and
+    a populated card is never regressed back to empty. If every attempt yields
+    empty we serve the last known-good tool list when we have one, and fall back
+    to the identity-derived entry only when we have never seen a populated list.
     """
+    global _LAST_GOOD_TOOLS
     last_error = "no attempt made"
     for attempt in range(_TOOLS_FETCH_ATTEMPTS):
         try:
@@ -231,12 +243,26 @@ def _fetch_tool_schemas() -> List[Dict[str, Any]]:
                 timeout=_HOST_FETCH_TIMEOUT_SEC,
             )
             if response.status_code == 200:
-                return response.json().get("tools") or []
-            last_error = f"status {response.status_code}"
+                tools = response.json().get("tools") or []
+                if tools:
+                    _LAST_GOOD_TOOLS = tools
+                    return tools
+                last_error = "host returned an empty tool list (chat-agent not ready yet)"
+            else:
+                last_error = f"status {response.status_code}"
         except Exception as exc:
             last_error = str(exc)
         if attempt + 1 < _TOOLS_FETCH_ATTEMPTS:
             time.sleep(_TOOLS_FETCH_BACKOFF_SEC * (attempt + 1))
+    if _LAST_GOOD_TOOLS:
+        logger.warning(
+            "a2a agent-card: /tools/schemas empty after %d attempts (%s); "
+            "serving last known-good tool list (%d tools)",
+            _TOOLS_FETCH_ATTEMPTS,
+            last_error,
+            len(_LAST_GOOD_TOOLS),
+        )
+        return _LAST_GOOD_TOOLS
     logger.warning(
         "a2a agent-card: /tools/schemas unavailable after %d attempts (%s); "
         "card will advertise the identity-derived capability entry only",

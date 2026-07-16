@@ -98,7 +98,7 @@ def test_identity_success_and_nonempty_tools():
     assert card["protocolVersion"] == "0.3.0"
     assert card["preferredTransport"] == "JSONRPC"
     assert card["additionalInterfaces"] and card["additionalInterfaces"][0]["transport"] == "JSONRPC"
-    assert card["version"] == "1.1.0"
+    assert card["version"] == "1.1.1"
 
 
 def test_env_override_beats_identity():
@@ -162,6 +162,75 @@ def test_empty_tools_uses_honest_identity_entry():
     assert card["skills"][0]["description"] == "real desc"
     # never the contentless collapse
     assert all(s["name"] != "General" for s in card["skills"])
+
+
+def _install_get_tool_sequence(mod, *, identity, tool_payloads):
+    """Like _install_get but /tools/schemas returns a SEQUENCE of payloads across
+    successive calls (the last payload repeats once exhausted), so we can model a
+    host that is empty for the first few polls and then becomes ready."""
+    calls = {"identity": 0, "tools": 0}
+    seq = list(tool_payloads)
+
+    def fake_get(url, **_kw):
+        if url.endswith("/identity"):
+            calls["identity"] += 1
+            return _FakeResponse(*identity)
+        if url.endswith("/tools/schemas"):
+            idx = min(calls["tools"], len(seq) - 1)
+            calls["tools"] += 1
+            return _FakeResponse(*seq[idx])
+        raise AssertionError(f"unexpected url {url}")
+
+    mod.httpx.get = fake_get
+    return calls
+
+
+def test_empty_200_is_retried_then_populates():
+    """An empty 200 (host chat-agent not ready) must be retried, not accepted as
+    final. Host is empty for the first 3 polls, then returns the real tools."""
+    mod = _load_daemon()
+    empty = (200, {"tools": []})
+    ready = (200, {"tools": [
+        {"function": {"name": "read_file", "description": "Read a file."}},
+        {"function": {"name": "web_search", "description": "Search the web."}},
+    ]})
+    calls = _install_get_tool_sequence(
+        mod,
+        identity=(200, {"ok": True, "name": "Wanderer", "description": "real desc"}),
+        tool_payloads=[empty, empty, empty, ready],
+    )
+    card = mod._agent_card()
+    # It kept polling past the empty 200s and picked up the real list.
+    assert calls["tools"] == 4
+    assert [s["id"] for s in card["skills"]] == ["read_file", "web_search"]
+    # Not the identity-only collapse.
+    assert all(s["id"] != "ouroboros" for s in card["skills"])
+
+
+def test_last_good_cache_prevents_regression_to_empty():
+    """Once the card has populated, a later empty fetch must NOT regress it back
+    to the identity-only entry — the last known-good tool list is served."""
+    mod = _load_daemon()
+    ready = (200, {"tools": [{"function": {"name": "read_file", "description": "Read."}}]})
+    empty = (200, {"tools": []})
+    # First build populates the cache.
+    _install_get_tool_sequence(
+        mod,
+        identity=(200, {"ok": True, "name": "Wanderer", "description": "real desc"}),
+        tool_payloads=[ready],
+    )
+    first = mod._agent_card()
+    assert [s["id"] for s in first["skills"]] == ["read_file"]
+    # Now every subsequent fetch is empty — the card must still show the cached tools.
+    recs = _capture_warnings(mod)
+    _install_get_tool_sequence(
+        mod,
+        identity=(200, {"ok": True, "name": "Wanderer", "description": "real desc"}),
+        tool_payloads=[empty],
+    )
+    second = mod._agent_card()
+    assert [s["id"] for s in second["skills"]] == ["read_file"], second["skills"]
+    assert any("last known-good" in r for r in recs), recs
 
 
 def _run_all():
