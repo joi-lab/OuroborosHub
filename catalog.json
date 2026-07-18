@@ -182,23 +182,23 @@
       "version": "0.5.0"
     },
     {
-      "description": "Bounded, chart-free cache-efficiency snapshot from the Ouroboros usage ledger.",
+      "description": "Honest bounded-suffix cache-read analysis with token-weighted charts.",
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "82c02ae14f80018b5b973e57fc87e1828c0b2a7eb90fa9151b845924a9f9d230",
-          "size": 1578
+          "sha256": "315d70db95d352b9eaf0e5c5ca35cac289dd9f55b63b896bf8dc7914c11013f5",
+          "size": 2393
         },
         {
           "path": "plugin.py",
-          "sha256": "e5bdfc6a7d966459ace3230a6ecdc7ffcf4d2ee985b1d012f44aed0ea895da05",
-          "size": 12370
+          "sha256": "d4e122d299ec80cb85d4084f2e5f1e87270eb473f74d0e23b1d60549ecebe803",
+          "size": 18389
         }
       ],
       "name": "cache_efficiency_snapshot",
       "slug": "cache_efficiency_snapshot",
       "type": "extension",
-      "version": "0.1.0"
+      "version": "0.2.0"
     },
     {
       "description": "Web search via DuckDuckGo — free, no API key required. Returns titles, URLs, and snippets.",
