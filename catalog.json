@@ -325,6 +325,28 @@
       "version": "2.2.0"
     },
     {
+      "description": "Generate 3D scenes from satellite imagery using Sat3DGen (ICLR 2026). Sends a satellite image to the HuggingFace Space API and returns a textured 3D mesh (.obj) plus an interactive Three.js viewer.",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "sha256": "68984be7894d2240d66a9d061a1e0bf9f21708d3ce3b7533ff9969bf84345ce0",
+          "size": 1705
+        },
+        {
+          "path": "scripts/generate.py",
+          "sha256": "5f5a1ccfac035d1c6f433ccc927b84ad06608b855e25eade5c6fea6bba402495",
+          "size": 10291
+        }
+      ],
+      "install_specs": [
+        "gradio_client>=1.0"
+      ],
+      "name": "sat3dgen",
+      "slug": "sat3dgen",
+      "type": "script",
+      "version": "1.0.0"
+    },
+    {
       "description": "Bidirectional Telegram bot bridge for Ouroboros with configurable command modes, inline keyboard control panel, file/document delivery, and optional silent (edit-in-place) mirror.",
       "files": [
         {
