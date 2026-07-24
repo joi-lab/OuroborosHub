@@ -437,6 +437,116 @@
       "when_to_use": "User wants to communicate with Ouroboros through Telegram."
     },
     {
+      "description": "Automatic owner-only Telegram Mini App gateway for the unchanged Ouroboros SPA, using a temporary Cloudflare Quick Tunnel that terminates at a skill-owned Telegram-auth sidecar.",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "sha256": "bbcda3f2ef5d8cc12ec1acabed16c5eaa43f098f3a5f0833bf1ae44725a7e2b8",
+          "size": 6891
+        },
+        {
+          "path": "plugin.py",
+          "sha256": "e38bce12fb5db1ac41c1c84bc612d853e15ff478f2618dfcf68b27b213c2157f",
+          "size": 12070
+        },
+        {
+          "path": "scripts/cloudflare_tunnel.py",
+          "sha256": "841fcee437383edf0d97d9051de6e94f85dfec18913706142247828b8b7f02ed",
+          "size": 32446
+        },
+        {
+          "path": "scripts/companion.py",
+          "sha256": "ab0d97af77f3e52ed0de5084d3ebb162fc9f40363f2c5dd7416b12e85d54751e",
+          "size": 67225
+        },
+        {
+          "path": "scripts/platform_support.py",
+          "sha256": "62fcdc7ee305d9c74c61d63c4373c9771ea52b7e831ef8f14ec1ec7ea956546b",
+          "size": 12563
+        },
+        {
+          "path": "scripts/runtime_status.py",
+          "sha256": "6f18c538425efff6fb5ffe3376931c4f03803b5718101201b6590d5b7858826e",
+          "size": 5878
+        },
+        {
+          "path": "scripts/sidecar.py",
+          "sha256": "c17a2ca90a70865ffe30495281afed3ff61c6bd2258d6d882c42d0cf6eaa1e33",
+          "size": 39369
+        },
+        {
+          "path": "scripts/telegram_bridge_mode.py",
+          "sha256": "c1374cd1796732552072bf2232a2a6bff275854771ad3ab46e76f368f00d6e01",
+          "size": 14832
+        },
+        {
+          "path": "scripts/telegram_menu.py",
+          "sha256": "fc869b5cb137e30c83e01a7097aa3b021e2365c40244061ab0565bb32c5ba4ff",
+          "size": 17143
+        },
+        {
+          "path": "scripts/tunnel_watchdog.py",
+          "sha256": "3cdcdf4438fcb433d6c7bf6f1fcd2bfbf0cbec825a30ed9e2fdf32f2952afa49",
+          "size": 1882
+        },
+        {
+          "path": "tests/test_cloudflare_tunnel.py",
+          "sha256": "952eabeb6abce3cf7a02d4baad80db585ea0276d714e4d5362791dab716a15ed",
+          "size": 22380
+        },
+        {
+          "path": "tests/test_companion.py",
+          "sha256": "eb99ccd50eaf14f7f76c6208088a693ed87f38f519eeb32220bdff835b992e22",
+          "size": 23070
+        },
+        {
+          "path": "tests/test_lifecycle.py",
+          "sha256": "0d9d22b703da947c1801236509b60d9f244eedf9e717af0f7a05cb67c84655b5",
+          "size": 33899
+        },
+        {
+          "path": "tests/test_platform_support.py",
+          "sha256": "4778637a2aa9e50873d60a458ca70d09d46cee29c77f520042ad2f098c74633f",
+          "size": 3064
+        },
+        {
+          "path": "tests/test_plugin.py",
+          "sha256": "e4abc4516313843a6cfcb448247910275e032ff74dd117ac0bc2ff6eb0e5f94d",
+          "size": 7973
+        },
+        {
+          "path": "tests/test_runtime_status.py",
+          "sha256": "2aa0e6b66f479f57da725b81abfafb1658c40683da3043af7cd290e7989ff5fe",
+          "size": 2397
+        },
+        {
+          "path": "tests/test_sidecar.py",
+          "sha256": "2d54ff8d1fd3b1889e0c41f3ff0c40160d0f63d9d9a53128eef08736dab32a72",
+          "size": 23859
+        },
+        {
+          "path": "tests/test_telegram_bridge_mode.py",
+          "sha256": "95940b84cbd7dd23412e032b6cd97c7441a7611f3a0324c953041133d9cfce9e",
+          "size": 5106
+        },
+        {
+          "path": "tests/test_telegram_menu.py",
+          "sha256": "891909b56b340e6bd98384e1086cfb51a77209914392a6d54ba1cdab04d299df",
+          "size": 6724
+        },
+        {
+          "path": "tests/test_tunnel_watchdog.py",
+          "sha256": "8f6c2503a275ea45c533e4d24749301b689903ddae18b3174864971b5ec3716f",
+          "size": 3954
+        }
+      ],
+      "name": "telegram-miniapp-poc",
+      "slug": "telegram-miniapp-poc",
+      "type": "extension",
+      "version": "0.3.0",
+      "when_to_use": "The owner wants to open and fully control the current Ouroboros web interface inside the existing private Telegram bot without a domain, Cloudflare account, app-store installation, or manually copied URL."
+    },
+    {
       "description": "Generate a short video clip via OpenRouter's video generation API using Seedance 2.0 (bytedance/seedance-2.0). Output is saved to the skill state directory.",
       "files": [
         {
