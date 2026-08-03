@@ -54,7 +54,7 @@ from urllib.parse import urlsplit
 MCP_URL = "https://api.keenable.ai/mcp"
 PROTOCOL_VERSION = "2025-06-18"
 CLIENT_NAME = "ouroboros-keenable-skill"
-CLIENT_VERSION = "0.3.0"
+CLIENT_VERSION = "0.3.1"
 
 #: Per-request vendor timeout. Named on purpose: the 600s outer tool timeout is far
 #: too coarse, and a route handler must not hold the event loop for minutes.
@@ -199,6 +199,9 @@ _SEARCH_ARG_KEYS = (
     "published_after", "published_before", "snippet_max_length", "mode",
 )
 _FETCH_ARG_KEYS = ("url", "max_chars", "live", "prompt")
+#: Caller options that are validated like any other argument but are OURS -- they
+#: change what this skill returns and are never forwarded to the vendor.
+_LOCAL_ARG_KEYS = ("include_raw",)
 #: Date filters whose compliance is OBSERVABLE in the returned records, mapped to
 #: the record field that carries the comparable value. Both pairs are observable:
 #: a record carries ``acquired`` as well as ``published``, and v0.2.0 checked only
@@ -984,7 +987,79 @@ def observe_index_freshness(
     }
 
 
-def _vendor_arguments(source: Dict[str, Any], allowed: Tuple[str, ...]) -> Dict[str, Any]:
+#: The scalar CONTRACT for every vendor argument: what type it must be, and for a
+#: number, its inclusive range. One row per argument in ``_SEARCH_ARG_KEYS`` and
+#: ``_FETCH_ARG_KEYS``; an argument absent from this table is not forwarded at all.
+#:
+#: Why a table and not ad-hoc checks: the JSON schema guards ONLY the agent-tool
+#: path. The widget route (``_route_search``/``_route_fetch``) hands this client
+#: whatever ``request.json()`` decoded, and a direct import reaches it unvalidated
+#: too, so type enforcement cannot live in the schema -- exactly the reasoning that
+#: already put ``max_chars`` normalization in ``resolve_max_chars``. This is that
+#: same seam widened to the arguments it did not cover.
+#:
+#: The defect being closed: a non-string value used to pass through verbatim and
+#: then be copied verbatim into ``filters_requested``. Strings were never the hole
+#: -- every echoed string is bounded by ``clip``/``_bound_echo`` -- but a dict or
+#: list has no length bound and no clip path, and ``fit_envelope`` can only give
+#: back ``raw`` and ``results``. So a route posting a large object as
+#: ``snippet_max_length`` could push the response past both
+#: ``ENVELOPE_CHAR_BUDGET`` and the host's tool-result cap, and it would also be
+#: sent to the vendor. Rejecting a wrong TYPE outright removes the class; bounding
+#: it would instead invent a meaning for an argument the caller never validly sent.
+#:
+#: "text" carries no length limit here on purpose: ``query``/``prompt``/``url`` have
+#: their own dedicated, better-worded checks below, and every text echo is already
+#: bounded with disclosure. Adding a second ceiling would mean two rejection
+#: stories for one field.
+_ARG_TEXT = "text"
+_ARG_COUNT = "count"
+_ARG_FLAG = "flag"
+_ARG_NUMERIC = "numeric"
+#: Range for ``snippet_max_length``. The floor matches what ``_SEARCH_SCHEMA`` in
+#: ``plugin.py`` advertises to the agent: two different floors would mean the tool
+#: path and the widget route disagreed about the same argument, which is one
+#: contract described two ways -- the defect class this table exists to remove.
+VENDOR_SNIPPET_MIN_LENGTH = 180
+VENDOR_SNIPPET_MAX_LENGTH = 10000
+_ARG_SPECS: Dict[str, Tuple[str, Optional[int], Optional[int]]] = {
+    "query": (_ARG_TEXT, None, None),
+    "site": (_ARG_TEXT, None, None),
+    "acquired_after": (_ARG_TEXT, None, None),
+    "acquired_before": (_ARG_TEXT, None, None),
+    "published_after": (_ARG_TEXT, None, None),
+    "published_before": (_ARG_TEXT, None, None),
+    "mode": (_ARG_TEXT, None, None),
+    "url": (_ARG_TEXT, None, None),
+    "prompt": (_ARG_TEXT, None, None),
+    "snippet_max_length": (_ARG_COUNT, VENDOR_SNIPPET_MIN_LENGTH, VENDOR_SNIPPET_MAX_LENGTH),
+    "live": (_ARG_FLAG, None, None),
+    # LOCAL option, never forwarded to the vendor -- see `_LOCAL_ARG_KEYS`. It is in
+    # this table anyway because the contract is about what the CALLER may send, not
+    # about which arguments happen to travel onward: read as `bool(value)` it made
+    # the string "false" enable raw output, since every non-empty string is truthy.
+    "include_raw": (_ARG_FLAG, None, None),
+    # Deliberately only type-gated here: ``resolve_max_chars`` owns its semantics
+    # (omitted / over-ceiling / zero / negative / bool / float / numeric string)
+    # and discloses the outcome. This row exists so a dict or list cannot reach it.
+    "max_chars": (_ARG_NUMERIC, None, None),
+}
+
+
+def _vendor_arguments(
+    source: Dict[str, Any], allowed: Tuple[str, ...]
+) -> Tuple[Dict[str, Any], Optional["KeenableError"]]:
+    """Forward only allowed arguments, each proven to match its scalar contract.
+
+    Returns ``(arguments, error)``. A wrong type is a typed
+    ``keenable_bad_request`` with ``error_class: local_rejection`` -- refused before
+    any network leg and before any echo, so an invalid value is never sent to the
+    vendor and never lands in the response either.
+
+    The rejection message names the argument and the type that arrived, and
+    NEVER the value: the value is the unbounded thing being rejected, so quoting
+    it back would reintroduce the overflow inside the error that reports it.
+    """
     out: Dict[str, Any] = {}
     for key in allowed:
         if key not in source:
@@ -992,8 +1067,41 @@ def _vendor_arguments(source: Dict[str, Any], allowed: Tuple[str, ...]) -> Dict[
         value = source[key]
         if value is None or (isinstance(value, str) and not value.strip()):
             continue
-        out[key] = value.strip() if isinstance(value, str) else value
-    return out
+        kind, low, high = _ARG_SPECS.get(key, (_ARG_TEXT, None, None))
+        got = type(value).__name__
+        if kind == _ARG_TEXT:
+            if not isinstance(value, str):
+                return out, KeenableError(
+                    "keenable_bad_request", f"{key} must be a string, got {got}"
+                )
+            out[key] = value.strip()
+        elif kind == _ARG_FLAG:
+            if not isinstance(value, bool):
+                return out, KeenableError(
+                    "keenable_bad_request", f"{key} must be true or false, got {got}"
+                )
+            out[key] = value
+        elif kind == _ARG_COUNT:
+            # ``bool`` before ``int``: bool subclasses int in Python, so
+            # ``snippet_max_length=True`` would otherwise become a 1-character
+            # snippet -- the same trap ``resolve_max_chars`` documents.
+            if isinstance(value, bool) or not isinstance(value, int):
+                return out, KeenableError(
+                    "keenable_bad_request", f"{key} must be a whole number, got {got}"
+                )
+            if (low is not None and value < low) or (high is not None and value > high):
+                return out, KeenableError(
+                    "keenable_bad_request",
+                    f"{key} must be between {low} and {high}, got {value}",
+                )
+            out[key] = value
+        else:  # _ARG_NUMERIC -- scalar gate only; semantics live downstream.
+            if isinstance(value, (dict, list, tuple, set)):
+                return out, KeenableError(
+                    "keenable_bad_request", f"{key} must be a number, got {got}"
+                )
+            out[key] = value
+    return out, None
 
 
 def _bound_field(record: Dict[str, Any], field: str, limit: int) -> int:
@@ -1082,7 +1190,21 @@ def _bound_records(records: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]],
 def search(arguments: Dict[str, Any], key: str = "", transport: Optional[Transport] = None) -> Dict[str, Any]:
     """Normalized search envelope. Never raises for a vendor/transport failure."""
     auth = "api_key" if key else "keyless"
-    vendor_args = _vendor_arguments(arguments or {}, _SEARCH_ARG_KEYS)
+    # Normalized ONCE, here, rather than with `arguments or {}` at each use: the
+    # later `arguments.get("include_raw")` read the caller's object directly, so
+    # `search(None)` raised AttributeError from a line that looked incidental.
+    arguments = arguments if isinstance(arguments, dict) else {}
+    vendor_args, arg_error = _vendor_arguments(arguments, _SEARCH_ARG_KEYS)
+    if arg_error is not None:
+        return arg_error.to_dict("search_web_pages", auth)
+    # Local options go through the SAME contract. Validated here rather than read
+    # ad-hoc at the point of use, because `bool(arguments.get("include_raw"))` made
+    # every non-empty string truthy -- so `include_raw: "false"` from the widget
+    # route, which the JSON tool schema never sees, switched raw output ON.
+    local_args, local_error = _vendor_arguments(arguments, _LOCAL_ARG_KEYS)
+    if local_error is not None:
+        return local_error.to_dict("search_web_pages", auth)
+    include_raw = bool(local_args.get("include_raw", False))
     if not str(vendor_args.get("query") or "").strip():
         return KeenableError("keenable_bad_request", "query is required").to_dict("search_web_pages", auth)
     vendor_args.setdefault("snippet_max_length", DEFAULT_SNIPPET_MAX_LENGTH)
@@ -1114,6 +1236,13 @@ def search(arguments: Dict[str, Any], key: str = "", transport: Optional[Transpo
             if was_clipped:
                 filters_truncated[name] = total
         else:
+            # Bounded BY CONSTRUCTION, not by luck: `_ARG_SPECS` admits only a
+            # range-checked int or a bool on this branch, so the echo is at most a
+            # few characters. Before that contract existed this line copied an
+            # arbitrary caller object -- a dict or list with no length bound and no
+            # clip path -- into the response, and `fit_envelope` can only give back
+            # `raw` and `results`, so the envelope could exceed both its own budget
+            # and the host's cap through the one field nothing bounded.
             filters_requested[name] = value
     payload: Dict[str, Any] = {
         "ok": True,
@@ -1137,7 +1266,7 @@ def search(arguments: Dict[str, Any], key: str = "", transport: Optional[Transpo
     # Raw vendor text accompanies anything short of a clean full parse, so
     # discarded blocks stay inspectable instead of vanishing behind one good
     # record.
-    if bool(arguments.get("include_raw")) or accounting["parse_status"] != "records":
+    if include_raw or accounting["parse_status"] != "records":
         # Raw text takes whatever the SERIALIZED envelope still has room for, rather
         # than a fixed slice on top of everything else. Measured against the actual
         # payload, so it accounts for keys, syntax and every disclosure field.
@@ -1175,7 +1304,10 @@ def fetch(
     30159, and 18159 of them were thrown away by our own clip.
     """
     auth = "api_key" if key else "keyless"
-    vendor_args = _vendor_arguments(arguments or {}, _FETCH_ARG_KEYS)
+    arguments = arguments if isinstance(arguments, dict) else {}
+    vendor_args, arg_error = _vendor_arguments(arguments, _FETCH_ARG_KEYS)
+    if arg_error is not None:
+        return arg_error.to_dict("fetch_page_content", auth)
     if not str(vendor_args.get("url") or "").strip():
         return KeenableError("keenable_bad_request", "url is required").to_dict("fetch_page_content", auth)
     prompt = str(vendor_args.get("prompt") or "")
