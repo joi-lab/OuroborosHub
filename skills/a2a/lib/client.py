@@ -2,13 +2,37 @@ from __future__ import annotations
 
 import json
 import os
+import urllib.parse
 import uuid
 from typing import Any, Dict
 
 
-def _auth():
+def _origin(url: str) -> str:
+    """Normalized scheme://host:port, or "" when the URL is not usable http(s)."""
+    parsed = urllib.parse.urlsplit(str(url or "").strip())
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        return ""
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    return f"{parsed.scheme}://{parsed.hostname.lower()}:{port}"
+
+
+def _auth_for(url: str):
+    """Peer credentials are bound to ONE operator-configured origin.
+
+    A process-wide credential attached to every caller-supplied URL meant a
+    model-selected or otherwise untrusted peer address received the global peer
+    password — an outbound secret leak to an arbitrary host. The credential is now
+    sent ONLY when the request's origin exactly matches the origin of the
+    explicitly configured A2A_CLIENT_PEER_URL; every other peer is contacted
+    anonymously. Both values are ordinary process configuration for the client
+    tools, not forwarded core settings (env_from_settings stays empty).
+    """
     password = os.environ.get("A2A_CLIENT_PASSWORD", "").strip()
-    return ("ouroboros", password) if password else None
+    expected = _origin(os.environ.get("A2A_CLIENT_PEER_URL", ""))
+    target = _origin(url)
+    if not password or not expected or not target or target != expected:
+        return None
+    return ("ouroboros", password)
 
 
 def discover(url: str) -> str:
@@ -21,7 +45,7 @@ def discover(url: str) -> str:
     last_err: Any = None
     for path in ("/.well-known/agent-card.json", "/.well-known/agent.json"):
         try:
-            response = httpx.get(f"{base}{path}", auth=_auth(), timeout=10)
+            response = httpx.get(f"{base}{path}", auth=_auth_for(base), timeout=10)
             response.raise_for_status()
             card = response.json()
             break
@@ -60,7 +84,7 @@ def send(url: str, message: str, task_id: str = "", context_id: str = "") -> str
         "params": {"message": msg},
     }
     try:
-        response = httpx.post(f"{base}/", json=payload, auth=_auth(), timeout=120)
+        response = httpx.post(f"{base}/", json=payload, auth=_auth_for(base), timeout=120)
         response.raise_for_status()
         data = response.json()
     except Exception as exc:
@@ -80,7 +104,7 @@ def status(url: str, task_id: str) -> str:
         "params": {"id": str(task_id or "")},
     }
     try:
-        response = httpx.post(f"{base}/", json=payload, auth=_auth(), timeout=30)
+        response = httpx.post(f"{base}/", json=payload, auth=_auth_for(base), timeout=30)
         response.raise_for_status()
         data = response.json()
     except Exception as exc:
