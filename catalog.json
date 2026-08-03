@@ -253,13 +253,13 @@
         },
         {
           "path": "SKILL.md",
-          "sha256": "8066ede42c15cdb38d2b20fd23ce3cbe09a2b69d45b4f4eb2536e48e3db7556e",
-          "size": 19586
+          "sha256": "4007f6659ee037546c8e16fa926db0ececc8dc6da0319d20be595feecf8bacf3",
+          "size": 23587
         },
         {
           "path": "keenable_client.py",
-          "sha256": "a07de9f82d5c6c2d380fe051829be7160e72b33e49dd93b70b974a8471a20258",
-          "size": 56302
+          "sha256": "40cac213d4dd30c80ba2c4ab52402829bc5c19c951e143a6a2a3b37a7e7c8b70",
+          "size": 63845
         },
         {
           "path": "plugin.py",
@@ -268,14 +268,14 @@
         },
         {
           "path": "verify_envelope_bounds.py",
-          "sha256": "74ffe416b449f49a6d7ece3c84f2e6058f72ed0e39a0c8aa3744e7c04fd12fdf",
-          "size": 13173
+          "sha256": "ba2b15943115a088d01e035246f0f81f86a9b3fa23ac968ece4a30310190ee9d",
+          "size": 17569
         }
       ],
       "name": "keenable",
       "slug": "keenable",
       "type": "extension",
-      "version": "0.3.0",
+      "version": "0.3.1",
       "when_to_use": "The user wants web search or page extraction through Keenable, especially for fresh pages, site-scoped or date-filtered retrieval, or an LLM-extracted summary of one page."
     },
     {

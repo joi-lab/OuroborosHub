@@ -270,6 +270,88 @@ _check("dropped_records_stay_accounted",
        search_trimmed["count"] + search_trimmed["results_omitted"] == 12,
        (search_trimmed["count"], search_trimmed["results_omitted"]))
 
+# The ARGUMENT CONTRACT. Every bound above governs text we RETAIN; this section
+# governs what is allowed IN. The two are one guarantee: a non-scalar argument used
+# to be forwarded verbatim and echoed verbatim into `filters_requested`, which has
+# no length bound and no clip path, and `fit_envelope` can only give back `raw` and
+# `results` -- so the one unbounded field could carry the envelope past both its own
+# budget and the host cap. These cases need no transport: a rejection must happen
+# BEFORE any network leg, and passing a transport that would answer anyway is how a
+# test proves the weaker claim by accident.
+_HUGE = {"payload": ["x" * 5000] * 4}
+
+
+def _rejects(name: str, envelope: dict, *, tool: str) -> None:
+    """A rejection must be typed, local, and free of the value it rejected."""
+    body = json.dumps(envelope, ensure_ascii=False)
+    _check(name, (
+        envelope.get("ok") is False
+        and envelope.get("error") == "keenable_bad_request"
+        and envelope.get("error_class") == "local_rejection"
+        and envelope.get("tool") == tool
+        and "xxxxx" not in body
+        and len(body) <= kc.ENVELOPE_CHAR_BUDGET
+    ), (envelope.get("error"), envelope.get("error_class"), len(body)))
+
+
+_rejects("search: object as snippet_max_length refused",
+         kc.search({"query": "q", "snippet_max_length": _HUGE}), tool="search_web_pages")
+_rejects("search: object as site refused",
+         kc.search({"query": "q", "site": _HUGE}), tool="search_web_pages")
+_rejects("search: snippet_max_length above vendor max refused",
+         kc.search({"query": "q", "snippet_max_length": kc.VENDOR_SNIPPET_MAX_LENGTH + 1}),
+         tool="search_web_pages")
+_rejects("search: bool as snippet_max_length refused",
+         kc.search({"query": "q", "snippet_max_length": True}), tool="search_web_pages")
+_rejects("fetch: object as max_chars refused",
+         kc.fetch({"url": "https://example.com", "max_chars": _HUGE}), tool="fetch_page_content")
+_rejects("fetch: string as live refused",
+         kc.fetch({"url": "https://example.com", "live": "yes"}), tool="fetch_page_content")
+
+_rejects("search: string as include_raw refused",
+         kc.search({"query": "q", "include_raw": "false"}), tool="search_web_pages")
+_rejects("search: object as include_raw refused",
+         kc.search({"query": "q", "include_raw": _HUGE}), tool="search_web_pages")
+
+# `include_raw` is a LOCAL option, so the contract has to hold for what it DOES, not
+# only for what it refuses. `bool("false")` is True in Python, so the string form
+# used to switch raw output on; a real `False` must leave it off, and a real `True`
+# must still turn it on.
+kc.reset_session_cache()
+raw_off = kc.search({"query": "q", "include_raw": False}, transport=_transport(_records(2)))
+_check("include_raw_false_keeps_raw_out", "raw" not in raw_off, sorted(raw_off)[:6])
+kc.reset_session_cache()
+raw_on = kc.search({"query": "q", "include_raw": True}, transport=_transport(_records(2)))
+_check("include_raw_true_still_adds_raw", bool(raw_on.get("raw")), raw_on.get("parse_status"))
+
+# One argument, one range: the client floor must equal what the tool schema
+# advertises, or the two call paths disagree about the same field.
+_rejects("search: snippet_max_length below advertised floor refused",
+         kc.search({"query": "q", "snippet_max_length": kc.VENDOR_SNIPPET_MIN_LENGTH - 1}),
+         tool="search_web_pages")
+
+# The contract must not have become a wall: a VALID call still reaches the vendor
+# and still echoes exactly what was sent.
+kc.reset_session_cache()
+valid = kc.search(
+    {"query": "q", "site": "example.com", "snippet_max_length": 400, "mode": "pro"},
+    transport=_transport(_records(2)),
+)
+_check("valid_scalars_still_pass_through",
+       valid.get("ok") is True
+       and valid["filters_requested"].get("snippet_max_length") == 400
+       and valid["filters_requested"].get("mode") == "pro",
+       valid.get("filters_requested"))
+
+# `search(None)` used to raise AttributeError from the `include_raw` read, not from
+# any line that looked like it touched the caller's object.
+_check("search_none_is_a_typed_error_not_a_crash",
+       kc.search(None).get("error") == "keenable_bad_request",
+       kc.search(None).get("error"))
+_check("fetch_none_is_a_typed_error_not_a_crash",
+       kc.fetch(None).get("error") == "keenable_bad_request",
+       kc.fetch(None).get("error"))
+
 print()
 if _failures:
     print("FAILED (%d):" % len(_failures))

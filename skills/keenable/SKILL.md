@@ -1,7 +1,7 @@
 ---
 name: keenable
 description: Keenable web search and page fetch over the vendor's keyless MCP endpoint.
-version: 0.3.0
+version: 0.3.1
 type: extension
 runtime: python3
 entry: plugin.py
@@ -133,6 +133,43 @@ accident. Read any new field against it.
   vendor text accompanies everything except a clean `records` parse, and
   `include_raw: true` adds it to that case too.
 
+### Added in v0.3.1
+
+**Every argument now has a declared scalar type, checked before anything is sent.**
+`_ARG_SPECS` in `keenable_client.py` is one row per accepted argument: text, a
+range-checked whole number (`snippet_max_length`, 180–10000 — the same floor the
+agent-facing schema advertises, so the two call paths cannot disagree about one
+field), a boolean (`live`, `include_raw`), or a number whose semantics belong to
+`resolve_max_chars` (`max_chars`). `include_raw` is in the table even though it is
+a LOCAL option that never reaches the vendor, because the contract is about what
+the caller may send rather than about which arguments travel onward: read as
+`bool(value)` it made the string `"false"` switch raw output **on**, since every
+non-empty string is truthy in Python. A wrong type is
+a typed `keenable_bad_request` with `error_class: local_rejection`, refused before
+any network leg and before any echo — so an invalid value is neither purchased from
+the vendor nor reflected back in the response. The rejection names the argument and
+the type that arrived and deliberately never quotes the value, since the value is
+the unbounded thing being rejected.
+
+Why this mattered: the JSON schema guards only the agent-tool path. The widget route
+hands the client whatever `request.json()` decoded, so a non-scalar value used to
+pass straight through and be copied verbatim into `filters_requested` — a field with
+no length bound and no clip path, while `fit_envelope` can only give back `raw` and
+`results`. A large object posted as `snippet_max_length` could therefore carry the
+response past both the skill's own budget and the host's cap through the one field
+nothing bounded. This is the same reasoning that already put `max_chars`
+normalization in `resolve_max_chars`, applied to the arguments it did not cover.
+
+`search(None)` and `fetch(None)` now return that typed error instead of raising
+`AttributeError`. Both are unreachable from the two registered call paths, but the
+crash came from an incidental-looking `arguments.get("include_raw")` read rather
+than from the line that appeared to touch the caller's object, so the argument is
+normalized once at entry. Fourteen new checks in `verify_envelope_bounds.py` cover
+the refusals, the range and bool traps, both `None` paths, and — importantly — that
+a valid call still passes through and still echoes exactly what was sent, plus that
+`include_raw: False` really keeps `raw` out while `True` still adds it. The contract
+has to be provably not a wall, not just a filter.
+
 ### Added in v0.3.0
 
 All additive — no field was renamed or removed, so a v0.2.0 caller keeps working.
@@ -155,8 +192,9 @@ top of the records, echoed values (`url`, `query`, filters, and the vendor's own
 than on the parts we thought of, and `fit_envelope` measures the real serialized
 payload as a final gate. A failure `message` is bounded too, since it carries vendor
 text and `error_class: not_read` must survive. `verify_envelope_bounds.py` ships in the
-payload and asserts ten shapes — run `python3 verify_envelope_bounds.py` from the
-skill directory.
+payload and asserts 45 checks — 12 of them full serialized-size shapes — printing
+each and exiting nonzero on any failure. Run `python3 verify_envelope_bounds.py`
+from the skill directory.
 The cold path is now bounded as an
 operation rather than per leg (see Transport above), closing the case where three
 45-second legs could overrun the 90-second timeout the tools are registered with.
@@ -176,11 +214,27 @@ hide the "N results omitted" sentence whenever nothing happened to be clipped.
 | `filters` / "Filters applied" | `filters_requested` / "Filters requested" + `filter_observations` | We know what we sent, never that the vendor enforced it. |
 | `parsed` (bool) | `parse_status` (4 states) | `true` meant "at least one record parsed" and hid discarded blocks. |
 
-`max_chars` above **12000** is now clamped, disclosed
+`max_chars` above the skill's ceiling is now clamped, disclosed
 (`max_chars_requested` / `max_chars_effective` / `max_chars_clamped`), and the
 clamped value is what is sent to the vendor. Measured 2026-08-03: a request for
 30000 made the vendor deliver 30159 characters, of which this skill silently
 discarded 18159. We no longer pay for text we throw away.
+
+**That ceiling is 9500, and the number is measured rather than chosen.** It is
+`CONTENT_CHAR_LIMIT` in `keenable_client.py`, it is ours and not the vendor's, and
+it is not a guess at "enough text": it is the largest page body that still lets the
+whole *serialized* envelope fit under the host's 15000-character tool-result cap.
+At 12000 — the v0.2.0 value — a full page measured 15099 serialized characters, so
+the host would have truncated an envelope whose entire purpose is that *its* bounds
+are the disclosed ones, and `content_truncated_by_skill` would have said `false`
+while the agent received a cut response. The fetch envelope's own overhead is
+~3100 characters because it echoes the extraction prompt (up to 2000) beside the
+url, the served metadata and the disclosure fields. 9500 measures at 12597 with
+~2400 to spare, and `verify_envelope_bounds.py` asserts exactly that, so raising it
+fails the check instead of silently reintroducing host truncation. The vendor can
+deliver far more (30159 measured), so this is a context-cost bound, not a vendor
+limit — if you want more page text per call, the honest lever is a larger host
+tool-result window, not a larger ceiling under the same one.
 
 One consequence worth stating, because an unexamined always-false field is how
 the original incident began: since we never request more than we keep,
@@ -285,8 +339,9 @@ Recorded so a stale warning does not cost the next researcher calls:
 - A nonsense query returns ten loosely-matched results rather than
   "No results found", so the empty-answer path could not be triggered live. It is
   still handled as `parse_status: "no_records"`.
-- `max_chars > 12000` was not silently ignored by the vendor — see above; that
-  ceiling was ours.
+- `max_chars` above our ceiling was not silently ignored by the vendor — see above.
+  That ceiling was ours all along (12000 then, 9500 now, for the serialized-size
+  reason given above); the vendor happily delivered 30159 characters.
 
 ## Widget
 
