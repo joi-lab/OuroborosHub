@@ -34,6 +34,12 @@ def _make_settings_save(api):
             "A2A_AGENT_DESCRIPTION",
             "A2A_MAX_CONCURRENT",
             "A2A_RESPONSE_TIMEOUT_SEC",
+            "A2A_ALLOCATE_TIMEOUT_SEC",
+            "A2A_STREAM_DEADLINE_SEC",
+            "A2A_PROGRESS_POLL_SEC",
+            "A2A_HEARTBEAT_SEC",
+            "A2A_PROGRESS_ENRICH",
+            "A2A_GATEWAY_URL",
             "A2A_TASK_TTL_HOURS",
             "A2A_SERVER_PASSWORD",
         }
@@ -60,6 +66,9 @@ def register(api):
             url, message, task_id=task_id, context_id=context_id
         ),
         description="Send a message to another A2A-compatible agent.",
+        # lib/client.py::send allows httpx 120s, so the default 60s tool timeout
+        # would kill a slow-but-successful peer response before it could return.
+        timeout_sec=130,
         schema={
             "type": "object",
             "properties": {
@@ -97,7 +106,10 @@ def register(api):
                         {"name": "A2A_AGENT_NAME", "label": "Agent name", "type": "text"},
                         {"name": "A2A_AGENT_DESCRIPTION", "label": "Description", "type": "textarea"},
                         {"name": "A2A_MAX_CONCURRENT", "label": "Max concurrent inbound requests", "type": "number", "placeholder": "5"},
-                        {"name": "A2A_RESPONSE_TIMEOUT_SEC", "label": "Response timeout seconds", "type": "number", "placeholder": "600"},
+                        {"name": "A2A_RESPONSE_TIMEOUT_SEC", "label": "Host response wait seconds (max 1740)", "type": "number", "placeholder": "600"},
+                        {"name": "A2A_STREAM_DEADLINE_SEC", "label": "Total per-message deadline seconds", "type": "number", "placeholder": "3600"},
+                        {"name": "A2A_HEARTBEAT_SEC", "label": "Working-status heartbeat seconds", "type": "number", "placeholder": "25"},
+                        {"name": "A2A_PROGRESS_ENRICH", "label": "Stream host progress notes (1/0)", "type": "text", "placeholder": "1"},
                         {"name": "A2A_SERVER_PASSWORD", "label": "Server password for non-loopback binds", "type": "password"},
                     ],
                     "submit_label": "Save A2A settings",
