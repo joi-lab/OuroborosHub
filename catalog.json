@@ -99,8 +99,8 @@
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "2fa4fcdd002383529cad26f6f4e40135f91c295c8fcecd1ab5a4490392f4c0fe",
-          "size": 9580
+          "sha256": "9f809124a4b081ff300ac130d508f679801684dd5bf03969766b14fcef525c7d",
+          "size": 32015
         },
         {
           "path": "__init__.py",
@@ -109,23 +109,43 @@
         },
         {
           "path": "api_client.py",
-          "sha256": "49b8ba023b52cc99d5a065e10e809cc21c9e70b75ba37f6c0468a8935f51f5fc",
-          "size": 34549
+          "sha256": "7f9c3b9239f811db979f7399afbc9843017d6a2f2e377c36e64d31b126e114b3",
+          "size": 44178
+        },
+        {
+          "path": "budget.py",
+          "sha256": "252d8e3560f56dde9049b778d1eabf1a52298dad760536c3b2f08d3df052e0fd",
+          "size": 8087
         },
         {
           "path": "ffmpeg_bootstrap.py",
-          "sha256": "7834ff3bb3af3dc2bc0420efde131a428a4f1c5ced10d02a61d9dd1dd62ed7b7",
-          "size": 9737
+          "sha256": "33d0c864f2ac1eed18df9770e79f72c7956f4f62677d08ff92adf89003f9838a",
+          "size": 3053
+        },
+        {
+          "path": "host_bridge.py",
+          "sha256": "f9f8fc66304f8091e06ab48617cc53339a5e4de9fc831f69cf7556e4170cdf54",
+          "size": 6526
+        },
+        {
+          "path": "judges.py",
+          "sha256": "6f660b6ea0bdcc79f52ce93e56719a6e08543b10bde6fad887563188631cc2ee",
+          "size": 18882
         },
         {
           "path": "models.py",
-          "sha256": "4c252f008f41b7cce41802eb9eaf3d58f175184bd4d398db370c5098bb6ff387",
-          "size": 6565
+          "sha256": "17a25a6510b4e5924e6fc4a5691a0203de0b69d829bc454e9d51a26c99e21990",
+          "size": 7517
+        },
+        {
+          "path": "modes.py",
+          "sha256": "bd8e691838066c3cd71456dc05beac769793a13424bf33a5c4054ac578555b91",
+          "size": 2357
         },
         {
           "path": "pipeline.py",
-          "sha256": "355e782e66999a3f8fb3185ea8af2e7217fc21e3f8a57cd1f0be9c6d366d19a9",
-          "size": 64009
+          "sha256": "e63dbca11197257ebfa04416b2984b0d8ef9a8a08f116339ebd06a049557ea47",
+          "size": 146684
         },
         {
           "path": "pipeline_test.txt",
@@ -134,23 +154,23 @@
         },
         {
           "path": "plugin.py",
-          "sha256": "8ab6a5f0b43cfc2ed0bf40e1f74a8170955ef8045f57ce0021e101d035e9faca",
-          "size": 16777
+          "sha256": "e42f7afb825f4ec53dcd51fea0a3f9e223fa1193fc6afddf88aa5dd670333189",
+          "size": 24518
         },
         {
           "path": "prompts.py",
-          "sha256": "2e4330bef6f4527d1492b106a97b76fee891134a50aff020def236608aeccae1",
-          "size": 15149
+          "sha256": "eeacb5ead77aff1e8265ba1b0a994b0372be47abb23efa4e3cebcb4f01533b27",
+          "size": 19256
         },
         {
           "path": "scripts/anime_worker.py",
-          "sha256": "6d81d3dab03051ad69680fa93d4337bf95f60498cbd3a09d5f9e8fbc12b60281",
-          "size": 7998
+          "sha256": "b2ac92acaf769a82f8353bea19689738031131b24a971c2c48acdc16a864e1ef",
+          "size": 18358
         },
         {
           "path": "tests/test_api_client_vlm_helpers.py",
-          "sha256": "05664cbe3999ab66af4b3732d575376ae0c2387d3b8201ab3d3b5c3033915b03",
-          "size": 1139
+          "sha256": "6fed5827bb42cad919a301789785ae0a831daf67029555358004a6841d78fb25",
+          "size": 1616
         }
       ],
       "install_specs": [
@@ -159,7 +179,7 @@
       "name": "anime_studio",
       "slug": "anime_studio",
       "type": "extension",
-      "version": "2.12.0",
+      "version": "3.2.0",
       "when_to_use": "User wants to generate a short animated 2D anime cartoon, music video, or animated scene with consistent characters, VLM verification, and narrative continuity."
     },
     {

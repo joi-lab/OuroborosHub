@@ -49,7 +49,8 @@ SCENARIO_USER_TEMPLATE = """Create a detailed storyboard for a short anime carto
       "camera_direction": "string — specific camera movement/framing (e.g. 'medium shot, slow zoom in on face', 'wide establishing shot, pan left to right')",
       "dialogue": "string or null — spoken text for this scene",
       "mood": "string — emotional tone",
-      "transition_from": "string or null — how this scene connects visually/narratively from the previous scene (null for first scene only). Example: 'cut from the sword gleaming to character's determined eyes' or 'camera pulls back to reveal the city below'"
+      "transition_from": "string or null — how this scene connects visually/narratively from the previous scene (null for first scene only). Example: 'cut from the sword gleaming to character's determined eyes' or 'camera pulls back to reveal the city below'",
+      "causal_link": "string or null — WHY this scene follows from the previous one, in BECAUSE OF THAT / BUT form. Example: 'BUT the bridge collapses, so she must jump' or 'BECAUSE OF THAT the serpent wakes'. Never a mere 'AND THEN'. null for the first scene only."
     }}
   ],
   "music_cues": [
@@ -77,6 +78,8 @@ SCENARIO_USER_TEMPLATE = """Create a detailed storyboard for a short anime carto
 10. Create 2-4 locations max
 11. Each scene (except the first) MUST have a "transition_from" describing the visual/narrative bridge from the previous scene. This is critical for animation continuity.
 12. Scenes should describe MOVEMENT and ACTION — not static poses. Think "character walks forward and draws sword" not "character holding sword"
+13. Every scene except the first MUST have a "causal_link" in BECAUSE OF THAT / BUT form. A storyboard whose scenes are joined only by "AND THEN" is a FAILURE — each scene must be CAUSED by the one before it.
+14. Structure the whole piece as setup -> complication -> escalation -> climax/resolution across the available scenes, so the final scene pays off the first one. The ending must land, not just stop.
 
 Respond with ONLY the JSON object, no markdown fences, no explanation."""
 
@@ -146,7 +149,9 @@ VIDEO_PROMPT_TEMPLATE = """Animate this 2D anime scene:
 
 {scene_description}
 
-Characters in this scene:
+{reference_block}
+
+Characters in this scene (text paraphrase of the reference images above):
 {characters_identity_block}
 
 Camera movement: {camera_direction}
@@ -158,7 +163,8 @@ Duration: {duration_sec} seconds
 
 REQUIREMENTS:
 - Smooth 2D anime animation with fluid character motion
-- Characters must maintain their exact visual identity throughout
+- Every character must look EXACTLY like their attached CHARACTER SHEET image;
+  the text paraphrase above never overrides the image
 - Natural movement and expressions, NOT static poses
 - Cinematic quality framing and lighting
 
@@ -167,6 +173,85 @@ NEGATIVE CONSTRAINTS (NEVER include these):
 - NO random letters, NO floating text, NO title cards, NO UI elements
 - NO gibberish text, NO signs with readable text, NO speech bubbles
 - NO logo, NO brand marks, NO timecodes"""
+
+
+# The ONLY fields VIDEO_PROMPT_TEMPLATE accepts. build_video_prompt owns the
+# single .format() call for it (see below) — do not add a second call site.
+VIDEO_PROMPT_FIELDS = (
+    "scene_description",
+    "reference_block",
+    "characters_identity_block",
+    "camera_direction",
+    "mood",
+    "style",
+    "duration_sec",
+    "continuity_note",
+)
+
+
+def build_video_prompt(**fields) -> str:
+    """The single seam that renders VIDEO_PROMPT_TEMPLATE.
+
+    Three call sites previously each ran their own .format(), so adding a
+    placeholder meant remembering to update all three — discipline, not
+    structure, and the same divergence class that left the regenerate path
+    assembling weaker references than the main path. Routing every caller
+    through one function makes a forgotten field impossible instead of merely
+    checked: a missing OR unknown field raises here, loudly, at the call site.
+    """
+    missing = [k for k in VIDEO_PROMPT_FIELDS if k not in fields]
+    if missing:
+        raise KeyError(
+            f"build_video_prompt missing required field(s): {', '.join(missing)}"
+        )
+    unknown = [k for k in fields if k not in VIDEO_PROMPT_FIELDS]
+    if unknown:
+        raise KeyError(
+            f"build_video_prompt got unknown field(s): {', '.join(unknown)}"
+        )
+    return VIDEO_PROMPT_TEMPLATE.format(**fields)
+
+
+def build_reference_block(labels) -> str:
+    """Bind the attached reference images to the prompt, or say plainly there are none.
+
+    THIS IS THE FIX FOR THE OWNER'S COMPLAINT. The images were already being
+    sent in `input_references`, but the prompt never mentioned them while
+    telling the model to follow the text description — so a scene could come
+    back looking generated from text alone. A live colour-discrimination probe
+    (references [RED, BLUE], prompt commanding "@Image2", measured mean RGB
+    R=0 G=25 B=229 = pure blue) proved @ImageN really does resolve to
+    input_references submission order over OpenRouter, so naming them works.
+
+    Labels are INDEX-REDUNDANT on purpose: each one repeats the character's
+    identity in prose, so if numbering were ever mis-resolved the label still
+    anchors WHO the image shows rather than degrading to noise.
+
+    Authority is scoped BY KIND, not globally: a location plate or a continuity
+    frame must not override the scene's action, camera direction or dialogue.
+    """
+    labels = [str(x) for x in (labels or []) if str(x).strip()]
+    if not labels:
+        return (
+            "ATTACHED REFERENCE IMAGES: NONE.\n"
+            "No visual reference reached this request, so the text paraphrase below "
+            "is the only identity source. Treat it as literally as possible."
+        )
+    return (
+        "ATTACHED REFERENCE IMAGES — these are the AUTHORITATIVE source for how "
+        "things LOOK. Do not invent an appearance:\n"
+        + "\n".join(labels)
+        + "\nHow to use them:\n"
+        "- A CHARACTER SHEET image defines that character's face, hairstyle, hair "
+        "colour, eye colour, outfit and accessories. Reproduce those features "
+        "EXACTLY. The text paraphrase below only describes the same image and must "
+        "never override it.\n"
+        "- A LOCATION image defines the environment design only.\n"
+        "- A CONTINUITY FRAME shows how the previous shot ended: keep the same "
+        "character appearance and art style across the cut.\n"
+        "- The scene text above still decides the ACTION, camera movement and "
+        "dialogue — the images decide appearance, not behaviour."
+    )
 
 
 MUSIC_PROMPT_TEMPLATE = """Compose a short instrumental piece for an anime scene:
@@ -201,35 +286,21 @@ VLM_VERIFY_IMAGE_PROMPT = """Analyze this generated anime image against the orig
 5. **Composition**: Is the framing/camera direction approximately correct?
 
 ## Output JSON (only this, nothing else):
-{{"passed": true/false, "issues": ["list of specific problems found"], "suggestion": "one-sentence prompt improvement if regenerating"}}
+{{"passed": true/false, "score": 0-10, "issues": ["list of specific problems found"], "suggestion": "one-sentence prompt improvement if regenerating"}}
+
+"score" is REQUIRED: 0 = unusable, 7 = acceptable, 10 = flawless. "passed" MUST equal (score >= 7).
+The score is used to pick the best of several candidates, so it must discriminate between a
+near-miss and a badly wrong image — do not collapse every failure to the same number.
 
 Be STRICT about everything. Minor variations that indicate a different character (different hair,
 wrong outfit, missing accessories) are FAILURES. Only tolerate very minor artistic interpretation
 differences that don't affect identity."""
 
 
-VLM_VERIFY_VIDEO_PROMPT = """Analyze these frames extracted from a generated anime video clip.
-
-## Expected Scene:
-{scene_description}
-
-## Expected Characters:
-{characters_description}
-
-## Style: {style}
-## Camera Direction: {camera_direction}
-
-## Check STRICTLY:
-1. **Character Identity**: Are the characters recognizable and matching their descriptions? Same hair, outfit, features across all frames?
-2. **Text Artifacts**: Are there ANY random text overlays, subtitles, watermarks, floating letters, or gibberish text visible? This is a CRITICAL failure.
-3. **Animation Quality**: Is the motion fluid? No frozen frames, sudden teleportation, or extreme morphing?
-4. **Style Consistency**: Is the visual style consistently 2D anime throughout? No photorealistic segments?
-5. **Scene Fidelity**: Does the video depict the described action and camera movement?
-
-## Output JSON (only this, nothing else):
-{{"passed": true/false, "score": 0-10, "issues": ["list of specific problems"], "suggestion": "one-sentence improvement for regeneration prompt"}}
-
-IMPORTANT: Score 7+ = passed. Text artifacts or wrong character identity = automatic score 0."""
+# VLM_VERIFY_VIDEO_PROMPT was DELETED in v3.1 together with its only consumer,
+# api_client.verify_video_vlm (unreachable, and fail-open by default). Live video
+# verification is Pipeline._verify_video_multidim, whose prompt is
+# VLM_VERIFY_VIDEO_MULTIDIM_PROMPT.
 
 
 SCENE_TRANSITION_TEMPLATE = """CONTINUITY CONTEXT:
@@ -300,7 +371,8 @@ CRITICAL RULES:
 
 
 CROSS_SCENE_IDENTITY_CHECK_PROMPT = """You are reviewing frames from DIFFERENT SCENES of the same anime video.
-Each image is one representative frame from a different scene, shown in order.
+You are given exactly {frame_count} image(s) — one representative frame per compared
+scene, in order. For your answer the frames are numbered 0-based: {frame_labels}
 
 ## Characters that should appear consistently:
 {characters_description}
@@ -321,7 +393,9 @@ Look for:
 RULES:
 - "minor" = slight proportion drift but character is recognizable
 - "major" = character looks like a different person in some scenes
-- worst_scene_index is 0-based, null if consistent
+- worst_scene_index must be null if consistent, otherwise EXACTLY one of the 0-based
+  frame indices listed above ({frame_labels}). Never count from 1, and never name a
+  scene you were not shown: you can only judge the {frame_count} frame(s) given.
 - Only check characters, not backgrounds (locations naturally change between scenes)"""
 
 
