@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import json
 import logging
 import re
@@ -25,6 +26,75 @@ VLM_MAX_IMAGES = 6
 VLM_RETRIES = 2
 VLM_RETRY_STATUS = {400, 408, 409, 425, 429, 500, 502, 503, 504}
 CHAT_RETRIES = 2
+
+
+def _describe_media_entry(entry) -> dict:
+    """Redacted description of ONE input_references / frame_images entry.
+
+    Deliberately carries no payload: a base64 data: URL is many megabytes of
+    image and must never reach a log. What survives is exactly enough to prove
+    an image of a given size really was attached, plus a sha256 prefix so the
+    same asset can be recognised across scenes without revealing it.
+    """
+    if not isinstance(entry, dict):
+        return {"type": "malformed", "url_scheme": "", "bytes": 0}
+    url = ((entry.get("image_url") or {}).get("url") or "") if isinstance(
+        entry.get("image_url"), dict
+    ) else ""
+    out = {
+        "type": entry.get("type") or ("frame" if entry.get("frame_type") else "unknown"),
+        "url_scheme": url.split(":", 1)[0].lower() if ":" in url else "",
+        "bytes": len(url),
+    }
+    if entry.get("frame_type"):
+        out["frame_type"] = entry["frame_type"]
+    if url.startswith("data:"):
+        header, _, b64 = url.partition(",")
+        out["mime"] = header[5:].split(";", 1)[0]
+        out["bytes"] = len(b64)
+        out["sha256_prefix"] = hashlib.sha256(b64.encode()).hexdigest()[:12]
+    elif url:
+        # Never log the URL itself — it can carry a signed token.
+        out["sha256_prefix"] = hashlib.sha256(url.encode()).hexdigest()[:12]
+    return out
+
+
+def _describe_video_request(payload: dict) -> dict:
+    """Redacted, host-loggable summary of a /videos request body.
+
+    The owner asked for proof that the character sheet and the previous approved
+    frame are REALLY in the request rather than a claim that the source code
+    says so. This is that proof, and it is bound to the actual dict about to be
+    POSTed rather than to the intent that built it.
+
+    The prompt itself is NOT logged: it contains owner-authored theme and
+    dialogue text, so bounding it would not make it redacted. Its length, a
+    digest, and a structural check that the @ImageN tokens are present are
+    enough to verify the binding without disclosing the story.
+    """
+    prompt = payload.get("prompt") or ""
+    refs = payload.get("input_references") or []
+    frames = payload.get("frame_images") or []
+    expected_tokens = [f"@Image{n}" for n in range(1, len(refs) + 1)]
+    return {
+        "model": payload.get("model"),
+        "duration": payload.get("duration"),
+        "resolution": payload.get("resolution"),
+        "aspect_ratio": payload.get("aspect_ratio"),
+        "generate_audio": payload.get("generate_audio"),
+        "prompt_chars": len(prompt),
+        "prompt_sha256_prefix": hashlib.sha256(prompt.encode()).hexdigest()[:12],
+        "input_references_count": len(refs),
+        "input_references": [_describe_media_entry(r) for r in refs],
+        "frame_images_count": len(frames),
+        "frame_images": [_describe_media_entry(f) for f in frames],
+        # Structural check, not a quality judgement: did the prompt actually
+        # name every reference it attached? A False here is the exact defect
+        # that made a scene look text-generated.
+        "prompt_names_all_references": bool(expected_tokens) and all(
+            tok in prompt for tok in expected_tokens
+        ),
+    }
 
 
 def _safe_filename(filename: str) -> str:
@@ -459,65 +529,49 @@ class OpenRouterClient:
         prompt: str,
         model: str = "google/gemini-3.1-pro-preview",
     ) -> dict:
-        """Send multiple images to a VLM for cross-frame/cross-scene analysis."""
+        """Send multiple images to a VLM for cross-frame/cross-scene analysis.
+
+        The default carries `vlm_error: False` DELIBERATELY: `_vlm_json_request`
+        only flips a failure marker that already exists in the default, and
+        without it a total transport/parse failure returned the optimistic
+        `consistent: True, severity: "none"` body — so callers scored a check
+        that never ran as a clean pass. Callers MUST branch on `vlm_error`.
+        A successful call returns the model's own parsed JSON, which carries no
+        `vlm_error` key at all, so the marker can only ever mean "this failed".
+        """
         content_parts = [{"type": "text", "text": prompt}, *self._vlm_image_parts(image_paths)]
 
+        failed = {
+            "consistent": True,
+            "worst_scene_index": None,
+            "drift_description": "",
+            "severity": "none",
+            "vlm_error": False,
+            "reason": "",
+        }
+
         if len(content_parts) < 2:
-            return {"consistent": True, "worst_scene_index": None, "drift_description": "", "severity": "none"}
+            unusable = dict(failed)
+            unusable["vlm_error"] = True
+            unusable["reason"] = "no usable images could be attached to the VLM request"
+            return unusable
 
         return await self._vlm_json_request(
             label="multi-image analysis",
             model=model,
             content_parts=content_parts,
             max_tokens=2048,
-            default={"consistent": True, "worst_scene_index": None, "drift_description": "", "severity": "none"},
+            default=failed,
         )
 
-    # ─── VLM Verification (Video via Gemini 3.1 Pro) ────────────────
-
-    async def verify_video_vlm(
-        self,
-        frame_paths: list[str],
-        scene_description: str,
-        characters_description: str,
-        style: str,
-        camera_direction: str,
-    ) -> dict:
-        """Verify video quality via Gemini 3.1 Pro using pre-extracted frames.
-
-        Frame extraction is the caller's responsibility (should use tracked
-        subprocess management). This method only handles the LLM API call.
-
-        Returns {passed: bool, score: int, issues: [...], suggestion: str}
-        """
-        from .prompts import VLM_VERIFY_VIDEO_PROMPT
-
-        if not frame_paths:
-            logger.warning("No frames provided for video verification — skipping")
-            return {"passed": True, "score": 7, "issues": [], "suggestion": ""}
-
-        verify_prompt = VLM_VERIFY_VIDEO_PROMPT.format(
-            scene_description=scene_description,
-            characters_description=characters_description,
-            style=style,
-            camera_direction=camera_direction,
-        )
-
-        content_parts = [{"type": "text", "text": verify_prompt}, *self._vlm_image_parts(frame_paths)]
-
-        if len(content_parts) < 2:
-            return {"passed": True, "score": 7, "issues": [], "suggestion": ""}
-
-        result = await self._vlm_json_request(
-            label="video verification",
-            model="google/gemini-3.1-pro-preview",
-            content_parts=content_parts,
-            max_tokens=2048,
-            default={"passed": False, "score": 4, "issues": [], "suggestion": "", "vlm_error": True},
-        )
-        if "score" in result:
-            result["passed"] = result["score"] >= 7
-        return result
+    # NOTE: `verify_video_vlm` was DELETED here (v3.1). It was unreachable — the
+    # live path is Pipeline._verify_video_multidim -> analyze_multi_image_vlm —
+    # and it returned {"passed": True, "score": 7} when it had no frames or could
+    # not attach images: "could not check" rendered as "checked and passed",
+    # exactly the fail-open shape the rest of this payload was rewritten to
+    # remove. Dead code with a false-green default is a landmine for the next
+    # caller, so it is gone rather than merely unused. VLM_VERIFY_VIDEO_PROMPT
+    # went with it.
 
     # ─── Video Generation ───────────────────────────────────────────
 
@@ -532,6 +586,7 @@ class OpenRouterClient:
         frame_images: Optional[list[dict]] = None,
         model: str = "bytedance/seedance-2.0",
         generate_audio: bool = True,
+        audit_sink=None,
     ) -> str:
         """Generate video via OpenRouter /videos API. Returns local file path.
 
@@ -541,6 +596,12 @@ class OpenRouterClient:
                 When provided, this becomes an image-to-video generation with hard
                 visual conditioning on the first/last frame.
             input_references: Soft visual guidance images (character sheets, etc.)
+            audit_sink: Optional callable invoked with a REDACTED summary of the
+                request body immediately BEFORE the physical POST. Called before
+                the network call on purpose, so the evidence survives a request
+                that raises; and passed per call rather than stored on self, so
+                candidate retries, advisor retries, model switches and
+                regeneration cannot overwrite each other's record.
         """
         filename = _safe_filename(filename)
         payload: dict = {
@@ -555,6 +616,14 @@ class OpenRouterClient:
             payload["frame_images"] = frame_images
         if input_references:
             payload["input_references"] = input_references
+
+        request_audit = _describe_video_request(payload)
+        logger.info("VIDEO_REQUEST_BODY %s", json.dumps(request_audit, sort_keys=True))
+        if audit_sink is not None:
+            try:
+                audit_sink(request_audit)
+            except Exception as e:  # never let auditing break a paid generation
+                logger.warning(f"video request audit sink failed: {type(e).__name__}: {e}")
 
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.post(
@@ -848,3 +917,142 @@ class OpenRouterClient:
             "image_url": {"url": self.get_image_url(filepath, compress=True)},
             "frame_type": frame_type,
         }
+
+    # ─── Live capability snapshots (replace hardcoded provider tables) ───
+
+    async def fetch_image_capabilities(self) -> dict:
+        """GET /images/models -> {model_id: {"params": set[str]}}.
+
+        Fail-SOFT by design: an empty dict means "capabilities unknown", and every
+        caller must then omit optional parameters rather than guess. A hardcoded
+        per-model table is the anti-pattern this replaces.
+        """
+        out: dict = {}
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(f"{OPENROUTER_BASE}/images/models", headers=self._headers())
+                resp.raise_for_status()
+                rows = (resp.json() or {}).get("data") or []
+            for row in rows:
+                mid = row.get("id")
+                if not mid:
+                    continue
+                sp = row.get("supported_parameters")
+                if isinstance(sp, dict):
+                    names = set(sp.keys())
+                elif isinstance(sp, list):
+                    names = {str(x) for x in sp}
+                else:
+                    names = set()
+                out[mid] = {"params": names}
+        except Exception as e:
+            logger.warning(f"Image capability catalog unavailable: {type(e).__name__}: {e}")
+            return {}
+        return out
+
+    async def fetch_video_capabilities(self) -> dict:
+        """GET /videos/models -> {model_id: {durations, resolutions, generate_audio}}. Fail-soft: {}."""
+        out: dict = {}
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(f"{OPENROUTER_BASE}/videos/models", headers=self._headers())
+                resp.raise_for_status()
+                rows = (resp.json() or {}).get("data") or []
+            for row in rows:
+                mid = row.get("id")
+                if not mid:
+                    continue
+                durs = row.get("supported_durations") or []
+                out[mid] = {
+                    "durations": [int(d) for d in durs if isinstance(d, (int, float))],
+                    "resolutions": row.get("supported_resolutions") or [],
+                    "generate_audio": row.get("generate_audio"),
+                }
+        except Exception as e:
+            logger.warning(f"Video capability catalog unavailable: {type(e).__name__}: {e}")
+            return {}
+        return out
+
+    # ─── Unified Image API (the only path that can carry reference images) ───
+
+    async def generate_image_unified(
+        self,
+        prompt: str,
+        filename: str,
+        aspect_ratio: str = "16:9",
+        model: str = "google/gemini-3-pro-image-preview",
+        reference_images: Optional[list] = None,
+        supported_params: Optional[set] = None,
+    ) -> str:
+        """Generate an image via POST /images, optionally conditioned on reference images.
+
+        This is the canonical image endpoint. The legacy /chat/completions path
+        (generate_image / generate_image_nanobanana) has no endpoint for several
+        real image models and cannot carry input_references at all; it is retained
+        only as a terminal fallback rung.
+
+        Optional parameters are sent ONLY when the live per-model capability record
+        permits them — an unknown capability means "send nothing optional".
+        """
+        filename = _safe_filename(filename)
+        payload: dict = {"model": model, "prompt": prompt}
+
+        refs = []
+        for path in (reference_images or []):
+            try:
+                refs.append(self.make_input_reference(path))
+            except Exception as e:
+                logger.warning(f"Skipping unreadable reference image {path}: {type(e).__name__}: {e}")
+        if refs:
+            payload["input_references"] = refs
+
+        params = supported_params or set()
+        if "aspect_ratio" in params:
+            payload["aspect_ratio"] = aspect_ratio
+        if "resolution" in params:
+            payload["resolution"] = "2K"
+        if "quality" in params:
+            payload["quality"] = "high"
+
+        async with httpx.AsyncClient(timeout=360.0) as client:
+            resp = await client.post(
+                f"{OPENROUTER_BASE}/images",
+                headers=self._headers(),
+                json=payload,
+            )
+            resp.raise_for_status()
+            data = resp.json() or {}
+
+            entries = data.get("data") or []
+            if not entries:
+                raise RuntimeError(
+                    f"Image API returned no data for {filename} (keys: {sorted(data.keys())})"
+                )
+            entry = entries[0] or {}
+            raw: Optional[bytes] = None
+            b64 = entry.get("b64_json")
+            if b64:
+                raw = base64.b64decode(b64)
+            else:
+                url = entry.get("url")
+                if not url:
+                    raw_iu = entry.get("image_url")
+                    url = raw_iu.get("url") if isinstance(raw_iu, dict) else raw_iu
+                if isinstance(url, str) and url.startswith("data:"):
+                    raw = base64.b64decode(url.split(",", 1)[1])
+                elif isinstance(url, str) and url.startswith("http"):
+                    img_resp = await client.get(url)
+                    img_resp.raise_for_status()
+                    raw = img_resp.content
+            if not raw:
+                raise RuntimeError(
+                    f"No usable image payload for {filename} (entry keys: {sorted(entry.keys())})"
+                )
+
+        filepath = self.assets_dir / filename
+        filepath.write_bytes(raw)
+        logger.info(
+            f"Image generated via /images: {filepath} "
+            f"(model={model}, refs={len(refs)}, opt_params={sorted(k for k in payload if k in ('aspect_ratio', 'resolution', 'quality'))})"
+        )
+        return str(filepath)

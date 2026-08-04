@@ -1,8 +1,19 @@
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
 from PIL import Image
 
-from skills.anime_studio.api_client import OpenRouterClient, VLM_MAX_IMAGES
+# The installed payload is importable only as the package `anime_studio`: its
+# PARENT directory goes on sys.path, exactly as scripts/anime_worker.py does.
+# The previous `skills.anime_studio` import assumed a repository layout and
+# raised ModuleNotFoundError against the installed skill.
+_SKILL_DIR = Path(__file__).resolve().parent.parent
+if str(_SKILL_DIR.parent) not in sys.path:
+    sys.path.insert(0, str(_SKILL_DIR.parent))
+
+from anime_studio.api_client import OpenRouterClient, VLM_MAX_IMAGES  # noqa: E402
 
 
 def test_parse_json_response_accepts_fenced_and_wrapped_objects(tmp_path):

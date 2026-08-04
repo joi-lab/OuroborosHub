@@ -24,6 +24,7 @@ class JobStatus(str, Enum):
     QUEUED = "queued"
     RUNNING = "running"
     DONE = "done"
+    PARTIAL = "partial"  # finished with some scenes missing/unverified
     ERROR = "error"
 
 
@@ -63,6 +64,7 @@ class Scene:
     dialogue: Optional[str] = None  # spoken dialogue text
     mood: str = "neutral"
     transition_from: Optional[str] = None  # how this scene connects from previous
+    causal_link: Optional[str] = None  # BECAUSE OF THAT / BUT — why this scene follows
     keyframe_url: Optional[str] = None  # generated keyframe image
     video_url: Optional[str] = None  # generated video clip URL
     audio_url: Optional[str] = None  # scene audio (TTS dialogue)
@@ -106,6 +108,8 @@ class GenerationSettings:
     include_dialogue: bool = True
     include_music: bool = True
     music_style: str = "orchestral"
+    quality_mode: str = "medium"  # see modes.QUALITY_MODES
+    budget_limit_usd: float = 0.0  # 0 = auto (estimate * headroom)
 
 
 @dataclass
@@ -125,6 +129,10 @@ class JobProgress:
     error: Optional[str] = None
     warnings: list[str] = field(default_factory=list)  # non-fatal asset failures
     verification_stats: dict = field(default_factory=dict)  # {passed: N, retried: N, failed: N}
+    budget: dict = field(default_factory=dict)  # BudgetLedger.to_dict() snapshot / preflight estimate
+    missing_scenes: list[int] = field(default_factory=list)  # scene indexes with no video clip
+    unverified_scenes: list[int] = field(default_factory=list)  # scene indexes shipped without a passing verify
+    partial_reasons: list[str] = field(default_factory=list)  # why status == partial
 
 
 @dataclass
@@ -178,6 +186,10 @@ class Job:
             error=progress_data.get("error"),
             warnings=progress_data.get("warnings", []),
             verification_stats=progress_data.get("verification_stats", {}),
+            budget=progress_data.get("budget", {}),
+            missing_scenes=progress_data.get("missing_scenes", []),
+            unverified_scenes=progress_data.get("unverified_scenes", []),
+            partial_reasons=progress_data.get("partial_reasons", []),
         )
         return cls(
             job_id=data.get("job_id", str(uuid.uuid4())[:8]),
