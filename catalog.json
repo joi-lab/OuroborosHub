@@ -88,7 +88,7 @@
           "size": 16606
         }
       ],
-      "name": "AgentRQ Bridge",
+      "name": "agentrq-bridge",
       "slug": "agentrq-bridge",
       "type": "extension",
       "version": "0.1.0",
@@ -792,6 +792,32 @@
         }
       ],
       "when_to_use": "Пользователь просит создать или изменить изображение либо видео (генерация, не поиск). Граница и пограничные случаи: если просят НАЙТИ готовое изображение в интернете, ОПИСАТЬ или распознать содержимое присланного фото, либо построить график по числам — это НЕ сюда. «Аватарка/аватар как картинка профиля» — обычная генерация изображения (kandinsky_image), а не kandinsky_avatar. Маршрут по глаголу: «отфотошопь, поправь, дорисуй, замени фон, замени лицо» существующее фото → kandinsky_edit_image; «улучши качество, увеличь, апскейл» → kandinsky_upscale; «оживи картинку, добавь движение» (без звука) → kandinsky_animate; «заставь фото говорить, липсинк, озвучь по аудио» (нужны фото и аудиофайл) → kandinsky_avatar."
+    },
+    {
+      "slug": "scholion",
+      "name": "scholion",
+      "version": "0.3.2",
+      "type": "extension",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "sha256": "40718ef3752ce34c3fa74a6502e35aa202ff43426c442e430007cbd74b862d3d",
+          "size": 3460
+        },
+        {
+          "path": "plugin.py",
+          "sha256": "0f675513f8978dcac2c6249e8c9278366598bdfa850f4ee2cf3aa6055bd1d5a3",
+          "size": 2209
+        }
+      ],
+      "description": "Local second-opinion layer over the owner's own medical data — genome (VCF), laboratory history, prescriptions, wearables. 23 tools; answers carry provenance and say what the data cannot support. Not a medical device.",
+      "install_specs": [
+        {
+          "kind": "pip",
+          "package": "scholion"
+        }
+      ],
+      "when_to_use": "The owner asks about their own medical data — check a new prescription as a second opinion (pharmacogenetics, interactions with the current regimen, monitoring labs), review laboratory results and trends, look up a locus or clinically significant ClinVar findings in their VCF, polygenic scores, longevity findings, sleep and lifestyle metrics, movement toward a health goal, which tests to take next, or a pre-visit summary."
     }
   ]
 }
