@@ -1,8 +1,8 @@
 {
-  "schema_version": 1,
-  "name": "OuroborosHub",
   "description": "Official Ouroboros skills catalog.",
+  "name": "OuroborosHub",
   "raw_base_url": "https://raw.githubusercontent.com/razzant/OuroborosHub/main",
+  "schema_version": 1,
   "skills": [
     {
       "description": "Agent-to-Agent protocol bridge for Ouroboros. Provides a local A2A-compatible server plus client tools for discovering and messaging other A2A agents.",
@@ -236,6 +236,36 @@
       "version": "0.2.0"
     },
     {
+      "description": "Read-only widget showing quota windows and limits for every authorized Claudexor account, with per-facet read-state honesty.",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "sha256": "2b0e258006e01993a95dc8352df563c23c0cd7fa9deca87b108075282baf7b4a",
+          "size": 4655
+        },
+        {
+          "path": "plugin.py",
+          "sha256": "4f6440d5e6da5fbb12d2969b69f40945123d293762bb6c3526b4e69e91015eb0",
+          "size": 16789
+        },
+        {
+          "path": "test_quotas.py",
+          "sha256": "e80b1e210aec46a3db13e52aa08d1efdcb07c296ee66b4731afa4a04b4e7ef63",
+          "size": 14249
+        },
+        {
+          "path": "widget.js",
+          "sha256": "df31e2727bf14ac9dbce41a0907ade3d422b0758a79db1e58381c3e2b60b6d4b",
+          "size": 20507
+        }
+      ],
+      "name": "claudexor_quotas",
+      "slug": "claudexor_quotas",
+      "type": "extension",
+      "version": "0.2.0",
+      "when_to_use": "The owner wants to see, at a glance, the quota windows, limits and reset times of every authorized Claudexor account, including which facets could not be read."
+    },
+    {
       "description": "Web search via DuckDuckGo — free, no API key required. Returns titles, URLs, and snippets.",
       "files": [
         {
@@ -277,6 +307,76 @@
       "type": "extension",
       "version": "0.1.0",
       "when_to_use": "User asks about geopolitical events, conflict data, news stories, entities, energy infrastructure, macro-finance indicators, prediction markets, or needs real-time structured intelligence. Covers: armed clashes, protests, disasters, political events, CAMEO+ coded events, clustered news stories with article evidence, entity profiles, GEM energy assets, macro-finance quotes/series, Kalshi prediction market probabilities, and web research with source extraction."
+    },
+    {
+      "description": "Генерирует и редактирует медиа через Kandinsky: рисует изображения по описанию, перерисовывает и правит существующие картинки, повышает разрешение и качество, создаёт короткие видео по тексту или из фотографии, оживляет изображения и делает говорящие аватары из фото и аудио. Используй всякий раз, когда пользователь хочет создать или изменить визуальный контент — «нарисуй», «сгенерируй картинку», «сделай логотип, иллюстрацию, обои, постер, открытку, иконку, стикер, мем или аватарку», «перерисуй, поправь или отфотошопь фото», «дорисуй», «убери или замени фон», «замени лицо», «улучши качество, увеличь, апскейл», «сделай видео», «оживи картинку», «заставь фото говорить», «липсинк», «озвучь аватар» — даже если слово «Kandinsky» не прозвучало. Различай: «аватарка» как картинка профиля — это обычная генерация изображения (kandinsky_image), а «говорящий аватар» из фото и аудио — это kandinsky_avatar. Не для поиска готовых картинок в интернете, распознавания и описания фото, построения графиков по данным.",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "sha256": "1a14566d66c6badbecc0187a7179a3eae06adf697db9931edae5bd28313768c4",
+          "size": 13592
+        },
+        {
+          "path": "core/__init__.py",
+          "sha256": "5066a7b850a71988ce2131b3d3a54e13df20d08cf8f13328215f6f1684ea1545",
+          "size": 2216
+        },
+        {
+          "path": "core/config.py",
+          "sha256": "be16015da8fc06f8d0e304c700a50e9a48d7ceff827fd968ecad790a3ffdf701",
+          "size": 10467
+        },
+        {
+          "path": "core/delivery.py",
+          "sha256": "3a3fff08db355acfe594f56edc71bade17f75e4d7c1082f4f088a29ce0f8d134",
+          "size": 7131
+        },
+        {
+          "path": "core/endpoints.py",
+          "sha256": "165abf7e47fa047d2a3609c3e24457a3f8fc8ba8f3f656679d3a6214bfdf5738",
+          "size": 21005
+        },
+        {
+          "path": "core/security.py",
+          "sha256": "ddd38345614c3263afb1e8393cf76eefb246ab13782f4e913595b9dbf81a7b16",
+          "size": 15394
+        },
+        {
+          "path": "core/util.py",
+          "sha256": "5728ddf8d46ff6848d19eed5e2e7c1dd582526d95137ffed7ace2111694b654c",
+          "size": 2831
+        },
+        {
+          "path": "lib/__init__.py",
+          "sha256": "78df6d3221718e5ec1ecc4edc13889f48821b27acd5e9e00cd7fa0e9b49762f9",
+          "size": 207
+        },
+        {
+          "path": "lib/kandinsky.py",
+          "sha256": "d60b89a599f18606947af811ccabf665d51dfa0fb7b867687a854cfbd7449c8b",
+          "size": 23048
+        },
+        {
+          "path": "plugin.py",
+          "sha256": "5504b580d9a32d4f9d356995082c50188d1c4527d251c2c3ed4548758ba4f316",
+          "size": 2423
+        },
+        {
+          "path": "references/api-cheatsheet.md",
+          "sha256": "1e21c52a76f60ef85bda642ee264f0a2ec59f28247c1a6a034bbca59ed825cfa",
+          "size": 3486
+        },
+        {
+          "path": "references/prompting.md",
+          "sha256": "ff4f427167e5869e6e103d840ab80db0c876760a7eb48190b17d2fd861019ade",
+          "size": 4040
+        }
+      ],
+      "name": "kandinsky-skill",
+      "slug": "kandinsky-skill",
+      "type": "extension",
+      "version": "1.0.2",
+      "when_to_use": "Пользователь просит создать или изменить изображение либо видео (генерация, не поиск). Граница и пограничные случаи: если просят НАЙТИ готовое изображение в интернете, ОПИСАТЬ или распознать содержимое присланного фото, либо построить график по числам — это НЕ сюда. «Аватарка/аватар как картинка профиля» — обычная генерация изображения (kandinsky_image), а не kandinsky_avatar. Маршрут по глаголу: «отфотошопь, поправь, дорисуй, замени фон, замени лицо» существующее фото → kandinsky_edit_image; «улучши качество, увеличь, апскейл» → kandinsky_upscale; «оживи картинку, добавь движение» (без звука) → kandinsky_animate; «заставь фото говорить, липсинк, озвучь по аудио» (нужны фото и аудиофайл) → kandinsky_avatar."
     },
     {
       "description": "Keenable web search and page fetch over the vendor's keyless MCP endpoint.",
@@ -435,6 +535,32 @@
       "slug": "sat3dgen",
       "type": "script",
       "version": "1.0.0"
+    },
+    {
+      "description": "Local second-opinion layer over the owner's own medical data — genome (VCF), laboratory history, prescriptions, wearables. 23 tools; answers carry provenance and say what the data cannot support. Not a medical device.",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "sha256": "40718ef3752ce34c3fa74a6502e35aa202ff43426c442e430007cbd74b862d3d",
+          "size": 3460
+        },
+        {
+          "path": "plugin.py",
+          "sha256": "0f675513f8978dcac2c6249e8c9278366598bdfa850f4ee2cf3aa6055bd1d5a3",
+          "size": 2209
+        }
+      ],
+      "install_specs": [
+        {
+          "kind": "pip",
+          "package": "scholion"
+        }
+      ],
+      "name": "scholion",
+      "slug": "scholion",
+      "type": "extension",
+      "version": "0.3.2",
+      "when_to_use": "The owner asks about their own medical data — check a new prescription as a second opinion (pharmacogenetics, interactions with the current regimen, monitoring labs), review laboratory results and trends, look up a locus or clinically significant ClinVar findings in their VCF, polygenic scores, longevity findings, sleep and lifestyle metrics, movement toward a health goal, which tests to take next, or a pre-visit summary."
     },
     {
       "description": "Bidirectional Telegram bot bridge for Ouroboros with configurable command modes, inline keyboard control panel, file/document delivery, and optional silent (edit-in-place) mirror.",
@@ -722,102 +848,6 @@
       "type": "extension",
       "version": "0.3.2",
       "when_to_use": "User asks about weather, temperature, forecast, current conditions, wind, humidity, sunrise/sunset, or a weather dashboard for a city."
-    },
-    {
-      "slug": "kandinsky-skill",
-      "name": "kandinsky-skill",
-      "description": "Генерирует и редактирует медиа через Kandinsky: рисует изображения по описанию, перерисовывает и правит существующие картинки, повышает разрешение и качество, создаёт короткие видео по тексту или из фотографии, оживляет изображения и делает говорящие аватары из фото и аудио. Используй всякий раз, когда пользователь хочет создать или изменить визуальный контент — «нарисуй», «сгенерируй картинку», «сделай логотип, иллюстрацию, обои, постер, открытку, иконку, стикер, мем или аватарку», «перерисуй, поправь или отфотошопь фото», «дорисуй», «убери или замени фон», «замени лицо», «улучши качество, увеличь, апскейл», «сделай видео», «оживи картинку», «заставь фото говорить», «липсинк», «озвучь аватар» — даже если слово «Kandinsky» не прозвучало. Различай: «аватарка» как картинка профиля — это обычная генерация изображения (kandinsky_image), а «говорящий аватар» из фото и аудио — это kandinsky_avatar. Не для поиска готовых картинок в интернете, распознавания и описания фото, построения графиков по данным.",
-      "version": "1.0.2",
-      "type": "extension",
-      "files": [
-        {
-          "path": "SKILL.md",
-          "sha256": "1a14566d66c6badbecc0187a7179a3eae06adf697db9931edae5bd28313768c4",
-          "size": 13592
-        },
-        {
-          "path": "core/__init__.py",
-          "sha256": "5066a7b850a71988ce2131b3d3a54e13df20d08cf8f13328215f6f1684ea1545",
-          "size": 2216
-        },
-        {
-          "path": "core/config.py",
-          "sha256": "be16015da8fc06f8d0e304c700a50e9a48d7ceff827fd968ecad790a3ffdf701",
-          "size": 10467
-        },
-        {
-          "path": "core/delivery.py",
-          "sha256": "3a3fff08db355acfe594f56edc71bade17f75e4d7c1082f4f088a29ce0f8d134",
-          "size": 7131
-        },
-        {
-          "path": "core/endpoints.py",
-          "sha256": "165abf7e47fa047d2a3609c3e24457a3f8fc8ba8f3f656679d3a6214bfdf5738",
-          "size": 21005
-        },
-        {
-          "path": "core/security.py",
-          "sha256": "ddd38345614c3263afb1e8393cf76eefb246ab13782f4e913595b9dbf81a7b16",
-          "size": 15394
-        },
-        {
-          "path": "core/util.py",
-          "sha256": "5728ddf8d46ff6848d19eed5e2e7c1dd582526d95137ffed7ace2111694b654c",
-          "size": 2831
-        },
-        {
-          "path": "lib/__init__.py",
-          "sha256": "78df6d3221718e5ec1ecc4edc13889f48821b27acd5e9e00cd7fa0e9b49762f9",
-          "size": 207
-        },
-        {
-          "path": "lib/kandinsky.py",
-          "sha256": "d60b89a599f18606947af811ccabf665d51dfa0fb7b867687a854cfbd7449c8b",
-          "size": 23048
-        },
-        {
-          "path": "plugin.py",
-          "sha256": "5504b580d9a32d4f9d356995082c50188d1c4527d251c2c3ed4548758ba4f316",
-          "size": 2423
-        },
-        {
-          "path": "references/api-cheatsheet.md",
-          "sha256": "1e21c52a76f60ef85bda642ee264f0a2ec59f28247c1a6a034bbca59ed825cfa",
-          "size": 3486
-        },
-        {
-          "path": "references/prompting.md",
-          "sha256": "ff4f427167e5869e6e103d840ab80db0c876760a7eb48190b17d2fd861019ade",
-          "size": 4040
-        }
-      ],
-      "when_to_use": "Пользователь просит создать или изменить изображение либо видео (генерация, не поиск). Граница и пограничные случаи: если просят НАЙТИ готовое изображение в интернете, ОПИСАТЬ или распознать содержимое присланного фото, либо построить график по числам — это НЕ сюда. «Аватарка/аватар как картинка профиля» — обычная генерация изображения (kandinsky_image), а не kandinsky_avatar. Маршрут по глаголу: «отфотошопь, поправь, дорисуй, замени фон, замени лицо» существующее фото → kandinsky_edit_image; «улучши качество, увеличь, апскейл» → kandinsky_upscale; «оживи картинку, добавь движение» (без звука) → kandinsky_animate; «заставь фото говорить, липсинк, озвучь по аудио» (нужны фото и аудиофайл) → kandinsky_avatar."
-    },
-    {
-      "slug": "scholion",
-      "name": "scholion",
-      "version": "0.3.2",
-      "type": "extension",
-      "files": [
-        {
-          "path": "SKILL.md",
-          "sha256": "40718ef3752ce34c3fa74a6502e35aa202ff43426c442e430007cbd74b862d3d",
-          "size": 3460
-        },
-        {
-          "path": "plugin.py",
-          "sha256": "0f675513f8978dcac2c6249e8c9278366598bdfa850f4ee2cf3aa6055bd1d5a3",
-          "size": 2209
-        }
-      ],
-      "description": "Local second-opinion layer over the owner's own medical data — genome (VCF), laboratory history, prescriptions, wearables. 23 tools; answers carry provenance and say what the data cannot support. Not a medical device.",
-      "install_specs": [
-        {
-          "kind": "pip",
-          "package": "scholion"
-        }
-      ],
-      "when_to_use": "The owner asks about their own medical data — check a new prescription as a second opinion (pharmacogenetics, interactions with the current regimen, monitoring labs), review laboratory results and trends, look up a locus or clinically significant ClinVar findings in their VCF, polygenic scores, longevity findings, sleep and lifestyle metrics, movement toward a health goal, which tests to take next, or a pre-visit summary."
     }
   ]
 }
