@@ -240,8 +240,8 @@
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "2b0e258006e01993a95dc8352df563c23c0cd7fa9deca87b108075282baf7b4a",
-          "size": 4655
+          "sha256": "5942434eed2c3cd2f48bc9d45e9121910e58e37aa21cd6c262dad3b65eac1cbd",
+          "size": 6196
         },
         {
           "path": "plugin.py",
@@ -255,14 +255,14 @@
         },
         {
           "path": "widget.js",
-          "sha256": "df31e2727bf14ac9dbce41a0907ade3d422b0758a79db1e58381c3e2b60b6d4b",
-          "size": 20507
+          "sha256": "15bba1a4d2a66332a455e810ee29ecfe64d009a2892a47c84920f05261a605a2",
+          "size": 91625
         }
       ],
       "name": "claudexor_quotas",
       "slug": "claudexor_quotas",
       "type": "extension",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "when_to_use": "The owner wants to see, at a glance, the quota windows, limits and reset times of every authorized Claudexor account, including which facets could not be read."
     },
     {

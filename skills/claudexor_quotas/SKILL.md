@@ -1,7 +1,7 @@
 ---
 name: claudexor_quotas
 description: Read-only widget showing quota windows and limits for every authorized Claudexor account, with per-facet read-state honesty.
-version: 0.2.0
+version: 0.3.0
 type: extension
 runtime: python3
 entry: plugin.py
@@ -19,7 +19,7 @@ ui_tab:
     entry: widget.js
 ---
 
-# Claudexor Quotas (v0.2.0)
+# Claudexor Quotas (v0.3.0)
 
 A read-only projection of the host's own account surface. It adds no gateway
 route to the core repo, reads no daemon token, and mutates nothing.
@@ -58,8 +58,11 @@ exhausted window is never reported as the default login's.
 
 1. **Per-facet provenance, never a global verdict.** Each facet is labeled from
    its own `reads` value. A refused or unread facet is rendered as
-   "not checked" / "unavailable" and the header names exactly which facets did
-   not answer. It is never rendered as "no quota", `0`, or an empty list.
+   "not checked" / "unavailable". The status button carries a red pip whenever
+   one of them did not answer, the status strip behind it names which, and a
+   banner above the list names it again in the open — so a failure is never
+   only one click away from being invisible. It is never rendered as
+   "no quota", `0`, or an empty list.
 2. **No invented number.** A missing `used_ratio` is "no usage numbers
    reported", not `0%` and not "unlimited". A missing `resets_at` prints
    nothing rather than a fabricated time.
@@ -77,12 +80,13 @@ exhausted window is never reported as the default login's.
 6. **Degraded accounts keep their rows as "last known"** and lose any green
    verified claim; rotation wording counts only accounts actually signed in.
 
-## Interactive Features (v0.2.0)
+## Interactive Features (v0.3.0 Redesign)
 
-- **Dynamic Progress Bars**: Color-coded progress indicators (`<60%` emerald, `60–85%` amber, `>85%` rose/exhausted).
-- **Live 1-Second Countdown Tickers**: In-place DOM updates for time until reset and cooldown expiry.
-- **Client-side Tab Filters**: Instant filtering by `All`, `Active` (signed-in and enabled), and `Alerts` (exhausted quota, active cooldown, verification failure, disabled).
-- **Model Scoped Indicators**: Visual badges distinguishing general account limits from model-specific caps.
+- **One control row, no header**: the frame is short and the host already prints the widget's name, so there is no title row. A status button carries a pip — green when all three facets answered, red when one did not — and opens sideways into daemon state, engine version and per-facet read state (`catalog`, `accounts`, `quota`). A facet that did not answer also raises a banner above the list, so a failure is never hidden behind the button.
+- **One account at a time, chosen in the row**: the frame opens at 320px and grows only when the module asks, so the screen shows one account in full — every window, every reset time — instead of a list whose remainder is scrolled out of sight without a scrollbar to say so. The family is picked from a segment carrying each vendor's own mark; the account selector beside it names the account on screen, shows how full its hottest window is and says how many of the family's other accounts need attention; opening it gives every account a state dot and a second line — its live quota windows, or the engine's own sentence about what is wrong with it, or its plan and how long ago it was checked. What is hidden still speaks: a pip on the family mark whenever any of its accounts needs attention, and the banners above the account speak for every family, not for the selection.
+- **8px Gradient Progress Bars**: Height-expanded progress indicators with smooth transitions and theme gradients (`--grad-ok` Emerald, `--grad-warn` Amber, `--grad-bad` Ouroboros red, diagonal striped unmetered).
+- **Reset Times**: the moment a window resets and a cooldown ends, printed as a date and hour in tabular numerals — no per-second ticking and no layout shift.
+- **Model Scoped Indicators & Stale Accordions**: Clean chips for per-model caps and styled warning accordions for cached historical readings.
 
 ## Owner-controlled steps
 
