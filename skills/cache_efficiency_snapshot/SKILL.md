@@ -1,12 +1,12 @@
 ---
 name: cache_efficiency_snapshot
-version: 0.2.0
+version: 0.3.0
 title: Cache Efficiency Snapshot
-description: Honest bounded-suffix cache-read analysis with token-weighted charts.
+description: Interactive dark-glassmorphic cache observability dashboard with multi-timeframe analytics, token-weighted hit rates, cost savings, and Canvas 2D charts.
 type: extension
 runtime: python3
 entry: plugin.py
-timeout_sec: 15
+timeout_sec: 30
 permissions:
   - route
   - widget
@@ -15,45 +15,29 @@ env_from_settings: []
 
 # Cache Efficiency Snapshot
 
-A read-only external extension that turns a **bounded suffix** of Ouroboros's
-usage ledger into an explicit, reproducible cache-read analysis. It has no
-network access, custom JavaScript, payload state writes, or lifetime-history
-claim.
+A high-performance observability extension for Ouroboros that tracks prompt caching performance, token-weighted efficiency, and monetary cost savings across all models and execution lanes.
 
-## What the charts mean
+## Key Features
 
-The headline **cache-read rate** is token-weighted, never an average of
-per-request percentages:
+1. **Multi-Timeframe Analytics**:
+   - `1H`: Trailing 1 hour (5-minute resolution buckets) for live inspection.
+   - `6H`: Trailing 6 hours (30-minute resolution buckets).
+   - `24H` (Default): Trailing 24 hours (1-hour resolution buckets).
+   - `7D`: Trailing 7 days (6-hour resolution buckets).
+   - `ALL`: Entire ledger history with adaptive daily/half-day resolution.
 
-`sum(cached_tokens) / sum(prompt_tokens)`
+2. **Accurate Mathematical Model**:
+   - **Token-Weighted Cache Read Rate**: Calculated as sum(cached_tokens) / sum(canonical_prompt_tokens) * 100%, avoiding per-call sample skew.
+   - **Call-Level Hit Rate**: Percentage of requests with cached_tokens > 0.
+   - **Provider-Aware Normalization**: Handles both cache-inclusive (OpenAI, OpenRouter) and fresh-only input reporters (Anthropic raw) without double-counting.
+   - **Net Monetary Cost Savings ($)**: Tiered price matrix per model measuring gross cache read savings minus cache creation/write surcharges.
 
-It includes only deduplicated, terminal `settled` records with a UTC timestamp,
-a positive prompt-token denominator, and a known cache-token measurement where
-`0 <= cached_tokens <= prompt_tokens`.
+3. **High-Performance In-Memory Caching**:
+   - Incremental stat/inode-based parser for `state/usage_attempts.jsonl` that only reads newly appended bytes, enabling sub-millisecond route response times on multi-megabyte ledgers.
 
-Two bounded host-rendered charts show the same canonical bucket data:
-
-1. **Cache-read rate by observed UTC time bucket** — the token-weighted percentage
-   alone, using the displayed prompt-token denominator.
-2. **Prompt-token composition by the same buckets** — cached, uncached, and
-   explicitly **unknown cache measurement** tokens. This is the separate volume
-   view; unknown data is never silently painted as a miss.
-
-The card always shows the observed suffix window, valid sample count,
-denominator, and separate quality counters. Summary token values use **M** for
-readability; the observed-window table retains their exact integer values. It
-does not claim a lifetime or system-wide cache rate.
-
-## Bounds and integrity
-
-- Reads at most **192 KiB** and **2,000 JSONL lines** from the ledger tail.
-- Renders at most **8 chronological buckets**. Their UTC resolution adapts to the
-  observed suffix: 15 minutes (≤2 h), hour (≤2 d), otherwise day; it also renders
-  **5 recent rows**, **4 model rows**, and **7 diagnostics**.
-- Repeated `attempt_id` rows are reduced to their latest occurrence in the
-  observed suffix.
-- Malformed, duplicate, non-terminal, missing-time, zero-denominator, unknown,
-  invalid-token, and applied-line-cap observations stay visible as separate
-  data-quality facts.
-- Charts use the host declarative Chart.js contract with an accessible semantic
-  data table fallback. The host owns canvas sizing and bounded lifecycle.
+4. **Zero-CDN Dark Glassmorphic Dashboard (`widget.js`)**:
+   - Standalone Module Widget rendered in a sandboxed iframe.
+   - Hardware-accelerated Canvas 2D spline curves with interactive hover crosshairs and tooltips.
+   - Top KPI cards with dynamic trend badges and circular rate indicators.
+   - Per-model efficiency breakdown table with visual gradient progress bars.
+   - Collapsible data quality & diagnostics drawer.
