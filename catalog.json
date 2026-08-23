@@ -309,6 +309,36 @@
       "when_to_use": "User asks about geopolitical events, conflict data, news stories, entities, energy infrastructure, macro-finance indicators, prediction markets, or needs real-time structured intelligence. Covers: armed clashes, protests, disasters, political events, CAMEO+ coded events, clustered news stories with article evidence, entity profiles, GEM energy assets, macro-finance quotes/series, Kalshi prediction market probabilities, and web research with source extraction."
     },
     {
+      "description": "Comprehensive, charming, and fully playable Happy Farm game widget with crops, livestock, economy, orders, day-night/weather cycles, and audio.",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "sha256": "7d49c6bcb6ea021de9716fcf0e04c792e5d7de7521a719a784da04609924943e",
+          "size": 1653
+        },
+        {
+          "path": "plugin.py",
+          "sha256": "51eeaa83235a877f484336149c79149ca1e3aeeb42cea0b39c6bc2a27d52f4e0",
+          "size": 7849
+        },
+        {
+          "path": "test_happy_farm.py",
+          "sha256": "2633d86d31766082c242b041d8dee6b6e6a7d49efe677e561bfb79052bfa10b1",
+          "size": 4357
+        },
+        {
+          "path": "widget.js",
+          "sha256": "c330441a76b578c3b774fd58bfa78d32c77dbc39c660b556e9a5d91d3da4a4fa",
+          "size": 86895
+        }
+      ],
+      "name": "happy_farm",
+      "slug": "happy_farm",
+      "type": "extension",
+      "version": "0.1.0",
+      "when_to_use": "When the user wants to play a cozy farming simulation game in an Ouroboros widget with crops, livestock, crafting, progression, and rich audiovisuals."
+    },
+    {
       "description": "Генерирует и редактирует медиа через Kandinsky: рисует изображения по описанию, перерисовывает и правит существующие картинки, повышает разрешение и качество, создаёт короткие видео по тексту или из фотографии, оживляет изображения и делает говорящие аватары из фото и аудио. Используй всякий раз, когда пользователь хочет создать или изменить визуальный контент — «нарисуй», «сгенерируй картинку», «сделай логотип, иллюстрацию, обои, постер, открытку, иконку, стикер, мем или аватарку», «перерисуй, поправь или отфотошопь фото», «дорисуй», «убери или замени фон», «замени лицо», «улучши качество, увеличь, апскейл», «сделай видео», «оживи картинку», «заставь фото говорить», «липсинк», «озвучь аватар» — даже если слово «Kandinsky» не прозвучало. Различай: «аватарка» как картинка профиля — это обычная генерация изображения (kandinsky_image), а «говорящий аватар» из фото и аудио — это kandinsky_avatar. Не для поиска готовых картинок в интернете, распознавания и описания фото, построения графиков по данным.",
       "files": [
         {
