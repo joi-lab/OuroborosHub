@@ -217,23 +217,33 @@
       "version": "0.5.0"
     },
     {
-      "description": "Honest bounded-suffix cache-read analysis with token-weighted charts.",
+      "description": "Interactive dark-glassmorphic cache observability dashboard with multi-timeframe analytics, token-weighted hit rates, cost savings, and Canvas 2D charts.",
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "315d70db95d352b9eaf0e5c5ca35cac289dd9f55b63b896bf8dc7914c11013f5",
-          "size": 2393
+          "sha256": "aa1c19f6d08e7ed1ba0aac284f07aa61a681aa909d3693c7a26e6f22cd944ee6",
+          "size": 2203
         },
         {
           "path": "plugin.py",
-          "sha256": "d4e122d299ec80cb85d4084f2e5f1e87270eb473f74d0e23b1d60549ecebe803",
-          "size": 18389
+          "sha256": "8bba998dc4503b67d7e8fe1cf900882bccc55e1a20f8927edc093bb6734ec809",
+          "size": 20946
+        },
+        {
+          "path": "test_cache_efficiency.py",
+          "sha256": "fd1813a5589d3c3b9e2c3f0abc078d41294bf62f485f39797cab3ea1704144e7",
+          "size": 8170
+        },
+        {
+          "path": "widget.js",
+          "sha256": "f3b1acad8689e0c25b92002e68edd67381355e65f88e22bf239f1003f81e95ea",
+          "size": 32579
         }
       ],
       "name": "cache_efficiency_snapshot",
       "slug": "cache_efficiency_snapshot",
       "type": "extension",
-      "version": "0.2.0"
+      "version": "0.3.0"
     },
     {
       "description": "Read-only widget showing quota windows and limits for every authorized Claudexor account, with per-facet read-state honesty.",
