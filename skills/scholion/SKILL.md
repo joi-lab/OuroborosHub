@@ -1,7 +1,7 @@
 ---
 name: scholion
-description: Local second-opinion layer over the owner's own medical data — genome (VCF), laboratory history, prescriptions, wearables. 29 tools; answers carry provenance and say what the data cannot support. Not a medical device.
-version: 0.4.2
+description: Local second-opinion layer over the owner's own medical data — genome (VCF), laboratory history, prescriptions, wearables. 30 tools; answers carry provenance and say what the data cannot support. Not a medical device.
+version: 0.4.6
 type: extension
 runtime: python3
 entry: plugin.py
@@ -28,7 +28,7 @@ owner's own study and for a conversation with a physician.
 
 ## What the agent gets
 
-29 tools over one local engine, among them:
+30 tools over one local engine, among them:
 
 - `check_prescription` — a new drug as a second opinion: pharmacogenetics,
   interactions with the current regimen, monitoring labs, open questions for
