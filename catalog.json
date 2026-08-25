@@ -246,6 +246,31 @@
       "version": "0.3.0"
     },
     {
+      "description": "Fully playable Classic Doom (1993) standalone 2.5D FPS raycaster extension widget with textured walls, procedural sprite enemies, authentic weapons, levels, HUD, Web Audio sound and heavy metal music synthesizer.",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "sha256": "ceceef41d7a482960b89da0cbe39b57df1f474b63da0ef19fdb555366979416d",
+          "size": 2590
+        },
+        {
+          "path": "plugin.py",
+          "sha256": "f3c1d4e84270dd407a737e335c610ac78575197088cf293f7abddf94aee13a6f",
+          "size": 1224
+        },
+        {
+          "path": "widget.js",
+          "sha256": "5c8914a7931cf2712e10b4ee73a0b49f2659befdd8bc474bc90ce1eeb56eb147",
+          "size": 257233
+        }
+      ],
+      "name": "classic-doom",
+      "slug": "classic-doom",
+      "type": "extension",
+      "version": "1.0.0",
+      "when_to_use": "When the user wants to play an authentic Classic Doom (1993) 2.5D FPS raycaster game directly in an Ouroboros extension widget with monsters, weapons, sound effects, and heavy metal synth."
+    },
+    {
       "description": "Read-only widget showing quota windows and limits for every authorized Claudexor account, with per-facet read-state honesty.",
       "files": [
         {
