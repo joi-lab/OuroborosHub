@@ -1,8 +1,8 @@
 {
-  "description": "Official Ouroboros skills catalog.",
-  "name": "OuroborosHub",
-  "raw_base_url": "https://raw.githubusercontent.com/razzant/OuroborosHub/main",
   "schema_version": 1,
+  "name": "OuroborosHub",
+  "description": "Official Ouroboros skills catalog.",
+  "raw_base_url": "https://raw.githubusercontent.com/razzant/OuroborosHub/main",
   "skills": [
     {
       "description": "Agent-to-Agent protocol bridge for Ouroboros. Provides a local A2A-compatible server plus client tools for discovering and messaging other A2A agents.",
@@ -606,13 +606,13 @@
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "94c180484fbd0f8243ef1152cd22446cc729435a622d247a17fa498f083b7b8b",
-          "size": 4919
+          "sha256": "ec23a0c050415cc76cd3a1a86207434881d22df9c23272ee11fc763f0c878eda",
+          "size": 5928
         },
         {
           "path": "plugin.py",
-          "sha256": "0f675513f8978dcac2c6249e8c9278366598bdfa850f4ee2cf3aa6055bd1d5a3",
-          "size": 2209
+          "sha256": "63aea4c97b1f11f5ef925eb173ca42ff44a3eff13dc8fea0698706f7d8dcc594",
+          "size": 15212
         }
       ],
       "install_specs": [
@@ -624,7 +624,7 @@
       "name": "scholion",
       "slug": "scholion",
       "type": "extension",
-      "version": "0.4.6",
+      "version": "0.4.7",
       "when_to_use": "The owner asks about their own medical data — check a new prescription as a second opinion (pharmacogenetics, interactions with the current regimen, monitoring labs), review laboratory results and trends, look up a locus or clinically significant ClinVar findings in their VCF, polygenic scores, longevity findings, sleep and lifestyle metrics, movement toward a health goal, which tests to take next, or a pre-visit summary."
     },
     {

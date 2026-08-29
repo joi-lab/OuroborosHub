@@ -1,12 +1,12 @@
 ---
 name: scholion
 description: Local second-opinion layer over the owner's own medical data — genome (VCF), laboratory history, prescriptions, wearables. 30 tools; answers carry provenance and say what the data cannot support. Not a medical device.
-version: 0.4.6
+version: 0.4.7
 type: extension
 runtime: python3
 entry: plugin.py
 os: any
-permissions: [tool, fs, net]
+permissions: [tool, fs, net, widget, route]
 env_from_settings: []
 install_specs:
   - kind: pip
@@ -73,16 +73,34 @@ of which is a secret. The full instructions are in
 
 ## Setup
 
-The pip package installs automatically (install_specs). The profile lives on
-the owner's machine, where the scholion CLI keeps it — nothing is baked into
-the skill and no data leaves the machine. To look around before bringing real
-data, ask the owner to run:
+Nothing to type. The pip package installs itself (install_specs), and enabling
+the skill adds a **Scholion** tab to the Widgets page. That tab is the answer to
+the first question a new owner has — where their files go:
 
-    scholion init --demo     # a fictional person, deliberately imperfect
-    scholion overview
+- it names the data directory the host gave this skill, and the exact folder
+  for laboratory forms and for the genome;
+- a button lays out that directory — empty templates plus a README in every
+  folder saying what belongs in it. It never overwrites anything that exists;
+- if the owner's files already live somewhere, a field points at that folder
+  instead of copying them.
 
-If the profile lives in a non-default location, set SCHOLION_PROFILE_DIR in
-the host environment.
+The layout it creates:
+
+    <data directory>/
+      profile/          the distilled state — written by the tools, not by hand
+      raw/lab/          laboratory forms, PDF or DOCX exactly as they arrived
+      raw/wearables/    the export archive from a watch
+      genome/           a full VCF against GRCh38, bgzipped, with its .tbi index
+      work/  archive/
+
+The agent should point the owner at that tab rather than at a shell: on this
+host the CLI the rest of this file mentions may not be on anybody's PATH.
+
+To look around before bringing real data, the owner can run
+`scholion init --demo` — a fictional person, deliberately imperfect. To keep the
+data somewhere else, set `SCHOLION_REPO_DIR` (whole layout) or
+`SCHOLION_PROFILE_DIR` (profile only) in the host environment; either one is
+respected and the skill will not move anything.
 
 ## Network and privacy
 
