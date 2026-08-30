@@ -59,8 +59,12 @@ def main(argv: list[str]) -> int:
         reader = pypdf.PdfReader(str(path))
         if getattr(reader, "is_encrypted", False):
             try:
-                reader.decrypt("")
+                # decrypt("") returns PasswordType.NOT_DECRYPTED (falsy) when
+                # the empty password does not open the file — it does not raise.
+                decrypted = bool(reader.decrypt(""))
             except Exception:  # noqa: BLE001 — any failure means we cannot read it
+                decrypted = False
+            if not decrypted:
                 common.fail(
                     f"PDF is encrypted and cannot be opened without a password: {path.name}",
                     status="encrypted",

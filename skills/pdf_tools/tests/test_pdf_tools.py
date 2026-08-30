@@ -35,6 +35,21 @@ def test_inline_markup_is_escaped_before_reportlab_tags_are_added():
     )
 
 
+def test_password_protected_pdf_reports_encrypted_not_unreadable(tmp_path, capsys):
+    pypdf = pytest.importorskip("pypdf")
+    target = tmp_path / "locked.pdf"
+    writer = pypdf.PdfWriter()
+    writer.add_blank_page(width=72, height=72)
+    writer.encrypt("secret")
+    with target.open("wb") as handle:
+        writer.write(handle)
+
+    read_pdf = _load("read_pdf")
+    with pytest.raises(SystemExit):
+        read_pdf.main([str(target)])
+    assert json.loads(capsys.readouterr().out)["status"] == "encrypted"
+
+
 def test_writes_are_confined_to_the_state_dir_outputs(tmp_path, monkeypatch, capsys):
     common = _load("pdf_common")
     data = tmp_path / "data"
