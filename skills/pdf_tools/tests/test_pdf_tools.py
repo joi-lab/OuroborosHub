@@ -57,21 +57,56 @@ def test_writes_are_confined_to_the_state_dir_outputs(tmp_path, monkeypatch, cap
     monkeypatch.setenv("OUROBOROS_SKILL_STATE_DIR", str(state))
 
     # A bare file name lands under <state>/outputs/ and the dir is created.
-    resolved = common.resolve_output_path("report.pdf")
+    resolved = common.resolve_output_path("report.pdf", ".pdf")
     assert resolved == common.state_dir() / "outputs" / "report.pdf"
     assert resolved.parent.is_dir()
 
     # An absolute path in the system temp dir is refused for writing...
     with pytest.raises(SystemExit):
-        common.resolve_output_path(str(tmp_path / "evil.pdf"))
+        common.resolve_output_path(str(tmp_path / "evil.pdf"), ".pdf")
     assert json.loads(capsys.readouterr().out)["status"] == "output_outside_state_dir"
 
     # ...and so is a task drive, even though it stays readable.
     drive = data / "task_drives" / "t1"
     with pytest.raises(SystemExit):
-        common.resolve_output_path(str(drive / "out.pdf"))
+        common.resolve_output_path(str(drive / "out.pdf"), ".pdf")
     assert json.loads(capsys.readouterr().out)["status"] == "output_outside_state_dir"
     drive.mkdir(parents=True)
     readable = drive / "in.txt"
     readable.write_text("x", encoding="utf-8")
     assert common.resolve_path(str(readable), must_exist=True) == readable.resolve()
+
+    # Traversal cannot escape outputs/: "--out .." would resolve to the state
+    # dir itself and the suffix is applied BEFORE the containment check, so a
+    # sibling "<state>.pdf" is refused instead of written.
+    with pytest.raises(SystemExit):
+        common.resolve_output_path("..", ".pdf")
+    assert json.loads(capsys.readouterr().out)["status"] == "output_outside_state_dir"
+
+    # "--out ." resolves to outputs/ itself and is refused, not written as
+    # "<state>/outputs.pdf".
+    with pytest.raises(SystemExit):
+        common.resolve_output_path(".", ".pdf")
+    assert json.loads(capsys.readouterr().out)["status"] == "output_outside_state_dir"
+
+    # An absolute path inside the state dir but OUTSIDE outputs/ is refused:
+    # the documented contract is "always under outputs/".
+    with pytest.raises(SystemExit):
+        common.resolve_output_path(str(common.state_dir() / "loose.pdf"), ".pdf")
+    assert json.loads(capsys.readouterr().out)["status"] == "output_outside_state_dir"
+
+    # A missing suffix is normalized under outputs/ rather than refused.
+    assert (
+        common.resolve_output_path("plain", ".pdf")
+        == common.state_dir() / "outputs" / "plain.pdf"
+    )
+
+    # An uppercase suffix counts as the required suffix (kept verbatim) and
+    # cannot smuggle the path outside outputs/ either.
+    assert (
+        common.resolve_output_path("REPORT.PDF", ".pdf")
+        == common.state_dir() / "outputs" / "REPORT.PDF"
+    )
+    with pytest.raises(SystemExit):
+        common.resolve_output_path("../EVIL.PDF", ".pdf")
+    assert json.loads(capsys.readouterr().out)["status"] == "output_outside_state_dir"

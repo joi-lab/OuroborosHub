@@ -149,9 +149,7 @@ def main(argv: list[str]) -> int:
     else:
         raw = args.text
 
-    out_path = common.resolve_output_path(args.out)
-    if out_path.suffix.lower() != ".pdf":
-        out_path = out_path.with_suffix(".pdf")
+    out_path = common.resolve_output_path(args.out, ".pdf")
 
     common.require("reportlab", "reportlab")
     regular, bold = common.find_font(args.font)

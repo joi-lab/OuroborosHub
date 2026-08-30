@@ -107,12 +107,14 @@ def resolve_path(raw: str, *, must_exist: bool) -> pathlib.Path:
     return path
 
 
-def resolve_output_path(raw: str) -> pathlib.Path:
-    """Resolve a WRITE destination, confined to the skill state directory.
+def resolve_output_path(raw: str, suffix: str) -> pathlib.Path:
+    """Resolve a WRITE destination, confined to ``<state>/outputs/``.
 
-    A bare file name (or relative path) lands under ``<state>/outputs/``. An
-    absolute path is accepted only when it already points inside the state
-    directory; anything else is refused with an explanation instead of
+    A bare file name (or relative path) lands under ``<state>/outputs/``. The
+    required ``suffix`` is applied BEFORE the containment check, and the final
+    resolved path must stay strictly inside ``outputs/`` — so traversal
+    (``--out ..``) and suffix tricks cannot land a sibling of the state
+    directory. Anything else is refused with an explanation instead of
     silently writing into shared task directories.
     """
     text = str(raw).strip()
@@ -126,9 +128,11 @@ def resolve_output_path(raw: str) -> pathlib.Path:
         path = candidate.resolve()
     except OSError as exc:
         fail(f"cannot resolve output path: {exc}")
-    if not _contained(path, state_dir()):
+    if path.suffix.lower() != suffix:
+        path = path.with_suffix(suffix)
+    if path == outputs or not _contained(path, outputs):
         fail(
-            f"output path outside the skill state directory: {path}",
+            f"output path outside the skill outputs directory: {path}",
             hint=(
                 "pass a bare file name instead; the file is created under "
                 f"{outputs} and the returned JSON carries its absolute path — "

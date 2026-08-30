@@ -207,9 +207,7 @@ def main(argv: list[str]) -> int:
     if not blocks:
         common.fail("nothing to write: the input text is empty")
 
-    out_path = common.resolve_output_path(args.out)
-    if out_path.suffix.lower() != ".docx":
-        out_path = out_path.with_suffix(".docx")
+    out_path = common.resolve_output_path(args.out, ".docx")
 
     common.require("docx", "python-docx")
     import docx

@@ -268,17 +268,29 @@ def _sniff_delimiter(sample: str) -> str:
         return best if counts[best] else ","
 
 
+BLANK_SCAN_ALLOWANCE = 200
+
+
 def _scan_rows(row_iter, max_rows: int, empty_message: str) -> dict:
     """Consume at most the header plus ``max_rows`` non-empty data rows.
 
     One extra row is probed only to learn whether the table continues past the
-    cap; the iterator is then abandoned, so the tail is never read. When the
-    scan stopped early the true total is unknown: ``total_rows`` is None.
+    cap; the iterator is then abandoned, so the tail is never read. The number
+    of PHYSICAL pulls is bounded regardless of content: blank rows draw from a
+    fixed ``BLANK_SCAN_ALLOWANCE`` budget, so an empty-row tail (common in
+    formatted XLSX) cannot make the scan walk the whole file. When the scan
+    stopped early the true total is unknown: ``total_rows`` is None.
     """
     header_row: list | None = None
     rows: list[list] = []
     truncated = False
+    physical_budget = max_rows + BLANK_SCAN_ALLOWANCE + 2
+    physical = 0
     for raw_row in row_iter:
+        physical += 1
+        if physical > physical_budget:
+            truncated = True
+            break
         row = list(raw_row)
         if not any(str(cell).strip() for cell in row if cell is not None):
             continue
@@ -290,6 +302,20 @@ def _scan_rows(row_iter, max_rows: int, empty_message: str) -> dict:
             break
         rows.append(row)
     if header_row is None:
+        if truncated:
+            # The physical budget ran out before any non-empty row appeared.
+            # The remainder was never read, so "empty" would be a guess.
+            fail(
+                f"no header row found within the scan budget of "
+                f"{physical_budget} physical rows; the rest of the file was "
+                "not scanned",
+                hint=(
+                    "the file starts with a very long run of blank rows; "
+                    "remove them so the header appears near the top"
+                ),
+                status="header_not_found_within_scan_budget",
+                code=6,
+            )
         fail(empty_message, status="empty_table", code=6)
     return {
         "header_row": header_row,

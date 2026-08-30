@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
+
+import pytest
 
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
@@ -76,7 +79,57 @@ def test_bounded_scan_stops_reading_and_reports_truncation_honestly(tmp_path):
     assert len(scanned["rows"]) == 1
     assert pulled <= 3
 
+    # Blank rows cannot make the scan walk the whole file: physical pulls are
+    # bounded by the fixed blank allowance even when every tail row is empty.
+    blank_pulled = 0
+
+    def blank_tail_rows():
+        nonlocal blank_pulled
+        blank_pulled += 1
+        yield ["head_a", "head_b"]
+        blank_pulled += 1
+        yield ["1", "x"]
+        for _ in range(5000):
+            blank_pulled += 1
+            yield ["", ""]
+
+    blank = common._scan_rows(blank_tail_rows(), 1, "empty")
+    assert blank["truncated"] is True
+    assert blank["total_rows"] is None
+    assert blank_pulled <= common.BLANK_SCAN_ALLOWANCE + 5
+
+    # A modest blank PREFIX within the allowance still finds the header.
+    def blank_prefix_rows():
+        for _ in range(150):
+            yield ["", ""]
+        yield ["head_a", "head_b"]
+        yield ["1", "x"]
+        yield ["2", "y"]
+
+    prefixed = common._scan_rows(blank_prefix_rows(), 10, "empty")
+    assert prefixed["header_row"] == ["head_a", "head_b"]
+    assert prefixed["truncated"] is False
+    assert prefixed["total_rows"] == 2
+
     # An untruncated scan still reports an exact total.
     full = common.load_table(csv_path, max_rows=100)
     assert full["truncated"] is False
     assert full["total_rows"] == full["scanned_rows"] == 70
+
+
+def test_header_beyond_scan_budget_is_reported_as_unscanned_not_empty(capsys):
+    common = _load("table_common")
+
+    # A header that sits past the physical budget is a refusal to guess, not
+    # an "empty table": the scanner never saw the rest of the file.
+    def late_header_rows():
+        for _ in range(300):
+            yield ["", ""]
+        yield ["head_a", "head_b"]
+        yield ["1", "x"]
+
+    with pytest.raises(SystemExit):
+        common._scan_rows(late_header_rows(), 10, "empty")
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "header_not_found_within_scan_budget"
+    assert "not scanned" in payload["error"]
