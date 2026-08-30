@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
+
+import pytest
 
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
@@ -43,3 +46,30 @@ def test_section_selection_and_localized_heading_styles_remain_supported():
     assert read_docx.parse_selection("3-1", 4) == [1, 2, 3]
     assert read_docx.heading_level("Heading 4") == 4
     assert read_docx.heading_level("\u0417\u0430\u0433\u043e\u043b\u043e\u0432\u043e\u043a 2") == 2
+
+
+def test_writes_are_confined_to_the_state_dir_outputs(tmp_path, monkeypatch, capsys):
+    common = _load("docx_common")
+    data = tmp_path / "data"
+    state = data / "state" / "skills" / "word_tools"
+    monkeypatch.setenv("OUROBOROS_SKILL_STATE_DIR", str(state))
+
+    # A bare file name lands under <state>/outputs/ and the dir is created.
+    resolved = common.resolve_output_path("report.docx")
+    assert resolved == common.state_dir() / "outputs" / "report.docx"
+    assert resolved.parent.is_dir()
+
+    # An absolute path in the system temp dir is refused for writing...
+    with pytest.raises(SystemExit):
+        common.resolve_output_path(str(tmp_path / "evil.docx"))
+    assert json.loads(capsys.readouterr().out)["status"] == "output_outside_state_dir"
+
+    # ...and so is a task drive, even though it stays readable.
+    drive = data / "task_drives" / "t1"
+    with pytest.raises(SystemExit):
+        common.resolve_output_path(str(drive / "out.docx"))
+    assert json.loads(capsys.readouterr().out)["status"] == "output_outside_state_dir"
+    drive.mkdir(parents=True)
+    readable = drive / "in.txt"
+    readable.write_text("x", encoding="utf-8")
+    assert common.resolve_path(str(readable), must_exist=True) == readable.resolve()

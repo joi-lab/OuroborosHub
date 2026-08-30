@@ -127,7 +127,9 @@ def register_fonts(regular, bold):
 
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description="Build a PDF from text.")
-    parser.add_argument("--out", required=True, help="destination PDF path")
+    parser.add_argument("--out", required=True,
+                        help="output PDF file name, created under the skill "
+                             "state dir outputs/")
     parser.add_argument("--in", dest="src", default="", help="text/markdown source file")
     parser.add_argument("--text", default="", help="inline text (alternative to --in)")
     parser.add_argument("--title", default="", help="document title rendered on the first page")
@@ -147,13 +149,9 @@ def main(argv: list[str]) -> int:
     else:
         raw = args.text
 
-    out_path = common.resolve_path(args.out, must_exist=False)
+    out_path = common.resolve_output_path(args.out)
     if out_path.suffix.lower() != ".pdf":
         out_path = out_path.with_suffix(".pdf")
-    try:
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-    except OSError as exc:
-        common.fail(f"cannot create destination directory: {exc}")
 
     common.require("reportlab", "reportlab")
     regular, bold = common.find_font(args.font)

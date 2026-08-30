@@ -88,7 +88,7 @@ def _contained(path: pathlib.Path, root: pathlib.Path) -> bool:
 
 
 def resolve_path(raw: str, *, must_exist: bool) -> pathlib.Path:
-    """Resolve *raw* and refuse anything outside the allowed working roots."""
+    """Resolve *raw* for READING and refuse anything outside the allowed roots."""
     if not str(raw).strip():
         fail("empty path")
     path = pathlib.Path(str(raw)).expanduser()
@@ -104,6 +104,42 @@ def resolve_path(raw: str, *, must_exist: bool) -> pathlib.Path:
         )
     if must_exist and not path.is_file():
         fail(f"file not found: {path}")
+    return path
+
+
+def resolve_output_path(raw: str) -> pathlib.Path:
+    """Resolve a WRITE destination, confined to the skill state directory.
+
+    A bare file name (or relative path) lands under ``<state>/outputs/``. An
+    absolute path is accepted only when it already points inside the state
+    directory; anything else is refused with an explanation instead of
+    silently writing into shared task directories.
+    """
+    text = str(raw).strip()
+    if not text:
+        fail("empty output path")
+    candidate = pathlib.Path(text).expanduser()
+    outputs = state_dir() / "outputs"
+    if not candidate.is_absolute():
+        candidate = outputs / candidate
+    try:
+        path = candidate.resolve()
+    except OSError as exc:
+        fail(f"cannot resolve output path: {exc}")
+    if not _contained(path, state_dir()):
+        fail(
+            f"output path outside the skill state directory: {path}",
+            hint=(
+                "pass a bare file name instead; the file is created under "
+                f"{outputs} and the returned JSON carries its absolute path — "
+                "deliver it to the user with send_file afterwards"
+            ),
+            status="output_outside_state_dir",
+        )
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        fail(f"cannot create output directory: {exc}")
     return path
 
 

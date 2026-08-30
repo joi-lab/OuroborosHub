@@ -42,7 +42,7 @@ skill if one is installed.
 
 ## Build a document
 
-`skill_exec(skill="pdf_tools", script="scripts/make_pdf.py", args=["--in", "<text file>", "--out", "<PDF path>", "--title", "Report title"])`
+`skill_exec(skill="pdf_tools", script="scripts/make_pdf.py", args=["--in", "<text file>", "--out", "report.pdf", "--title", "Report title"])`
 
 Use `--text` instead of `--in` to pass text directly. Supported light markup
 includes `#`/`##`/`###` headings, blank-line paragraphs, `- ` bullets, `1. `
@@ -54,16 +54,19 @@ ambiguous; otherwise create the file directly.
 
 ## Output and delivery convention
 
-Write generated files into the task-visible working directory supplied for the
-task, such as its task drive or Deliverables path. Deliver the completed file
-with `send_file`. NEVER construct download URLs.
+Generated files are always written inside the skill state directory under
+`outputs/`. Pass a bare file name as `--out` (e.g. `--out report.pdf`); a path
+outside the state directory is refused with `status: "output_outside_state_dir"`.
+The returned JSON carries the absolute path of the created file in `file`.
+After the file is created, deliver it to the user yourself with `send_file`
+(host tooling) — the skill only creates the file. NEVER construct download URLs.
 
 ## Boundaries
 
 - The skill reads and creates PDFs. It does not edit existing PDF forms,
   annotations, complex layouts, or embedded content in place.
-- File access is restricted to Ouroboros working directories, task results and
-  drives, the skill state directory, Deliverables, uploads, and the system
-  temporary directory.
+- Reading is allowed from Ouroboros working directories: uploads, task results
+  and drives, Deliverables, the skill state directory, and the system temporary
+  directory. Writing is confined to the skill state directory (`outputs/`).
 - If no Unicode font is available, the script reports that explicitly instead
   of producing missing-glyph boxes. Use `--font` to provide a font explicitly.

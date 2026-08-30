@@ -37,7 +37,7 @@ file as an empty document.
 
 ## Build a document
 
-`skill_exec(skill="word_tools", script="scripts/make_docx.py", args=["--in", "<text file>", "--out", "<DOCX path>", "--title", "Report title"])`
+`skill_exec(skill="word_tools", script="scripts/make_docx.py", args=["--in", "<text file>", "--out", "report.docx", "--title", "Report title"])`
 
 Use `--text` instead of `--in` to pass text directly. Supported light markup
 includes headings, paragraphs, bullet and numbered lists, simple pipe tables,
@@ -49,15 +49,18 @@ ambiguous; otherwise create the file directly.
 
 ## Output and delivery convention
 
-Write generated files into the task-visible working directory supplied for the
-task, such as its task drive or Deliverables path. Deliver the completed file
-with `send_file`. NEVER construct download URLs.
+Generated files are always written inside the skill state directory under
+`outputs/`. Pass a bare file name as `--out` (e.g. `--out report.docx`); a path
+outside the state directory is refused with `status: "output_outside_state_dir"`.
+The returned JSON carries the absolute path of the created file in `file`.
+After the file is created, deliver it to the user yourself with `send_file`
+(host tooling) — the skill only creates the file. NEVER construct download URLs.
 
 ## Boundaries
 
 - A request for Word output must produce DOCX, not a substituted PDF.
 - Macros, tracked changes, complex corporate templates, headers and footers,
   embedded images, and merging into an existing design are out of scope.
-- File access is restricted to Ouroboros working directories, task results and
-  drives, the skill state directory, Deliverables, uploads, and the system
-  temporary directory.
+- Reading is allowed from Ouroboros working directories: uploads, task results
+  and drives, Deliverables, the skill state directory, and the system temporary
+  directory. Writing is confined to the skill state directory (`outputs/`).
