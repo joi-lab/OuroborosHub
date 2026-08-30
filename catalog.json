@@ -922,28 +922,28 @@
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "e1f74a5f9aad9faf72266c6012d58435ac282be9d6c6071e69e8b9f8a629e146",
-          "size": 2777
+          "sha256": "87420096cade4caf0646c117c79898b78e3b745b4a580839134e4135363871c1",
+          "size": 3098
         },
         {
           "path": "scripts/make_pdf.py",
-          "sha256": "f58e0d41d739cdb8671ceb66e64f779f3f901ce458d6eeb59ed5eb4664588ac2",
-          "size": 7483
+          "sha256": "7d61c7b805f5b139621df1850cd3d2b034079da6073b45577e08e1fd899726d7",
+          "size": 7410
         },
         {
           "path": "scripts/pdf_common.py",
-          "sha256": "1fb4709e1c57892ac775a10160f849c4a1ea077b1b2ae797eac269ccb7a40d9e",
-          "size": 6275
+          "sha256": "05b0fe4d8ed157b3e652fade889df90c5b362653bd6f9a58469ffb1e13d24e15",
+          "size": 7657
         },
         {
           "path": "scripts/read_pdf.py",
-          "sha256": "5983f5bdc71598deec1f99a4c6e82838941994d34a3c844ff107fd1d5ff1f627",
-          "size": 5111
+          "sha256": "aed4ed8000b35dc01b45926f1afe7411982e429fa3e73ef039d1c22d6bd77d9a",
+          "size": 5354
         },
         {
           "path": "tests/test_pdf_tools.py",
-          "sha256": "0a811475a529fa7921aab3e79365e35c527db261e54a5b368df1bf71cdbd35f5",
-          "size": 963
+          "sha256": "df3c4a2356c6f786cd7256dd4908def578e5f5e9e4e3d6da459def132420812d",
+          "size": 2751
         }
       ],
       "description": "Read PDF documents page by page and build new PDF files from text or structured answers with Unicode-capable fonts.",
@@ -967,28 +967,28 @@
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "6216f65dc608bf680300f67d397783ed6bd81333ea11e28d4210246f339bac00",
-          "size": 3104
+          "sha256": "1a867118e28e4ef91b47bcbe5dab49d9cc2f7f413f5e0119d5e146d9eb9f64e3",
+          "size": 3386
         },
         {
           "path": "scripts/query_table.py",
-          "sha256": "fd2d53e577b353a74498004ff4f5f592568189ab83fba90237bb949781dd4c9a",
-          "size": 10449
+          "sha256": "c964908cf9441eb0e218bc54ba7a2589db268eea5e925ddf7812ac5c43e66d59",
+          "size": 10827
         },
         {
           "path": "scripts/read_table.py",
-          "sha256": "5994394a80b2a1c11f808c2751536a74e9c2e0b5fbca9f26c468e5a3f533324e",
-          "size": 3648
+          "sha256": "25e4b80ed21b34b7bd22156206ac1834d4e1d03b26c12e95a0eb2b0804dddf8c",
+          "size": 3695
         },
         {
           "path": "scripts/table_common.py",
-          "sha256": "1c679df6f3a535d5a07fcfbbb175d692042d040918bf1208a2e9ad7c861c9a35",
-          "size": 15300
+          "sha256": "c9ee95e8adc1399698a50b4e77e638b66729f587193d4d4e0e5aec6b1c47107f",
+          "size": 15719
         },
         {
           "path": "tests/test_table_tools.py",
-          "sha256": "c4175f91956c1bf2cee2abf836fbafd95eef3875af9883c6b93a33458a684a26",
-          "size": 1451
+          "sha256": "f21796c65316887f022b880b838626ca531e0eeed9c3121ecbc4e214d4e9a912",
+          "size": 2844
         }
       ],
       "description": "Inspect, filter, sort, group, and aggregate CSV and XLSX tables while reporting truncation and non-numeric values honestly.",
@@ -1008,18 +1008,18 @@
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "a82637721e16972f04c531ee94cc08458a6519c2eaf626a9360849ec11e3c318",
-          "size": 2641
+          "sha256": "3ec503185b9eb21c6d619164ee70557db67fe79be562a36c562504ef5bcc55e0",
+          "size": 2963
         },
         {
           "path": "scripts/docx_common.py",
-          "sha256": "342bb96a4cb64e61ec5a80159a6d53d76d2f560de1c2c41197393caebdd39f89",
-          "size": 5820
+          "sha256": "6cf01aa624f5abde8de9a47d3ce2a4a9188be2238f5e40a7e9268f80cb81f2ff",
+          "size": 7202
         },
         {
           "path": "scripts/make_docx.py",
-          "sha256": "00f588fa8c38a2257a6cbea6984fbbbf953bd41a891a5baf89ab478e47b4fae4",
-          "size": 8957
+          "sha256": "6080e95a906677fc7a2416fa931a767dcd7abc2291b9409b9a2d5bba9bf809cd",
+          "size": 8884
         },
         {
           "path": "scripts/read_docx.py",
@@ -1028,8 +1028,8 @@
         },
         {
           "path": "tests/test_word_tools.py",
-          "sha256": "fd68f470cf4664901f513c4130b0fdcfdfad578dfa9c0397f028f772ac0323ee",
-          "size": 1357
+          "sha256": "079ee25942acd3ee2ff8d4931400cdf931b5a491ad370968131d67fef40c1b37",
+          "size": 2634
         }
       ],
       "description": "Read structured DOCX documents and build new Word documents from lightly structured text.",
