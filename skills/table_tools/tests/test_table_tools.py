@@ -42,3 +42,41 @@ def test_filters_and_aggregates_report_excluded_values():
     assert result["mean"] == 10.0
     assert result["non_numeric_cells_skipped"] == 1
     assert result["empty_cells"] == 1
+    assert "partial" not in result
+    partial = query.aggregate([{"Revenue": "10"}], ["sum"], "Revenue", partial=True)
+    assert partial["partial"] is True
+
+
+def test_bounded_scan_stops_reading_and_reports_truncation_honestly(tmp_path):
+    common = _load("table_common")
+
+    csv_path = tmp_path / "big.csv"
+    lines = ["id,value"] + [f"{i},{i * 10}" for i in range(70)]
+    csv_path.write_text("\n".join(lines), encoding="utf-8")
+
+    table = common.load_table(csv_path, max_rows=1)
+    assert table["truncated"] is True
+    assert table["scanned_rows"] == 1
+    assert table["total_rows"] is None
+    assert len(table["rows"]) == 1
+
+    # The row iterator is abandoned right after the truncation probe: at most
+    # the header, the stored row and one probe row are ever pulled.
+    pulled = 0
+
+    def counting_rows():
+        nonlocal pulled
+        for index in range(70):
+            pulled += 1
+            yield ["head_a", "head_b"] if index == 0 else [str(index), "x"]
+
+    scanned = common._scan_rows(counting_rows(), 1, "empty")
+    assert scanned["truncated"] is True
+    assert scanned["total_rows"] is None
+    assert len(scanned["rows"]) == 1
+    assert pulled <= 3
+
+    # An untruncated scan still reports an exact total.
+    full = common.load_table(csv_path, max_rows=100)
+    assert full["truncated"] is False
+    assert full["total_rows"] == full["scanned_rows"] == 70

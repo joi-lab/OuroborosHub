@@ -88,8 +88,9 @@ def main() -> int:
         payload["csv"] = table["meta"]
     if table["truncated"]:
         payload["truncation_note"] = (
-            f"this table is large: {table['total_rows']} rows in total, "
-            f"{table['scanned_rows']} scanned — say so and narrow the question"
+            f"this table is large: only the first {table['scanned_rows']} rows "
+            "were scanned and the total is unknown without a full pass — "
+            "say so and narrow the question"
         )
     if not args.no_sample:
         payload["sample_rows"] = sample_rows(table, args.head)

@@ -110,8 +110,13 @@ def sort_key(record: dict, column: str):
     return (1, 0.0, str(value).lower())
 
 
-def aggregate(rows: list[dict], aggs: list[str], on: str) -> dict:
+def aggregate(rows: list[dict], aggs: list[str], on: str, *,
+              partial: bool = False) -> dict:
+    """Aggregate *rows*; ``partial=True`` marks results computed on a
+    truncated scan, which describe only the scanned slice of the table."""
     result: dict = {"rows": len(rows)}
+    if partial:
+        result["partial"] = True
     if "count" in aggs:
         result["count"] = len(rows)
     numeric_aggs = [name for name in aggs if name != "count"]
@@ -228,8 +233,9 @@ def main() -> int:
         payload["sheet"] = table["meta"].get("sheet", "")
     if table["truncated"]:
         payload["truncation_note"] = (
-            f"only the first {table['scanned_rows']} of {table['total_rows']} rows "
-            "were scanned — these results describe that slice, not the whole table"
+            f"only the first {table['scanned_rows']} rows were scanned (the total "
+            "is unknown without a full pass) — these results describe that slice, "
+            "not the whole table"
         )
 
     if args.group_by:
@@ -239,7 +245,8 @@ def main() -> int:
             groups.setdefault("" if key is None else str(key), []).append(record)
         wanted = aggs or ["count"]
         entries = [
-            {"group": key, **aggregate(bucket, wanted, args.on)}
+            {"group": key,
+             **aggregate(bucket, wanted, args.on, partial=table["truncated"])}
             for key, bucket in sorted(groups.items())
         ]
         payload["group_by"] = args.group_by
@@ -250,7 +257,8 @@ def main() -> int:
         return 0
 
     if aggs:
-        payload["aggregates"] = aggregate(rows, aggs, args.on)
+        payload["aggregates"] = aggregate(rows, aggs, args.on,
+                                          partial=table["truncated"])
         payload["aggregated_column"] = args.on
         common.emit(payload)
         return 0

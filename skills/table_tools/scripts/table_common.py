@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import csv
 import datetime as _dt
-import io
 import json
 import os
 import pathlib
@@ -269,45 +268,57 @@ def _sniff_delimiter(sample: str) -> str:
         return best if counts[best] else ","
 
 
-def _read_csv_rows(path: pathlib.Path, max_rows: int) -> dict:
-    raw = None
-    encoding = ""
-    for candidate in ("utf-8-sig", "utf-8", "cp1251", "latin-1"):
-        try:
-            raw = path.read_text(encoding=candidate)
-            encoding = candidate
+def _scan_rows(row_iter, max_rows: int, empty_message: str) -> dict:
+    """Consume at most the header plus ``max_rows`` non-empty data rows.
+
+    One extra row is probed only to learn whether the table continues past the
+    cap; the iterator is then abandoned, so the tail is never read. When the
+    scan stopped early the true total is unknown: ``total_rows`` is None.
+    """
+    header_row: list | None = None
+    rows: list[list] = []
+    truncated = False
+    for raw_row in row_iter:
+        row = list(raw_row)
+        if not any(str(cell).strip() for cell in row if cell is not None):
+            continue
+        if header_row is None:
+            header_row = row
+            continue
+        if len(rows) >= max_rows:
+            truncated = True
             break
+        rows.append(row)
+    if header_row is None:
+        fail(empty_message, status="empty_table", code=6)
+    return {
+        "header_row": header_row,
+        "rows": rows,
+        "truncated": truncated,
+        "total_rows": None if truncated else len(rows),
+    }
+
+
+def _read_csv_rows(path: pathlib.Path, max_rows: int) -> dict:
+    for encoding in ("utf-8-sig", "utf-8", "cp1251", "latin-1"):
+        try:
+            with path.open("r", encoding=encoding, newline="") as handle:
+                delimiter = _sniff_delimiter(handle.read(8192))
+                handle.seek(0)
+                try:
+                    scanned = _scan_rows(csv.reader(handle, delimiter=delimiter),
+                                         max_rows, "the file has no readable rows")
+                except csv.Error as exc:
+                    fail(f"cannot parse this CSV file: {exc}", status="unreadable")
         except UnicodeDecodeError:
             continue
         except OSError as exc:
             fail(f"cannot read file: {exc}", status="unreadable")
-    if raw is None:
-        fail("cannot decode this CSV file with utf-8, cp1251 or latin-1",
-             status="unreadable")
-    delimiter = _sniff_delimiter(raw[:8192])
-    header_row: list | None = None
-    rows: list[list] = []
-    total = 0
-    try:
-        for row in csv.reader(io.StringIO(raw), delimiter=delimiter):
-            if not any(str(cell).strip() for cell in row):
-                continue
-            if header_row is None:
-                header_row = row
-                continue
-            total += 1
-            if len(rows) < max_rows:
-                rows.append(row)
-    except csv.Error as exc:
-        fail(f"cannot parse this CSV file: {exc}", status="unreadable")
-    if header_row is None:
-        fail("the file has no readable rows", status="empty_table", code=6)
-    return {
-        "header_row": header_row,
-        "rows": rows,
-        "total_rows": total,
-        "meta": {"encoding": encoding, "delimiter": delimiter},
-    }
+        scanned["meta"] = {"encoding": encoding, "delimiter": delimiter}
+        return scanned
+    fail("cannot decode this CSV file with utf-8, cp1251 or latin-1",
+         status="unreadable")
+    raise AssertionError("unreachable")  # pragma: no cover
 
 
 def list_sheets(path: pathlib.Path) -> list[dict]:
@@ -346,35 +357,23 @@ def _read_xlsx_rows(path: pathlib.Path, sheet_name: str, max_rows: int) -> dict:
                 code=7,
             )
         target = book[sheet_name] if sheet_name else book.worksheets[0]
-        header_row: list | None = None
-        rows: list[list] = []
-        total = 0
-        for raw_row in target.iter_rows(values_only=True):
-            row = list(raw_row)
-            if not any(str(cell).strip() for cell in row if cell is not None):
-                continue
-            if header_row is None:
-                header_row = row
-                continue
-            total += 1
-            if len(rows) < max_rows:
-                rows.append(row)
-        if header_row is None:
-            fail(f"sheet '{target.title}' has no readable rows",
-                 status="empty_table", code=6)
-        return {
-            "header_row": header_row,
-            "rows": rows,
-            "total_rows": total,
-            "meta": {"sheet": target.title, "sheets": names},
-        }
+        scanned = _scan_rows(target.iter_rows(values_only=True), max_rows,
+                             f"sheet '{target.title}' has no readable rows")
+        scanned["meta"] = {"sheet": target.title, "sheets": names}
+        return scanned
     finally:
         book.close()
 
 
 def load_table(path: pathlib.Path, *, sheet: str = "",
                max_rows: int = MAX_ROWS_DEFAULT) -> dict:
-    """Load one table as {columns, rows (list[dict]), total_rows, truncated, meta}."""
+    """Load one table as {columns, rows (list[dict]), total_rows, truncated, meta}.
+
+    The scan is genuinely bounded: reading stops right after ``max_rows`` data
+    rows (plus a one-row probe that only detects truncation). ``scanned_rows``
+    counts the rows the results describe, and ``total_rows`` is None when the
+    scan was truncated — the true total is unknown without a full pass.
+    """
     kind = detect_format(path)
     if kind == "xlsx":
         loaded = _read_xlsx_rows(path, sheet, max_rows)
@@ -403,7 +402,7 @@ def load_table(path: pathlib.Path, *, sheet: str = "",
         "rows": records,
         "total_rows": loaded["total_rows"],
         "scanned_rows": len(records),
-        "truncated": loaded["total_rows"] > len(records),
+        "truncated": loaded["truncated"],
         "meta": loaded["meta"],
     }
 

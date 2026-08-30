@@ -49,9 +49,13 @@ pretends mixed data was uniformly numeric.
 
 ## Large tables
 
-The scripts scan a bounded number of rows (`--max-rows`, default 20000) and
-report both total and scanned rows with a `truncated` flag. If a result covers
-only a slice, state that clearly and offer a narrower query.
+The scripts scan a bounded number of rows (`--max-rows`, default 20000):
+reading stops right after the cap instead of walking the whole file.
+`scanned_rows` counts the rows the results describe, `truncated` says whether
+the table continues past them, and `total_rows` is `null` when the scan was
+truncated (the true total is unknown without a full pass). Aggregates computed
+on a truncated scan carry `partial: true`. If a result covers only a slice,
+state that clearly and offer a narrower query.
 
 ## Output and delivery convention
 
