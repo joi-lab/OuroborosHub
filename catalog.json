@@ -913,6 +913,133 @@
       "type": "extension",
       "version": "0.3.2",
       "when_to_use": "User asks about weather, temperature, forecast, current conditions, wind, humidity, sunrise/sunset, or a weather dashboard for a city."
+    },
+    {
+      "slug": "pdf_tools",
+      "name": "pdf_tools",
+      "version": "0.1.0",
+      "type": "script",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "sha256": "e1f74a5f9aad9faf72266c6012d58435ac282be9d6c6071e69e8b9f8a629e146",
+          "size": 2777
+        },
+        {
+          "path": "scripts/make_pdf.py",
+          "sha256": "f58e0d41d739cdb8671ceb66e64f779f3f901ce458d6eeb59ed5eb4664588ac2",
+          "size": 7483
+        },
+        {
+          "path": "scripts/pdf_common.py",
+          "sha256": "1fb4709e1c57892ac775a10160f849c4a1ea077b1b2ae797eac269ccb7a40d9e",
+          "size": 6275
+        },
+        {
+          "path": "scripts/read_pdf.py",
+          "sha256": "5983f5bdc71598deec1f99a4c6e82838941994d34a3c844ff107fd1d5ff1f627",
+          "size": 5111
+        },
+        {
+          "path": "tests/test_pdf_tools.py",
+          "sha256": "0a811475a529fa7921aab3e79365e35c527db261e54a5b368df1bf71cdbd35f5",
+          "size": 963
+        }
+      ],
+      "description": "Read PDF documents page by page and build new PDF files from text or structured answers with Unicode-capable fonts.",
+      "when_to_use": "The user attached a PDF and asks to read, summarize, search, or compare it, or asks to produce or export a PDF.",
+      "install_specs": [
+        {
+          "kind": "pip",
+          "package": "pypdf"
+        },
+        {
+          "kind": "pip",
+          "package": "reportlab"
+        }
+      ]
+    },
+    {
+      "slug": "table_tools",
+      "name": "table_tools",
+      "version": "0.1.0",
+      "type": "script",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "sha256": "6216f65dc608bf680300f67d397783ed6bd81333ea11e28d4210246f339bac00",
+          "size": 3104
+        },
+        {
+          "path": "scripts/query_table.py",
+          "sha256": "fd2d53e577b353a74498004ff4f5f592568189ab83fba90237bb949781dd4c9a",
+          "size": 10449
+        },
+        {
+          "path": "scripts/read_table.py",
+          "sha256": "5994394a80b2a1c11f808c2751536a74e9c2e0b5fbca9f26c468e5a3f533324e",
+          "size": 3648
+        },
+        {
+          "path": "scripts/table_common.py",
+          "sha256": "1c679df6f3a535d5a07fcfbbb175d692042d040918bf1208a2e9ad7c861c9a35",
+          "size": 15300
+        },
+        {
+          "path": "tests/test_table_tools.py",
+          "sha256": "c4175f91956c1bf2cee2abf836fbafd95eef3875af9883c6b93a33458a684a26",
+          "size": 1451
+        }
+      ],
+      "description": "Inspect, filter, sort, group, and aggregate CSV and XLSX tables while reporting truncation and non-numeric values honestly.",
+      "when_to_use": "The user attached a CSV or XLSX file and asks to inspect, summarize, filter, compare, group, sort, or calculate from its data.",
+      "install_specs": [
+        {
+          "kind": "pip",
+          "package": "openpyxl"
+        }
+      ]
+    },
+    {
+      "slug": "word_tools",
+      "name": "word_tools",
+      "version": "0.1.0",
+      "type": "script",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "sha256": "a82637721e16972f04c531ee94cc08458a6519c2eaf626a9360849ec11e3c318",
+          "size": 2641
+        },
+        {
+          "path": "scripts/docx_common.py",
+          "sha256": "342bb96a4cb64e61ec5a80159a6d53d76d2f560de1c2c41197393caebdd39f89",
+          "size": 5820
+        },
+        {
+          "path": "scripts/make_docx.py",
+          "sha256": "00f588fa8c38a2257a6cbea6984fbbbf953bd41a891a5baf89ab478e47b4fae4",
+          "size": 8957
+        },
+        {
+          "path": "scripts/read_docx.py",
+          "sha256": "547ba082404ba45e89a4571a5e5f98cd2ba48b6c683ad024372ef0efc29c8aa3",
+          "size": 10624
+        },
+        {
+          "path": "tests/test_word_tools.py",
+          "sha256": "fd68f470cf4664901f513c4130b0fdcfdfad578dfa9c0397f028f772ac0323ee",
+          "size": 1357
+        }
+      ],
+      "description": "Read structured DOCX documents and build new Word documents from lightly structured text.",
+      "when_to_use": "The user attached a Word document and asks to read, summarize, search, compare, or revise its contents, or asks to create a Word or DOCX file.",
+      "install_specs": [
+        {
+          "kind": "pip",
+          "package": "python-docx"
+        }
+      ]
     }
   ]
 }
