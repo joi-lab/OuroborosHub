@@ -10,11 +10,15 @@ in-process harness executes widget.js itself (without a browser framework) for:
 - Account and group structuring (native vs profile, next_up resolution, harness ordering).
 - Fresh/stale/exhausted rendering, approved absence actions, exact-subject merging,
   passive polling, foreground refresh, old-host failure, ARIA/title honesty, and teardown.
+- Full view building and transport error handling.
+- Display preferences: what the skill agrees to remember, and what it drops.
 """
 
 import datetime as dt
 import json
+import math
 import os
+import re
 import shutil
 import subprocess
 import textwrap
@@ -23,6 +27,11 @@ import pytest
 
 import plugin
 from plugin import (
+    DEFAULT_PREFS,
+    MAX_MODEL_ENTRIES,
+    clean_prefs,
+    read_prefs,
+    write_prefs,
     FACETS,
     READ_OK,
     facet_states,
@@ -707,6 +716,25 @@ class Element {
     this.attributes = {};
     this.listeners = {};
     this.style = {};
+    // className is the whole of it here, so classList reads and writes that
+    // string. The widget toggles one class on #root while the settings panel
+    // is open, and a stub without it would fail on a standard DOM call.
+    this.classList = {
+      contains: (name) => this.className.split(/\s+/).includes(name),
+      add: (name) => {
+        if (!this.classList.contains(name)) {
+          this.className = (this.className ? this.className + ' ' : '') + name;
+        }
+      },
+      remove: (name) => {
+        this.className = this.className.split(/\s+/).filter((x) => x && x !== name).join(' ');
+      },
+      toggle: (name, force) => {
+        const on = force === undefined ? !this.classList.contains(name) : !!force;
+        if (on) this.classList.add(name); else this.classList.remove(name);
+        return on;
+      },
+    };
     this.disabled = false;
     this._text = '';
   }
@@ -1033,7 +1061,8 @@ function view(accounts) {
   assert.equal(mergedDirect.facets.accounts, base.facets.accounts);
   assert.equal(mergedDirect.groups[0].accounts[0].quota.label, '10% used');
   assert.equal(mergedDirect.groups[0].accounts[1].quota.label, '91% used');
-  assert.deepEqual(env.calls, [{ url: '/api/extensions/claudexor_quotas/quotas', method: 'GET' }]);
+  const PREFIX = process.env.WIDGET_ROUTE_PREFIX;
+  assert.deepEqual(env.calls, [{ url: PREFIX + 'quotas', method: 'GET' }]);
   env.interval()();
   await settle();
   assert.equal(env.calls[1].method, 'GET');
@@ -1045,7 +1074,7 @@ function view(accounts) {
   assert.equal(byFocus(env.root, 'refresh').disabled, true);
   await settle();
   assert.equal(env.calls.filter((call) => call.method === 'POST').length, 1);
-  assert.equal(env.calls.at(-1).url, '/api/extensions/claudexor_quotas/refresh');
+  assert.equal(env.calls.at(-1).url, PREFIX + 'refresh');
   assert.match(env.root.textContent, /91% used/);
   assert.match(env.root.textContent, /named@example.com/);
   assert.match(env.root.textContent, /Verified live/);
@@ -1076,6 +1105,16 @@ function view(accounts) {
 """
 
 
+def _widget_route_prefix(widget_path: Path) -> str:
+    """The route prefix the widget actually asks for, read out of its own
+    source. Asserting a literal here is what let a renamed copy of this skill
+    drift away from its tests."""
+    text = widget_path.read_text(encoding="utf-8")
+    found = re.search(r"var ROUTE = '([^']*/)[a-z]+';", text)
+    assert found, "widget.js must declare ROUTE as a single-quoted literal"
+    return found.group(1)
+
+
 def test_real_widget_in_process_matrix():
     candidates = [
         os.environ.get("OUROBOROSHUB_NODE", ""),
@@ -1089,10 +1128,89 @@ def test_real_widget_in_process_matrix():
     result = subprocess.run(
         [str(node), "-e", textwrap.dedent(NODE_WIDGET_MATRIX)],
         cwd=widget_path.parent,
-        env={**dict(os.environ), "WIDGET_PATH": str(widget_path)},
+        env={
+            **dict(os.environ),
+            "WIDGET_PATH": str(widget_path),
+            # The prefix comes from the widget itself. Spelling it out a second
+            # time here is how the pair drifted apart: a copy of this skill
+            # under another name renamed its routes and left the assertions
+            # asserting the old ones.
+            "WIDGET_ROUTE_PREFIX": _widget_route_prefix(widget_path),
+        },
         text=True,
         capture_output=True,
         timeout=30,
         check=False,
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+class _Api:
+    """The two calls this plugin makes on the host, and nothing else."""
+
+    def __init__(self, state_dir, broken=False):
+        self._state_dir = state_dir
+        self._broken = broken
+        self.logged = []
+
+    def get_state_dir(self):
+        if self._broken:
+            raise RuntimeError("no state dir for this skill")
+        return str(self._state_dir)
+
+    def log(self, level, message):
+        self.logged.append((level, message))
+
+
+class TestPrefs:
+    def test_clean_prefs_defaults_on_junk(self):
+        for junk in (None, "", 0, [], "density", {"density": "huge"}):
+            assert clean_prefs(junk) == DEFAULT_PREFS
+
+    def test_clean_prefs_keeps_known_values(self):
+        cleaned = clean_prefs({"density": "detailed", "models": {"claude": "models"}})
+        assert cleaned == {"density": "detailed", "models": {"claude": "models"}}
+
+    def test_clean_prefs_drops_unknown_choice_but_keeps_the_rest(self):
+        cleaned = clean_prefs({
+            "density": "compact",
+            "models": {"claude": "models", "codex": "everything", "": "all"},
+        })
+        assert cleaned == {"density": "compact", "models": {"claude": "models"}}
+
+    def test_clean_prefs_ignores_a_models_value_that_is_not_a_map(self):
+        assert clean_prefs({"density": "compact", "models": ["claude"]}) == {
+            "density": "compact", "models": {},
+        }
+
+    def test_clean_prefs_caps_the_number_of_families(self):
+        many = {"h%d" % i: "models" for i in range(MAX_MODEL_ENTRIES + 20)}
+        cleaned = clean_prefs({"models": many})
+        assert len(cleaned["models"]) <= MAX_MODEL_ENTRIES
+
+    def test_write_then_read_round_trips(self, tmp_path):
+        api = _Api(tmp_path)
+        stored, error = write_prefs(api, {"density": "compact", "models": {"claude": "shared"}})
+        assert error == ""
+        assert stored == {"density": "compact", "models": {"claude": "shared"}}
+        assert read_prefs(api) == stored
+
+    def test_read_returns_defaults_when_nothing_was_written(self, tmp_path):
+        assert read_prefs(_Api(tmp_path)) == DEFAULT_PREFS
+
+    def test_read_survives_a_corrupt_file(self, tmp_path):
+        api = _Api(tmp_path)
+        (tmp_path / "prefs.json").write_text("{not json", encoding="utf-8")
+        assert read_prefs(api) == DEFAULT_PREFS
+
+    def test_no_state_directory_is_reported_not_raised(self, tmp_path):
+        api = _Api(tmp_path, broken=True)
+        stored, error = write_prefs(api, {"density": "detailed"})
+        assert stored == {"density": "detailed", "models": {}}
+        assert error == "no state directory"
+        assert read_prefs(api) == DEFAULT_PREFS
+
+    def test_stored_file_holds_only_the_cleaned_shape(self, tmp_path):
+        api = _Api(tmp_path)
+        write_prefs(api, {"density": "detailed", "models": {"claude": "models"}, "token": "secret"})
+        written = json.loads((tmp_path / "prefs.json").read_text(encoding="utf-8"))
+        assert written == {"density": "detailed", "models": {"claude": "models"}}

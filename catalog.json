@@ -271,33 +271,33 @@
       "when_to_use": "When the user wants to play an authentic Classic Doom (1993) 2.5D FPS raycaster game directly in an Ouroboros extension widget with monsters, weapons, sound effects, and heavy metal synth."
     },
     {
-      "description": "Quota widget showing fresh and last-known limits for every authorized Claudexor account, with honest foreground refresh and per-facet read state.",
+      "description": "Quota widget showing fresh and last-known limits for every authorized Claudexor account, with honest foreground refresh and per-facet read state. Writes nothing but the reader's display choices, into its own state directory.",
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "093972a06ed1d3d6f8e7a591cda5b0b3a99e6a268ce9eec8a444f5a9c9cda3ee",
-          "size": 7875
+          "sha256": "c4377b2ab9f5dc463af65c9dcbd42965fbd21bc5fae324a0c12549ebac344126",
+          "size": 8590
         },
         {
           "path": "plugin.py",
-          "sha256": "bb44ef1fca743029cb0a5d85acc4d62e13d5fb0b41cb6e56ebb36d62db1dae59",
-          "size": 24618
+          "sha256": "ccb735a3af1a1d8c096a977a17249a4f9ccf70270b5cbd1f55a177dea344681b",
+          "size": 30178
         },
         {
           "path": "test_quotas.py",
-          "sha256": "a04b287d3466eecdce4246bb79c7612f8ee4f7bf3721e0c7a588486066a15409",
-          "size": 43133
+          "sha256": "b8d0141431a038b61ced0e6d13e882b9e5800b39fcaea2b2eabe6c87bcecc0a2",
+          "size": 48079
         },
         {
           "path": "widget.js",
-          "sha256": "e2960fa3ebe3df219066e116ca8e7d8f70f3c8a07daa78be1133a07913315ef1",
-          "size": 95382
+          "sha256": "c6cf14fcbb4eed05fcb5761892076cb3b00d3dcecde6a87bb152aa8fc7c388aa",
+          "size": 135506
         }
       ],
       "name": "claudexor_quotas",
       "slug": "claudexor_quotas",
       "type": "extension",
-      "version": "0.3.1",
+      "version": "0.4.0",
       "when_to_use": "The owner wants to see, at a glance, the quota windows, limits and reset times of every authorized Claudexor account, including which facets could not be read."
     },
     {

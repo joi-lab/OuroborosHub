@@ -1,4 +1,4 @@
-/* Claudexor Quotas widget — v0.3.1
+/* Claudexor Quotas widget — v0.4.0
  *
  * Runs as a reviewed module widget: a classic inline script inside an
  * opaque-origin sandboxed iframe whose window.fetch is a parent-mediated
@@ -14,16 +14,67 @@
     var REFRESH_ROUTE = '/api/extensions/claudexor_quotas/refresh';
     var REFRESH_MS = 30000;
     var FACET_ORDER = ['catalog', 'accounts', 'quota'];
-    var TONE_WORD = { ok: 'ready', warn: 'heavy use', bad: 'alert', muted: 'no live reading' };
+    // The words follow the dot's new question: "heavy use" described a long
+    // bar, while yellow now also means a model is out.
+    var TONE_WORD = { ok: 'ready', warn: 'needs a look', bad: 'alert', muted: 'no live reading' };
+
+    // How much of a row to unfold. The choice belongs to whoever is looking at
+    // this screen, and the skill keeps it for them — see applyPrefs below for
+    // why it cannot be kept here. One table and no list of keys beside it: two
+    // sources for one set drift apart the day a fourth mode is added to only
+    // one of them.
+    var DENSITY_OPTIONS = [
+        { key: 'compact', name: 'compact', note: 'bars only' },
+        { key: 'normal', name: 'normal', note: 'what is spent, plus one line for the rest' },
+        { key: 'detailed', name: 'detailed', note: 'a line per window, nothing folded' }
+    ];
+    // What a row in the account list says about model-scoped windows. The
+    // choice is per family, because families differ in whether the engine
+    // marks models at all — and it applies to the list only: the card of the
+    // account you have opened always shows everything it was told.
+    // The words for these are not written here: they are built from the data,
+    // so a family whose model windows all name Fable offers "only Fable"
+    // rather than a category nobody has seen on the screen.
+    var MODEL_VIEWS = ['all', 'models', 'shared'];
+    var PREFS_ROUTE = '/api/extensions/claudexor_quotas/prefs';
+
+
+    // Tabs, not one long column: what goes in here will keep growing, and a
+    // panel that answers by scrolling makes every setting harder to find than
+    // the last.
+    var SETTINGS_TABS = [
+        { key: 'detail', name: 'Row detail', icon: 'rows' },
+        { key: 'models', name: 'Models', icon: 'filter' },
+        { key: 'state', name: 'System state', icon: 'signal' }
+    ];
 
     var root = document.getElementById('root');
     var generation = 0;
     var dataTimer = null;
+    // When the repeating timer was set. Every automatic re-read happens at
+    // timerStartedAt + a whole number of REFRESH_MS, so the bar in the Refresh
+    // button can be lined up with the real schedule instead of guessing at it.
+    var timerStartedAt = 0;
     var lastGood = null;
     var lastGoodAt = 0;
     var stopped = false;
     var inFlight = false;
-    var statusOpen = false;
+    var settingsOpen = false;
+    // The open tab is not remembered — the panel always opens on the one a
+    // reader came for most often.
+    var settingsTab = 'detail';
+    // The reader's display choices. They start as the defaults and are replaced
+    // by whatever the skill has kept, which arrives with the first reading.
+    var density = 'normal';
+    var modelChoices = {};
+    // While a save is in the air the screen is ahead of the skill; a reading
+    // that lands in that window would drag the choice back to what was stored
+    // a moment ago.
+    var prefsInFlight = 0;
+    // Set when the skill answered but did not keep the choice. Without it the
+    // screen paints the wish, holds it for thirty seconds and then quietly
+    // reverts — the very thing the route was added to stop.
+    var saveError = '';
     // The screen shows one account at a time: which family, and which account
     // inside it. Both survive the 30-second redraw, and both fall back on their
     // own when what they point at stops existing.
@@ -53,12 +104,16 @@
            light top edge is what makes the button feel like glass. */
         '--accent-grad:linear-gradient(180deg, #d84152 0%, #b62c3c 100%);',
         '--accent-grad-hover:linear-gradient(180deg, #e04b5c 0%, #c53544 100%);',
+        /* What the burnt-down part of the Refresh button is left standing on:
+           the same accent, dimmed, so the bar reads as one colour losing its
+           light rather than two colours meeting. */
+        '--accent-dim:linear-gradient(180deg, rgba(216, 65, 82, 0.30) 0%, rgba(182, 44, 60, 0.30) 100%);',
         '--accent-edge:rgba(255, 255, 255, 0.14);',
         '--border-prominent:rgba(255, 255, 255, 0.20);',
         '--text-primary:#e2e8f0;',
         '--text-secondary:rgba(255, 255, 255, 0.68);',
         '--text-muted:rgba(255, 255, 255, 0.54);',
-        '--status-ok:#22c55e;',
+        '--status-ok:#22c55e;--status-ok-bg:rgba(34, 197, 94, 0.13);',
         '--grad-ok:linear-gradient(90deg, #16a34a 0%, #4ade80 100%);',
         '--status-warn:#f59e0b;',
         '--status-stale:#d6a54a;',
@@ -70,8 +125,17 @@
         '--status-bad-border:rgba(201, 53, 69, 0.55);',
         '--grad-bad:linear-gradient(90deg, #8f1f2c 0%, #e04b5c 100%);',
         /* Every element of the control row is exactly this tall, so the row
-           does not jump when the status strip opens in place of the rest. */
+           keeps its height whatever is open below it. */
         '--row-h:32px;',
+        /* The host sizes the frame to fit this page, so the page must never
+           size itself to the frame: an open settings panel measured in vh grew
+           the frame, the taller frame grew the panel, and the two chased each
+           other two pixels at a time. A plain number breaks the loop.
+           The host's own floor is 320. Thirty per cent more is 416, and the
+           frame it asks for is this number plus the page's own 12 points of
+           bottom padding and the 2 the host keeps for the border: 428. A frame
+           that opened at 320 cut an account with five windows in half. */
+        '--floor:414px;',
         '--radius-sm:6px;',
         '--radius-md:10px;',
         '--radius-lg:14px;',
@@ -95,22 +159,45 @@
         '*{box-sizing:border-box}',
         '@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}',
 
-        /* Round buttons close the row on the right: status and Refresh. Status
-           opens sideways, in place of the family segment and the account
-           selector; only the account list is allowed to lie over the card. */
+        /* Settings and Refresh close the row on the right, and they close it as
+           one capsule — the same shape the family marks wear on the left. Two
+           lone circles read as leftovers pushed to the edge; one capsule reads
+           as a control, and the row becomes two groups instead of four things. */
         /* Glass is one recipe, written once: blur behind, hairline edge, and a
            brighter top edge on the surfaces that are meant to look lifted. */
-        '.round-btn,.status-strip,.harness-seg,.acct-btn,.acct-pop,.empty-card{',
+        '.harness-seg,.action-seg,.acct-btn,.acct-pop,.empty-card{',
         'backdrop-filter:var(--glass-blur);-webkit-backdrop-filter:var(--glass-blur);',
         'border:1px solid var(--glass-edge)}',
         '.acct-btn,.acct-pop,.empty-card{border-top-color:var(--glass-edge-top)}',
-        '.round-btn{width:var(--row-h);height:var(--row-h);padding:0;border-radius:50%;background:var(--bg-surface-inset);',
-        'color:var(--text-muted);cursor:pointer;display:inline-flex;',
-        'align-items:center;justify-content:center;flex:none;transition:all var(--transition-fast)}',
-        '.round-btn:hover{color:var(--text-primary);background:var(--glass-fill)}',
-        '.round-btn.is-open{background:var(--glass-fill);border-color:var(--glass-edge-top);color:var(--text-primary)}',
-        '.round-btn.has-problem{background:var(--status-bad-bg);border-color:var(--status-bad-border);color:var(--status-bad)}',
-        '.status-wrap{position:relative;display:inline-flex;flex:none}',
+        /* Both capsules in the control row are one shape, and the pills inside
+           them are one pill: the marks on the left and the two buttons on the
+           right were written twice over, differing by a gap and a width. What
+           differs is said on its own line, right below. */
+        '.harness-seg,.action-seg{display:inline-flex;align-items:center;height:var(--row-h);',
+        'background:var(--bg-surface-inset);padding:3px;border-radius:var(--radius-pill);flex:none}',
+        '.action-seg{gap:2px}',
+        '.harness-btn,.action-btn{position:relative;height:100%;padding:0;',
+        'border-radius:var(--radius-pill);border:1px solid transparent;background:transparent;',
+        'color:var(--text-muted);cursor:pointer;display:inline-flex;align-items:center;',
+        'justify-content:center;transition:all var(--transition-fast)}',
+        '.harness-btn{width:30px}',
+        /* The halves are not equal on purpose: Refresh is the one hit on
+           purpose and takes half again the width, settings is the door you go
+           through now and then. */
+        '.action-settings{width:28px}',
+        '.action-refresh{width:42px}',
+        /* Every pill in this widget answers a hover the same way and looks the
+           same when it is the chosen one, so both answers are written once.
+           The selectors differ because what disqualifies a hover differs — a
+           disabled button, an already-chosen tab — but the look does not. The
+           density tile is not a pill and keeps its own quieter hover, below. */
+        '.action-btn:hover:not(:disabled),.harness-btn:hover:not(.active),',
+        '.settings-tab:hover:not(.active),.models-opt:hover:not(.active){',
+        'color:var(--text-primary);background:var(--glass-fill)}',
+        '.action-btn.is-open,.harness-btn.active,.settings-tab.active,',
+        '.density-opt.active,.models-opt.active{',
+        'background:var(--glass-fill);border-color:var(--glass-edge-top);color:var(--text-primary)}',
+        '.action-btn.has-problem{background:var(--status-bad-bg);border-color:var(--status-bad-border);color:var(--status-bad)}',
         /* The pip is why folding these away is honest at all: an unread facet
            says so from the outside, without the row being opened. */
         '.pip{position:absolute;width:6px;height:6px;border-radius:50%;',
@@ -121,21 +208,39 @@
         '.pip.ok{background:var(--status-ok)}',
         '.pip.bad{background:var(--status-bad)}',
         '.pip.muted{background:rgba(255, 255, 255, 0.30)}',
-        '.status-pip{top:-1px;right:-1px}',
-        '.status-strip{display:flex;align-items:center;gap:12px;height:var(--row-h);flex:1 1 auto;min-width:0;',
-        'padding:0 12px;border-radius:var(--radius-pill);background:var(--bg-surface-inset);',
-        'overflow-x:auto;scrollbar-width:none}',
-        '.status-strip::-webkit-scrollbar{display:none}',
+        /* Inside the button, clear of the capsule's own outline: at the corner
+           the pip crossed the pill's edge and read as a chip out of it. One
+           rule for both capsules — the marks on the left and the settings
+           button on the right sit in the same kind of pill. */
+        '.seg-pip{top:1px;right:2px}',
         '.dot-label{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--text-secondary);white-space:nowrap}',
         '.dot-label.strong{color:var(--text-primary)}',
 
-        /* Refresh is a circle like the status button: the word cost 76px of a
-           row this narrow, and the arrow says the same thing. */
-        '.round-btn.accent{background:var(--accent-grad);border-color:var(--accent-edge);color:#fff}',
-        '.round-btn.accent:hover:not(:disabled){background:var(--accent-grad-hover);color:#fff}',
-        '.round-btn:disabled{opacity:0.42;cursor:not-allowed}',
-        '.icon-spin{display:inline-flex}',
-        '.round-btn.is-refreshing .icon-spin{animation:spin 0.8s linear infinite}',
+        /* Refresh carries no word: it cost 76px of a row this narrow, and the
+           arrow says the same thing. The accent is its alone — it is the only
+           control in the row that acts on the world instead of switching what
+           is shown. */
+        '.action-btn:disabled{opacity:0.42;cursor:not-allowed}',
+        '.icon-spin{display:inline-flex;position:relative;z-index:1}',
+        '.action-btn.is-refreshing .icon-spin{animation:spin 0.8s linear infinite}',
+        /* The widget re-reads on its own every half minute and never said so.
+           The bar burns down to the next attempt — the attempt, not the fresh
+           data: the daemon can be down and the schedule still holds. */
+        /* The dim fill is what the burning bar stands on. It lives on this
+           rule and not on a shared accent class: that class rode on one button
+           only and had to be out-weighed twice to let the bar show at all. */
+        '.action-refresh{overflow:hidden;border-color:var(--accent-edge);color:#fff;',
+        'background:var(--accent-dim)}',
+        '.action-refresh:hover:not(:disabled){background:var(--accent-grad-hover);color:#fff}',
+        '.action-refresh .burn{position:absolute;inset:0;border-radius:inherit;',
+        'background:var(--accent-grad);transform-origin:left center;',
+        'animation:burn linear infinite;pointer-events:none}',
+        '@keyframes burn{from{transform:scaleX(1)}to{transform:scaleX(0)}}',
+        /* Mid-request the arrow already spins; two movements in one button is
+           not what was asked for. */
+        '.action-refresh.is-refreshing{background:var(--accent-grad)}',
+        '@media (prefers-reduced-motion:reduce){.action-refresh .burn{display:none}',
+        '.action-refresh{background:var(--accent-grad)}}',
 
         /* Control Bar (family segment + account selector) */
         /* The row stays put while the account scrolls under it — but it is not
@@ -147,19 +252,13 @@
         /* Family segment: one button per agent family. The mark inside is the
            vendor's own, and the pip on it is why hiding the other families is
            honest at all — trouble anywhere shows without opening anything. */
-        '.harness-seg{display:inline-flex;align-items:center;height:var(--row-h);background:var(--bg-surface-inset);',
-        'padding:3px;border-radius:var(--radius-pill);flex:none}',
-        '.harness-btn{position:relative;width:30px;height:100%;padding:0;border-radius:var(--radius-pill);',
-        'border:1px solid transparent;background:transparent;color:var(--text-muted);cursor:pointer;',
-        'display:inline-flex;align-items:center;justify-content:center;transition:all var(--transition-fast)}',
-        '.harness-btn:hover:not(.active){color:var(--text-primary);background:var(--glass-fill)}',
-        '.harness-btn.active{background:var(--glass-fill);border-color:var(--glass-edge-top);color:var(--text-primary)}',
         '.harness-btn.empty{opacity:0.45}',
         '.harness-btn.loading{opacity:0.22;cursor:default}',
-        '.harness-initial{font-size:12px;font-weight:600;line-height:1}',
-        /* Inside the button, clear of the segment's own outline: at the corner
-           the pip crossed the pill's edge and read as a chip out of it. */
-        '.harness-pip{top:1px;right:2px}',
+        '.harness-initial{display:inline-flex;align-items:center;justify-content:center;',
+        'width:16px;height:16px;border-radius:50%;border:1px solid currentColor;',
+        'font-size:9.5px;font-weight:700;line-height:1;letter-spacing:0}',
+        '.harness-btn.active .harness-initial,.harness-btn:hover .harness-initial{',
+        'background:var(--glass-fill)}',
 
         /* Mailbox selector: the count that used to be a caption under the group
            title now rides on the button, and the list carries the state dots. */
@@ -192,12 +291,23 @@
         '.control-bar{gap:8px}.acct-name{min-width:52px}}',
         /* The list lies over the account, never above it: what is open must not
            change how much data fits in a frame that cannot grow. */
+        /* The scrollbar is the browser's own furniture inside a glass panel: it
+           lands on top of the list as a bright system stripe. Scrolling stays,
+           only the stripe goes. */
         '.acct-pop{position:absolute;top:calc(var(--row-h) + 6px);left:0;right:0;z-index:40;padding:4px;',
         'border-radius:var(--radius-md);background:rgba(20, 16, 26, 0.97);',
-        /* Two-storey rows: five of them fit before the list starts scrolling
-           inside itself rather than pushing the screen. Fewer if a row's
-           windows wrap — the number is a floor, not a promise. */
-        'max-height:260px;overflow-y:auto}',
+        /* The list runs down to just short of the bottom edge and scrolls
+           inside itself rather than pushing the screen. A fixed 260 points
+           made it scroll with a third of the frame empty underneath.
+           A height, not a ceiling: owner's call, the list is to stand the same
+           way every time it opens. A family with one account therefore opens a
+           panel with room to spare — the price of it never jumping about.
+           The numbers are measured against the frame — 50 above is the control
+           row, 12 below is the gap the page itself keeps — and the list never
+           reaches past that, so it cannot grow the frame it measures itself
+           against. */
+        'height:calc(100vh - 62px);overflow-y:auto;scrollbar-width:none}',
+        '.acct-pop::-webkit-scrollbar{width:0;height:0}',
         '.acct-opt{width:100%;font:inherit;font-size:12px;display:flex;align-items:flex-start;gap:8px;',
         'padding:6px 8px;border:0;border-radius:var(--radius-sm);background:transparent;',
         'color:var(--text-secondary);cursor:pointer;text-align:left}',
@@ -223,7 +333,30 @@
         '.acct-win-pct{color:var(--text-secondary)}',
         '.acct-line3{font-size:10px;color:var(--text-muted);margin-top:3px;overflow:hidden;',
         'text-overflow:ellipsis;white-space:nowrap}',
+        '.acct-rls{margin-top:5px;font-size:10.5px}',
+        '.acct-rl{display:flex;align-items:baseline;gap:7px;padding:2px 0}',
+        '.acct-rl-tag{font-size:10px;font-weight:600;padding:1px 6px;border-radius:var(--radius-sm);',
+        'white-space:nowrap;flex:none;max-width:148px;overflow:hidden;text-overflow:ellipsis}',
+        '.acct-rl-tag.bad{color:var(--status-bad);background:var(--status-bad-bg)}',
+        '.acct-rl-tag.ok{color:var(--status-ok);background:var(--status-ok-bg)}',
+        '.acct-rl-txt{color:var(--text-secondary);white-space:nowrap;flex:none}',
+        /* Leader dots tie the two ends of the line together, the way a table of
+           contents does: without them the eye loses the row between the name
+           and a date sitting at the far right edge. */
+        '.acct-rl-lead{flex:1 1 auto;min-width:14px;align-self:center;height:1px;',
+        'background-image:radial-gradient(circle, var(--border-prominent) 1px, transparent 1px);',
+        'background-size:5px 1px;background-repeat:repeat-x}',
+        '.acct-rl-when{color:var(--status-bad);font-variant-numeric:tabular-nums;white-space:nowrap;flex:none}',
+        '.acct-rl-when.free{color:var(--status-ok)}',
+        '.acct-rl-in{color:var(--text-muted);white-space:nowrap;text-align:right;min-width:40px;flex:none}',
+        '.acct-rl-more{color:var(--text-muted);font-size:10px;padding:3px 0 0 4px}',
+        /* Narrow pane: the countdown is the first thing to go — the date it
+           counts to is already on the line. */
+        '@media (max-width:420px){.acct-rl-in{display:none}}',
+        /* A model name comes from the vendor with no length limit of its own;
+           without a ceiling one long name pushes the whole row sideways. */
         '.acct-cap{font-size:10px;color:var(--text-secondary);background:rgba(255, 255, 255, 0.07);',
+        'max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;',
         'border-radius:var(--radius-sm);padding:0 5px}',
         '.acct-cap.exhausted{color:var(--status-bad);background:var(--status-bad-bg)}',
         '.acct-opt:hover{background:var(--glass-fill)}',
@@ -263,10 +396,10 @@
         '.state-dot{width:5px;height:5px;border-radius:50%;display:inline-block;flex:0 0 auto}',
         '.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;',
         'clip:rect(0 0 0 0);white-space:nowrap;border:0}',
-        '.state-dot.ok{background:var(--status-ok)}',
-        '.state-dot.warn{background:var(--status-warn)}',
-        '.state-dot.bad{background:var(--accent-core)}',
-        '.state-dot.muted{background:rgba(255, 255, 255, 0.30)}',
+        '.state-dot.ok{background:var(--status-ok);color:var(--status-ok)}',
+        '.state-dot.warn{background:var(--status-warn);color:var(--status-warn)}',
+        '.state-dot.bad{background:var(--accent-core);color:var(--accent-core)}',
+        '.state-dot.muted{background:rgba(255, 255, 255, 0.30);color:rgba(255, 255, 255, 0.30)}',
         '.account-title-wrap{display:flex;align-items:center;gap:8px;flex-wrap:wrap}',
         '.account-meta{color:var(--text-muted);font-size:11px;margin:2px 0 10px;padding-left:13px;display:flex;align-items:center;',
         'gap:6px;flex-wrap:wrap}',
@@ -370,6 +503,87 @@
         '.empty-title{font-size:14px;font-weight:600;color:var(--text-primary);margin:0}',
         '.empty-desc{font-size:12px;color:var(--text-muted);max-width:320px;margin:0}',
         '.empty-notes{display:flex;align-items:center;gap:12px;flex-wrap:wrap;justify-content:center}',
+
+        /* Settings panel. Its own section, after the account list rather than
+           cut into the middle of it. */
+        /* The panel stands where the account card stands and takes the same
+           plane: settings are a place you go to, not a drawer that squeezes
+           the page. Tabs rather than one column — what goes in here will grow,
+           and a panel that answers by scrolling hides every setting but the
+           first. */
+        '.settings-panel{border-radius:var(--radius-lg);background:var(--glass-fill);',
+        'border:1px solid var(--glass-edge);border-top-color:var(--glass-edge-top);overflow:hidden}',
+        /* A place has a floor. Sized to its contents the panel stopped short of
+           the frame's bottom edge and read as a card that had slipped down, so
+           while it is open the page becomes one column and the panel takes
+           whatever height is left — never less than a screen, and more when its
+           own contents ask. The floor is a fixed number rather than a share of
+           the viewport: see --floor above for what measuring in vh did here.
+           The gap above the panel is the control row's own bottom margin: a
+           margin of its own would be added to that, not folded into it,
+           because a flex column does not collapse the two together. */
+        '#root{display:flex;flex-direction:column;min-height:var(--floor)}',
+        '#root.settings-open .settings-panel{flex:1 1 auto}',
+        /* What the reader came for takes the room the control row does not.
+           Both of these are the last thing on the page, and both used to sit at
+           the top of it with the rest of the frame empty underneath. Their
+           contents keep their own size: stretching the window tiles to fill the
+           extra height was tried and made the card taller than the frame — that
+           is asking for more room, not using the room there is. */
+        '.account-plane,.empty-card{flex:1 1 auto}',
+        /* The same segmented control the family marks already use: a capsule
+           holding pill buttons, active one lit by the glass fill. Browser-style
+           tabs with square shoulders and a coloured underline were a shape this
+           widget does not have anywhere else, and a red of their own invention. */
+        '.settings-tabs{display:inline-flex;align-items:center;gap:2px;margin:12px 14px 0;',
+        'padding:3px;background:var(--bg-surface-inset);border-radius:var(--radius-pill)}',
+        '.settings-tab{position:relative;font:inherit;font-size:12px;font-weight:500;',
+        'display:inline-flex;align-items:center;gap:7px;',
+        'padding:6px 14px;border:1px solid transparent;border-radius:var(--radius-pill);',
+        'background:transparent;color:var(--text-muted);cursor:pointer;white-space:nowrap;',
+        'transition:all var(--transition-fast)}',
+        '.tab-pip{position:static;display:inline-block;margin-left:6px;vertical-align:middle}',
+        '.settings-body{padding:12px 16px 16px}',
+        '.settings-note{font-size:11.5px;color:var(--text-muted);margin-bottom:10px}',
+        '.settings-opts{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:4px}',
+        '.settings-state{display:flex;flex-wrap:wrap;gap:9px 18px}',
+        /* Small clickable things in this widget are pills; this one is two
+           lines tall and reads as a card you pick, so it takes the card radius
+           the panel and the empty states use. Chosen on the stand against a
+           pill and against the container radius it wore before.
+           The mark centres on the tile rather than being pinned to the first
+           line by a hand-set margin. */
+        '.density-opt{width:100%;font:inherit;font-size:12px;display:flex;align-items:center;gap:10px;',
+        'padding:10px 13px;border:1px solid transparent;border-radius:var(--radius-lg);',
+        'background:transparent;color:var(--text-secondary);cursor:pointer;text-align:left;',
+        'transition:all var(--transition-fast)}',
+        '.density-opt:hover{background:var(--glass-fill)}',
+        '.density-mark{width:11px;height:11px;border-radius:50%;flex:none;',
+        'border:1px solid var(--border-prominent)}',
+        '.density-mark.on{background:var(--accent-core);border-color:var(--accent-core)}',
+        '.density-body{min-width:0}',
+        '.density-name{display:block}',
+        '.density-note{display:block;font-size:10.5px;color:var(--text-muted);margin-top:1px}',
+        /* One family per row: its mark and name on the left, its choice on the
+           right, in the same capsule of pills the whole widget uses for a
+           choice between a few things. */
+        '.models-row{display:flex;align-items:center;justify-content:space-between;gap:12px;',
+        'flex-wrap:wrap;padding:7px 2px}',
+        '.models-family{display:inline-flex;align-items:center;gap:8px;font-size:12.5px;',
+        'color:var(--text-primary);min-width:0}',
+        '.models-seg{display:inline-flex;align-items:center;gap:2px;padding:3px;flex:none;',
+        'background:var(--bg-surface-inset);border-radius:var(--radius-pill);',
+        'border:1px solid var(--glass-edge)}',
+        '.models-opt{font:inherit;font-size:11.5px;padding:4px 11px;border-radius:var(--radius-pill);',
+        'border:1px solid transparent;background:transparent;color:var(--text-muted);cursor:pointer;',
+        'white-space:nowrap;transition:all var(--transition-fast);',
+        'display:inline-flex;align-items:center;gap:5px}',
+        /* Same chip the model wears beside a window in the list — same size,
+           same red, same corner. A second look for the same name would make
+           them read as two different things. */
+        '.models-name{font-size:10px;font-weight:600;padding:1px 6px;border-radius:var(--radius-sm);',
+        'color:var(--status-bad);background:var(--status-bad-bg)}',
+        '.models-note{font-size:10.5px;color:var(--text-muted);margin:-3px 2px 6px;padding-left:22px}',
     ].join('');
 
     function el(tag, cls, text) {
@@ -378,6 +592,8 @@
         if (text !== undefined && text !== null && text !== '') node.textContent = String(text);
         return node;
     }
+
+
 
     // Icons are drawn, not typed: an emoji renders in the host OS font and looks
     // different on every machine, and the widget frame forbids loading an icon
@@ -388,7 +604,17 @@
         error: ['M12 21a9 9 0 100-18 9 9 0 000 18z', 'M15 9l-6 6', 'M9 9l6 6'],
         refresh: ['M20.5 12a8.5 8.5 0 11-2.6-6.1', 'M20.5 4.5V10h-5.5'],
         signal: ['M5 19v-6', 'M12 19V5', 'M19 19v-9'],
-        caret: ['M6 9l6 6 6-6']
+        caret: ['M6 9l6 6 6-6'],
+        // Sliders rather than a cog: the button changes how much of the list
+        // is shown, not what the widget is allowed to do.
+        density: ['M4 7h16', 'M4 12h16', 'M4 17h16',
+                  'M9 5v4', 'M15 10v4', 'M7 15v4'],
+        // A row with lines inside it: the tab decides how much of a row is
+        // unfolded, and "signal" next to it is the state of the machine.
+        rows: ['M4 5h16v14H4z', 'M8 10h8', 'M8 14h5'],
+        // A funnel: the tab decides what passes through into a row, and lets
+        // the rest by. Nothing is thrown away, only kept out of the list.
+        filter: ['M4 5h16l-6.2 7.4v5.3l-3.6 1.8v-7.1z']
     };
 
     // Family marks are the vendors' own: a widget that names an account's CLI
@@ -477,13 +703,26 @@
         return at.getDate() + ' ' + MONTHS[at.getMonth()] + ', ' + pad2(at.getHours()) + ':' + pad2(at.getMinutes());
     }
 
+    // relTime speaks ISO because that is what the engine sends. The two places
+    // that ask about a moment of the widget's own were each turning a number
+    // into ISO and straight back; that conversion lives here now — and refuses
+    // a number no calendar accepts rather than throwing on it.
+    function relSince(ms) {
+        var at = new Date(ms);
+        return isFinite(at.getTime()) ? relTime(at.toISOString()) : '';
+    }
+
     function relTime(iso) {
         if (!iso) return '';
         var at = Date.parse(String(iso));
         if (!isFinite(at)) return '';
-        var deltaMin = Math.round((at - Date.now()) / 60000);
-        var future = deltaMin >= 0;
-        var mins = Math.abs(deltaMin);
+        // Which side of now it falls on is read before the rounding, not
+        // after: half a minute into the past rounds to zero minutes, and zero
+        // minutes used to count as the future — "in a moment" for something
+        // that already happened.
+        var delta = at - Date.now();
+        var mins = Math.round(Math.abs(delta) / 60000);
+        var future = delta >= 0;
         var body;
         if (mins <= 1) body = 'a moment';
         else if (mins < 60) body = mins + 'm';
@@ -609,6 +848,108 @@
         return ((account.quota || {}).constraints || []);
     }
 
+    // The widget runs in an opaque-origin sandbox: every browser store throws
+    // there, so a choice kept in one is silently forgotten. The skill keeps it
+    // instead, in its own state directory, and hands it back with the reading.
+    function applyPrefs(prefs) {
+        if (prefsInFlight || !prefs || typeof prefs !== 'object') return;
+        density = DENSITY_OPTIONS.some(function (o) { return o.key === prefs.density; })
+            ? prefs.density : 'normal';
+        modelChoices = (prefs.models && typeof prefs.models === 'object'
+            && !Array.isArray(prefs.models)) ? prefs.models : {};
+    }
+
+    // The screen changes at once and the skill catches up: waiting for a round
+    // trip before redrawing would make every choice feel like it stuck.
+    function savePrefs() {
+        prefsInFlight++;
+        saveError = '';
+        var body = JSON.stringify({ density: density, models: modelChoices });
+        Promise.resolve().then(function () {
+            return window.fetch(PREFS_ROUTE, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: body
+            });
+        }).then(function (response) {
+            return response.text();
+        }).then(function (text) {
+            var answer = null;
+            try { answer = JSON.parse(text); } catch (err) { answer = null; }
+            prefsInFlight = Math.max(0, prefsInFlight - 1);
+            saveError = (answer && answer.error) ? String(answer.error)
+                : (answer ? '' : 'the skill answered with something unreadable');
+            // What the skill kept, not what we sent: if it refused a value, the
+            // screen must show the refusal rather than the wish.
+            if (answer && answer.prefs) applyPrefs(answer.prefs);
+            rerender();
+        })['catch'](function (err) {
+            prefsInFlight = Math.max(0, prefsInFlight - 1);
+            saveError = (err && err.message) ? err.message : 'the skill could not be reached';
+            rerender();
+        });
+    }
+
+    function modelView(harnessId) {
+        var chosen = modelChoices[harnessId];
+        var known = MODEL_VIEWS.some(function (key) { return key === chosen; });
+        return known ? chosen : 'all';
+    }
+
+    function isModelWindow(view) {
+        return !!(view && view.scoped_models && view.scoped_models.length);
+    }
+
+    // The list only. Which windows a row shows is a matter of taste; which
+    // windows exist is not, and everything that answers "how is this account"
+    // — the dot, the worst figure, the card — keeps reading all of them.
+    function windowsForRow(account, harnessId) {
+        var windows = liveWindows(account);
+        var chosen = modelView(harnessId);
+        if (chosen === 'all') return windows;
+        var wantModels = chosen === 'models';
+        return windows.filter(function (c) { return isModelWindow(c) === wantModels; });
+    }
+
+    function familyHasModelWindows(group) {
+        return ((group || {}).accounts || []).some(function (account) {
+            return liveWindows(account).some(isModelWindow);
+        });
+    }
+
+    // The one model this family's windows are tied to, when there is exactly
+    // one. Two of them and the general word is the honest one: "only Fable and
+    // Opus" is a promise about a set that changes with the next reading, while
+    // "only models" stays true whatever comes back.
+    function familyModelName(group) {
+        var seen = {};
+        ((group || {}).accounts || []).forEach(function (account) {
+            liveWindows(account).forEach(function (view) {
+                if (!isModelWindow(view)) return;
+                var label = modelLabel(view.scoped_models);
+                if (label) seen[label] = 1;
+            });
+        });
+        var names = Object.keys(seen);
+        return names.length === 1 ? names[0] : '';
+    }
+
+    // Two pieces: what the button says, and what a screen reader hears. They
+    // differ because the button has room for one word and a chip, and the
+    // reader needs the whole sentence.
+    function modelViewWords(key, modelName) {
+        var thing = modelName || 'models';
+        if (key === 'models') {
+            return { name: modelName, plain: modelName ? 'only' : 'only models',
+                     spoken: 'only the windows tied to ' + thing };
+        }
+        if (key === 'shared') {
+            return { name: modelName, plain: modelName ? 'without' : 'without models',
+                     spoken: 'every window except those tied to ' + thing };
+        }
+        return { name: '', plain: 'all', spoken: 'every window the account reported' };
+    }
+
     // Window names run to 27 characters ("GPT-5.3-Codex-Spark primary") and
     // three of those do not fit a row, so a window is named by how long it
     // lasts. This is the table both directions of that question share.
@@ -698,7 +1039,13 @@
         // is actually spent: red here means "this model is out", which is the
         // one thing a per-model cap says and a plain window does not. A scoped
         // window at 10 %, or one with no ratio at all, is not an exhausted one.
-        var spent = !stale && scoped && hasPct(pct) && pct >= 100;
+        // His rule that a stale reading claims nothing, and the cooldown test
+        // the account dot and the reset lines already use: counting the ratio
+        // alone left a cooling window with a neutral chip on a card whose own
+        // note above it said that very model was spent.
+        var spent = !stale && scoped && (isCooling(view)
+            || (view.cooldown_until && !formatResetAt(view.cooldown_until))
+            || (hasPct(pct) && pct >= 100));
         if (name.model) {
             var chip = el('span', 'tile-model' + (spent ? ' spent' : ''), name.model);
             chip.title = view.label || '';
@@ -939,26 +1286,47 @@
         return worst < 0 ? null : worst;
     }
 
-    // Green means "read, and fine". A window that was never read, or read and
-    // refused, is grey — the same display law the header states: a value that
-    // was not read is never dressed as a good one.
-    // The dot answers "how is this account", and that answer cannot be greener
-    // than the reading it stands on: with the accounts facet unread, identity
-    // and quota are last-known values, and a live green dot over them is the
-    // exact claim this widget exists to refuse.
+    // A per-model cap never marks the whole account (honesty rule 4), but it is
+    // still the difference between "everything runs" and "one model is out" —
+    // and that difference is exactly what the dot is asked about.
+    function hasSpentModelCap(account) {
+        return liveWindows(account).some(function (c) {
+            return isModelWindow(c) && (c.used_pct >= 100 || isCooling(c));
+        });
+    }
+
+    // The dot answers one question: can I work on this account right now. It
+    // used to answer another one — how full the worst bar is — and painted an
+    // account red at 85% while it was still perfectly usable.
+    // Green means "read, and fine". An account with no window to stand on —
+    // never read, or read and refused — is grey: the display law the header
+    // states, a value that was not read is never dressed as a good one. That
+    // answer cannot be greener than the reading it stands on: with the accounts
+    // facet unread, identity and quota are last-known values, and a live green
+    // dot over them is the exact claim this widget exists to refuse.
     function accountTone(account, facets) {
         if (isAlertAccount(account)) return 'bad';
         if (facets && facets.accounts && facets.accounts !== 'ok') return 'muted';
         if (!isActive(account)) return 'muted';
-        var quota = account.quota || {};
-        if (quota.state && quota.state !== 'ok') return 'muted';
         var worst = worstUsedPct(account);
+        // Grey is for an account with no windows at all — which is what a
+        // refused or never-taken reading leaves behind. It used to be for any
+        // reading the engine would not call live, and that grey covered three
+        // windows with figures in them.
         if (worst === null) return 'muted';
-        return getProgressTone(worst);
+        // Red only when nothing runs: the general window itself is spent.
+        if (worst >= 100) return 'bad';
+        // Yellow means "look at this", and two different facts deserve it: a
+        // model is already out, or the general window is close to its edge.
+        // There is no third colour to tell them apart, and both call for the
+        // same thing — opening the account.
+        if (hasSpentModelCap(account)) return 'warn';
+        if (worst >= 85) return 'warn';
+        return 'ok';
     }
 
     function renderAccount(parent, group, account, facets) {
-        var tile = el('div');
+        var tile = el('div', 'account-plane');
         var head = el('div', 'account-head');
         var headLeft = el('div', 'account-head-left');
         var header = el('div', 'account-header');
@@ -968,7 +1336,8 @@
         titleWrap.appendChild(stateDot(tone, true));
         // The dot is the account's state; the same state goes in as a word a
         // screen reader can read.
-        titleWrap.appendChild(el('span', 'sr-only', TONE_WORD[tone] || tone));
+        titleWrap.appendChild(el('span', 'sr-only',
+            TONE_WORD[tone] || tone));
         titleWrap.appendChild(el('span', 'acct-family', familyName(group)));
         if (account.caption) {
             // credential_kind is the same word for every account here
@@ -998,9 +1367,8 @@
 
         var meta = el('div', 'account-meta');
         // The selector above shows the account's display name, which is not its
-        // address: a profile called "work" has no e-mail in it at all. And when
-        // the status strip is open the selector is not on screen, so without
-        // this line the numbers below would have no owner.
+        // address: a profile called "work" has no e-mail in it at all, and
+        // without this line the numbers below would have no owner.
         if (account.email && account.email !== account.label) {
             meta.appendChild(el('span', null, account.email));
         }
@@ -1028,7 +1396,7 @@
         head.appendChild(headLeft);
         // When the engine's verdict IS the worst window — state 'ok' spells it
         // as "58% used" with that window's own reset time — the tiles below say
-        // the same number and the same date, and the frame opens at 320. The
+        // the same number and the same date, and the frame is short. The
         // verdict earns its place when it says something they cannot: a limit
         // reached, a facet unread, no window reported at all.
         var quota = account.quota || {};
@@ -1109,6 +1477,32 @@
         return { group: group, account: account };
     }
 
+    // A family without a published vector mark gets a lettered badge instead.
+    // The tint is derived from its own name, not borrowed from the vendor: a
+    // guessed brand colour is the same false claim as a guessed logo, only
+    // quieter. The same name always lands on the same tint, so families stay
+    // apart from one redraw to the next.
+    var INITIAL_TINTS = [
+        'var(--status-ok)', 'var(--status-warn)', 'var(--accent-core)',
+        'var(--text-secondary)', 'var(--status-bad)'
+    ];
+
+    function initialTint(name) {
+        var sum = 0;
+        for (var i = 0; i < name.length; i++) {
+            sum = (sum * 31 + name.charCodeAt(i)) % 100000;
+        }
+        return INITIAL_TINTS[sum % INITIAL_TINTS.length];
+    }
+
+    function harnessInitial(group) {
+        var name = familyName(group) || '?';
+        var badge = el('span', 'harness-initial', (name.charAt(0) || '?').toUpperCase());
+        badge.style.borderColor = initialTint(name);
+        badge.style.color = initialTint(name);
+        return badge;
+    }
+
     function renderHarnessSeg(parent, groups, selected, hasAnswer) {
         var seg = el('div', 'harness-seg');
         seg.setAttribute('role', 'group');
@@ -1141,7 +1535,7 @@
             // account this is.
             btn.appendChild(BRAND_PATHS[group.harness_id]
                 ? brandIcon(group.harness_id, 15)
-                : el('span', 'harness-initial', (familyName(group).charAt(0) || '?').toUpperCase()));
+                : harnessInitial(group));
             var name = familyName(group);
             var say = name + ' — ' + (count
                 ? (count + (count === 1 ? ' account' : ' accounts') + (alert ? ', needs attention' : ''))
@@ -1158,9 +1552,10 @@
                 // Clicking the mark you are already on is still a click outside
                 // the list, and every other click outside closes it.
                 accountsOpen = false;
+                settingsOpen = false;
                 rerender();
             });
-            if (alert) btn.appendChild(el('span', 'pip bad harness-pip'));
+            if (alert) btn.appendChild(el('span', 'pip bad seg-pip'));
             seg.appendChild(btn);
         });
         parent.appendChild(seg);
@@ -1232,16 +1627,151 @@
         return bar;
     }
 
-    // The second floor of a row is one of three things, in this order, and each
+    // A window scoped to a model lists every name that model answers to:
+    // ['fable', 'claude-fable-5', 'best'] is one model under three names — the
+    // short one, the versioned one, and the role alias. Printing them as three
+    // models would be a lie, so the names collapse to the shortest real stem.
+    var MODEL_ALIASES = { best: 1, latest: 1, fastest: 1, 'default': 1 };
+
+    function modelLabel(models) {
+        var list = (models || []).map(function (m) { return String(m || '').trim(); })
+            .filter(function (m) { return !!m; });
+        if (!list.length) return '';
+        var real = list.filter(function (m) {
+            return !MODEL_ALIASES[m.toLowerCase()];
+        });
+        if (!real.length) real = list;
+        // Same stem, different spelling: keep the shortest way to say it.
+        var stems = {};
+        real.forEach(function (m) {
+            // A version can be several segments deep — "claude-opus-4-5" is one
+            // model, and trimming a single "-5" would leave "opus-4" standing
+            // apart from plain "opus".
+            var stem = m.toLowerCase().replace(/^claude-/, '').replace(/([-_][\d.]+)+$/, '');
+            stems[stem] = 1;
+        });
+        // The stem itself is the model's plain name — "claude-sonnet-4-5" and
+        // "sonnet" are the same model, and the row has room only for the short
+        // way of saying it. Every spelling stays in the chip's tooltip.
+        var names = Object.keys(stems).filter(function (k) { return !!k; });
+        // Every name was a version suffix and nothing else ("claude-", "-5"):
+        // no model name is left to print, and an empty chip reads as a
+        // rendering fault rather than as an absent one.
+        if (!names.length) return '';
+        names.sort(function (a, b) { return a.length - b.length; });
+        var head = names[0];
+        head = head.charAt(0).toUpperCase() + head.slice(1);
+        // What is left after the collapse really is several models, and then
+        // the counter is honest again.
+        return head + (names.length > 1 ? ' +' + (names.length - 1) : '');
+    }
+
+    // The row says a window is spent and stays silent about when it comes back,
+    // while the date is already in the data. These lines carry that date — and
+    // only that date: a window still running has nothing to wait for, so its
+    // right-hand column says "available" instead of borrowing a red timestamp.
+    var RESET_LINES_MAX = 3;
+
+    function appendResetLines(parent, marks) {
+        // Compact is the list as it was before these lines existed: bars only.
+        if (density === 'compact') return '';
+        var spent = marks.filter(function (m) {
+            return m.c.used_pct >= 100 || isCooling(m.c);
+        });
+        // Nothing is owed: the bars above have already said everything — unless
+        // the reader asked for detail, in which case an empty answer is not the
+        // detail they asked for.
+        if (!spent.length && density !== 'detailed') return '';
+        var scopedSpent = spent.some(function (m) { return m.scoped; });
+        var alive = marks.filter(function (m) { return spent.indexOf(m) < 0; });
+        // Detailed asks for every window by name. Normal keeps a single line
+        // for "the rest still runs", and it is the window closest to its own
+        // edge: "others 0% used" above "others 64% used" is two lines saying
+        // the same thing, and neither says which is which.
+        var rest = density === 'detailed' ? alive : (alive.length ? [alive.reduce(function (worst, m) {
+            var a = hasPct(m.c.used_pct) ? m.c.used_pct : -1;
+            var b = hasPct(worst.c.used_pct) ? worst.c.used_pct : -1;
+            return a > b ? m : worst;
+        })] : []);
+        var rows = spent.concat(rest);
+        var shown = density === 'detailed' ? rows : rows.slice(0, RESET_LINES_MAX);
+        var spoken = [];
+        var box = el('div', 'acct-rls');
+
+        shown.forEach(function (m) {
+            var isSpent = spent.indexOf(m) >= 0;
+            var cooling = isCooling(m.c);
+            // A general window standing next to a per-model one is "everything
+            // else": naming it by length would repeat the bar above it.
+            // A scoped window whose names collapsed to nothing still has to be
+            // named: the window's own length is the honest fallback, and an
+            // empty label would leave a coloured chip with no word in it.
+            var name = (m.scoped && modelLabel(m.c.scoped_models))
+                || (scopedSpent && !isSpent && density !== 'detailed' && !m.scoped ? 'others' : m.tag);
+            var line = el('div', 'acct-rl');
+            var tag = el('span', 'acct-rl-tag ' + (isSpent ? 'bad' : 'ok'), name);
+            tag.title = m.c.label || m.tag;
+            line.appendChild(tag);
+
+            var word = cooling ? 'cooling down'
+                : (isSpent ? 'spent' : usedText(m.c.used_pct) + ' used');
+            line.appendChild(el('span', 'acct-rl-txt', word));
+            line.appendChild(el('span', 'acct-rl-lead'));
+
+            var stampIso = cooling ? m.c.cooldown_until : m.c.resets_at;
+            var when = isSpent ? formatResetAt(stampIso) : '';
+            if (isSpent && when) {
+                line.appendChild(el('span', 'acct-rl-when', when));
+                var left = relTime(stampIso);
+                line.appendChild(el('span', 'acct-rl-in', left ? 'in ' + left : ''));
+                spoken.push(name + ' ' + word + ', back ' + when);
+            } else if (isSpent) {
+                // Spent with no date reported: say so rather than leave a gap
+                // that reads as "available".
+                line.appendChild(el('span', 'acct-rl-when', 'no reset time'));
+                line.appendChild(el('span', 'acct-rl-in'));
+                spoken.push(name + ' ' + word + ', no reset time reported');
+            } else {
+                line.appendChild(el('span', 'acct-rl-when free', 'available'));
+                line.appendChild(el('span', 'acct-rl-in'));
+                spoken.push(name + ' available, ' + word);
+            }
+            box.appendChild(line);
+        });
+
+        var hidden = rows.length - shown.length;
+        if (hidden > 0) {
+            box.appendChild(el('div', 'acct-rl-more',
+                '+' + hidden + ' more window' + (hidden === 1 ? '' : 's')));
+            spoken.push(hidden + ' more window' + (hidden === 1 ? '' : 's'));
+        }
+        parent.appendChild(box);
+        return spoken.join(' · ');
+    }
+
+    // The second floor of a row is one of four things, in this order, and each
     // has its own condition: nothing falls through to it by default, because a
-    // line drawn "because there was room" is a claim nobody checked.
-    function appendSecondFloor(parent, account) {
-        var windows = liveWindows(account);
+    // line drawn "because there was room" is a claim nobody checked. The
+    // fourth is the newest — the reader's own filter left this row nothing to
+    // show, which is not the same as the account reporting nothing.
+    function appendSecondFloor(parent, account, harnessId) {
+        var known = liveWindows(account);
+        var windows = windowsForRow(account, harnessId);
         var spoken = [];
         var named = [];
+        // The filter took everything this account had. An empty row here is
+        // indistinguishable from "nothing was reported", and those are two
+        // different facts — so the row says which one it is.
+        if (!windows.length && known.length) {
+            var kind = modelView(harnessId) === 'models' ? 'model' : 'shared';
+            var said = 'no ' + kind + ' window on this account';
+            parent.appendChild(el('div', 'acct-line2', said));
+            return said;
+        }
         if (windows.length) {
             var wins = el('div', 'acct-wins');
-            windowTags(windows).forEach(function (m) {
+            var marks = windowTags(windows);
+            marks.forEach(function (m) {
                 var win = el('span', 'acct-win');
                 var bar = spark(m.c.used_pct);
                 if (bar) win.appendChild(bar);
@@ -1257,11 +1787,13 @@
                 }
                 if (m.scoped) {
                     var models = m.c.scoped_models;
-                    var chip = models[0] + (models.length > 1 ? ' +' + (models.length - 1) : '');
+                    var chip = modelLabel(models);
                     // Red is spent, and only spent — the card next to it paints
                     // this chip by the same threshold.
                     var chipCls = 'acct-cap' + (m.c.used_pct >= 100 ? ' exhausted' : '');
-                    win.appendChild(el('span', chipCls, chip));
+                    // Nothing printable came back: a chip with no word in it is
+                    // a coloured gap, not information.
+                    if (chip) win.appendChild(el('span', chipCls, chip));
                 }
                 var cooling = isCooling(m.c);
                 if (cooling) win.appendChild(el('span', 'acct-cap exhausted', 'cooldown'));
@@ -1280,10 +1812,14 @@
                 wins.appendChild(win);
             });
             parent.appendChild(wins);
+            var owed = appendResetLines(parent, marks);
             if (named.length) {
                 parent.appendChild(el('div', 'acct-line3', 'windows: ' + named.join(' · ')));
             }
-            return spoken.join(', ') + (named.length ? ' · windows: ' + named.join(', ') : '');
+            return spoken.join(', ')
+                + (owed ? ' · ' + owed : '')
+
+                + (named.length ? ' · windows: ' + named.join(', ') : '');
         }
         // Raw engine detail may contain local paths or vendor bodies. The row
         // uses only the independently typed account state; quota actions are
@@ -1309,7 +1845,9 @@
         // number is the reason to open the list at all, so it counts the others.
         // Counted by the same rule that paints the dots in the list below.
         // isAlertAccount alone said "2" while three rows showed red, because a
-        // window past 85% turns the dot without being an alert.
+        // window past 85% used to turn the dot without being an alert. Since
+        // the dot went by availability that threshold is 100%, and red here
+        // means the same thing it means in the list: nothing runs.
         var elsewhere = accounts.filter(function (a) {
             return a.key !== selectedAccountKey && accountTone(a, facets) === 'bad';
         }).length;
@@ -1357,6 +1895,9 @@
             e.stopPropagation();
             if (!accounts.length) return;
             accountsOpen = !accountsOpen;
+            // Opening one panel closes the others: the click that opens this
+            // one never reaches the document handler, so it cannot close them.
+            settingsOpen = false;
             rerender();
         });
         wrap.appendChild(btn);
@@ -1380,7 +1921,7 @@
                 // Whatever the second floor ended up saying is said aloud too:
                 // the windows are the reason this row is two storeys tall, and
                 // a label that stopped at the name would hide them entirely.
-                var floorSpeech = appendSecondFloor(body, candidate);
+                var floorSpeech = appendSecondFloor(body, candidate, group.harness_id);
                 opt.appendChild(body);
 
                 var word = tailWord(candidate);
@@ -1400,6 +1941,7 @@
                     e.stopPropagation();
                     selectedAccountKey = candidate.key;
                     accountsOpen = false;
+                    settingsOpen = false;
                     focusAccountBtn = true;
                     rerender();
                 });
@@ -1460,14 +2002,17 @@
         var focusWas = (was && was.getAttribute) ? was.getAttribute('data-focus') : null;
 
         root.textContent = '';
+        // The settings panel is a place, not a drawer: while it is open the
+        // page becomes a column so the panel can stand on the frame's floor.
+        root.classList.toggle('settings-open', settingsOpen);
 
         var facets = view.facets || {};
         var groups = view.groups || [];
 
         var selection = syncSelection(groups);
 
-        /* 1. Control Bar: family segment, account selector, status, refresh.
-           There is no header row: the frame opens at 320px and the host already
+        /* 1. Control Bar: family segment, account selector, settings, refresh.
+           There is no header row: the frame is short and the host already
            prints the widget's own name above it. */
         var daemon = view.daemon || {};
         var daemonDown = !!(daemon.state && daemon.state !== 'running');
@@ -1482,67 +2027,70 @@
 
         var controlBar = el('div', 'control-bar');
 
-        if (statusOpen) {
-            /* Opened, status takes the row sideways: the strip stands in place
-               of the family segment and the account selector rather than
-               covering them, so nothing is hidden underneath. */
-            var strip = el('div', 'status-strip');
-            // A daemon whose state never arrived is not a running daemon: it
-            // says so, exactly the way an unread facet says so.
-            var dRow = daemon.state
-                ? dotLabel('daemon ' + daemon.state
-                    + (daemon.engine_version ? ' · ' + daemon.engine_version : ''),
-                    daemonDown ? 'bad' : 'ok')
-                : dotLabel('daemon not reported', 'muted');
-            dRow.className = 'dot-label strong';
-            strip.appendChild(dRow);
-            FACET_ORDER.forEach(function (f) {
-                var state = facets[f] || 'indeterminate';
-                // A green dot already says "read". The word is spent only on
-                // the states where something actually went wrong.
-                strip.appendChild(dotLabel(state === 'ok' ? f : f + ' ' + facetWord(state), facetTone(state)));
-            });
-            controlBar.appendChild(strip);
-        } else {
-            renderHarnessSeg(controlBar, groups, selection.group, hasAnswer);
-            renderAccountSelect(controlBar, selection.group, selection.account, hasAnswer, facets);
-        }
+        renderHarnessSeg(controlBar, groups, selection.group, hasAnswer);
+        renderAccountSelect(controlBar, selection.group, selection.account, hasAnswer, facets);
 
-        var statusWrap = el('div', 'status-wrap');
-        var statusBtn = el('button', 'round-btn' + (statusOpen ? ' is-open' : '') + (statusProblem ? ' has-problem' : ''));
-        statusBtn.appendChild(icon('signal', 13));
-        statusBtn.setAttribute('aria-expanded', statusOpen ? 'true' : 'false');
-        statusBtn.setAttribute('aria-label', !hasAnswer
-            ? 'Status — nothing read yet'
-            : (statusProblem
-                ? 'Status — the daemon or a facet did not answer'
-                : 'Status — daemon running, all facets read'));
-        statusBtn.title = statusBtn.getAttribute('aria-label');
-        statusBtn.setAttribute('data-focus', 'status');
-        statusBtn.addEventListener('click', function (e) {
+        // Settings and Refresh ride in one capsule, the way the family marks do
+        // on the left: two halves of a control, not two buttons that happen to
+        // be next to each other.
+        var actionSeg = el('div', 'action-seg');
+        actionSeg.setAttribute('role', 'group');
+        actionSeg.setAttribute('aria-label', 'Settings and refresh');
+        var settingsBtn = el('button', 'action-btn action-settings' + (settingsOpen ? ' is-open' : '')
+            + (statusProblem ? ' has-problem' : ''));
+        settingsBtn.appendChild(icon('density', 13));
+        settingsBtn.setAttribute('aria-expanded', settingsOpen ? 'true' : 'false');
+        // One button, two facts: what it opens, and whether something in there
+        // needs looking at. The pip below carries the second one visually.
+        settingsBtn.setAttribute('aria-label', 'Settings and system state'
+            + (!hasAnswer ? ' — nothing read yet'
+                : (statusProblem ? ' — the daemon or a facet did not answer' : ''))
+            + ' · detail now ' + density);
+        settingsBtn.title = settingsBtn.getAttribute('aria-label');
+        settingsBtn.setAttribute('data-focus', 'settings');
+        settingsBtn.addEventListener('click', function (e) {
             e.stopPropagation();
-            statusOpen = !statusOpen;
+            settingsOpen = !settingsOpen;
             accountsOpen = false;
             rerender();
         });
-        statusWrap.appendChild(statusBtn);
-        statusWrap.appendChild(el('span', 'pip status-pip ' + (!hasAnswer ? 'muted' : (statusProblem ? 'bad' : 'ok'))));
-        controlBar.appendChild(statusWrap);
+        settingsBtn.appendChild(el('span', 'pip seg-pip '
+            + (!hasAnswer ? 'muted' : (statusProblem ? 'bad' : 'ok'))));
+        actionSeg.appendChild(settingsBtn);
 
-        var refreshBtn = el('button', 'round-btn accent' + (inFlight ? ' is-refreshing' : ''));
+        var refreshBtn = el('button', 'action-btn action-refresh' + (inFlight ? ' is-refreshing' : ''));
+        // The tree is rebuilt on every tick and every click, so an animation
+        // started here would restart with it. A negative delay of however much
+        // of the round has already passed puts the bar back where it belongs —
+        // lined up with the timer, not merely near it.
+        if (!inFlight && timerStartedAt) {
+            var burn = el('span', 'burn');
+            burn.style.animationDuration = REFRESH_MS + 'ms';
+            // Clocks get set back, and a negative age would build "--15000ms",
+            // which the browser drops on the floor: the bar would then restart
+            // full on every redraw and never show the real schedule again.
+            var age = Math.max(0, Date.now() - timerStartedAt);
+            burn.style.animationDelay = '-' + (age % REFRESH_MS) + 'ms';
+            refreshBtn.appendChild(burn);
+        }
         refreshBtn.appendChild(withIcon(el('span', 'icon-spin'), 'refresh', 13));
         refreshBtn.disabled = inFlight;
-        refreshBtn.setAttribute('aria-label', inFlight ? 'Refreshing…' : 'Refresh');
+        // The bar is a schedule, not a promise: it says when the next attempt
+        // is, and an attempt against a daemon that is down brings nothing.
+        refreshBtn.setAttribute('aria-label', inFlight ? 'Refreshing…'
+            : 'Refresh — the widget re-reads on its own every '
+                + Math.round(REFRESH_MS / 1000) + ' seconds');
         refreshBtn.title = refreshBtn.getAttribute('aria-label');
         refreshBtn.setAttribute('data-focus', 'refresh');
         refreshBtn.addEventListener('click', function () {
             if (inFlight) return;
             refreshQuota();
         });
-        controlBar.appendChild(refreshBtn);
+        actionSeg.appendChild(refreshBtn);
+        controlBar.appendChild(actionSeg);
         root.appendChild(controlBar);
 
-        /* 2. Banners. What the status button folds away is only ever the good
+        /* 2. Banners. What the settings card folds away is only ever the good
            news: a daemon that is down and a facet that did not answer both
            still say so in the open, above the account — and they speak for
            every family, not only the one on screen. */
@@ -1552,7 +2100,7 @@
         }
         if (staleMessage) {
             banner('warn', 'Reading could not be refreshed (' + staleMessage + '). Cached data from '
-                + (relTime(new Date(lastGoodAt).toISOString()) || 'earlier') + ' is shown.', true);
+                + (relSince(lastGoodAt) || 'earlier') + ' is shown.', true);
         }
         if (actionMessage) {
             banner('warn', actionMessage, true);
@@ -1563,9 +2111,152 @@
         if (view.facet_note) {
             banner('info', 'Facets unavailable: ' + view.facet_note + '. Values shown as unread/last known, not zero.', false);
         }
+        if (saveError) {
+            banner('warn', 'Display choice was not saved (' + saveError
+                + '). It holds until the next reading and then reverts.', true);
+        }
 
-        /* 3. The one selected account. */
-        if (selection.account) {
+        /* 3. Settings take the whole plane, or the one selected account. */
+        if (settingsOpen) {
+            var panel = el('div', 'settings-panel');
+            panel.setAttribute('role', 'group');
+            panel.setAttribute('aria-label', 'Settings');
+
+            var tabs = el('div', 'settings-tabs');
+            tabs.setAttribute('role', 'tablist');
+            SETTINGS_TABS.forEach(function (tab) {
+                var on = tab.key === settingsTab;
+                var b = el('button', 'settings-tab' + (on ? ' active' : ''));
+                b.appendChild(icon(tab.icon, 13));
+                b.appendChild(el('span', null, tab.name));
+                b.setAttribute('role', 'tab');
+                b.setAttribute('aria-selected', on ? 'true' : 'false');
+                // Every button that triggers a redraw carries this: the redraw
+                // rebuilds the tree, and the keyboard is put back by key alone.
+                b.setAttribute('data-focus', 'settings-tab:' + tab.key);
+                // The state tab carries the same pip the button outside does:
+                // a reader should not have to open a tab to learn it is the
+                // one with the trouble in it.
+                if (tab.key === 'state' && statusProblem) {
+                    b.appendChild(el('span', 'pip bad tab-pip'));
+                }
+                b.addEventListener('click', function (ev) {
+                    ev.stopPropagation();
+                    settingsTab = tab.key;
+                    rerender();
+                });
+                tabs.appendChild(b);
+            });
+            panel.appendChild(tabs);
+
+            var body = el('div', 'settings-body');
+            if (settingsTab === 'detail') {
+                body.appendChild(el('div', 'settings-note',
+                    'How much of each row in the account list is unfolded.'));
+                var opts = el('div', 'settings-opts');
+                DENSITY_OPTIONS.forEach(function (opt) {
+                    var on = opt.key === density;
+                    var b = el('button', 'density-opt' + (on ? ' active' : ''));
+                    b.appendChild(el('span', 'density-mark' + (on ? ' on' : '')));
+                    var inner = el('span', 'density-body');
+                    inner.appendChild(el('span', 'density-name', opt.name));
+                    inner.appendChild(el('span', 'density-note', opt.note));
+                    b.appendChild(inner);
+                    b.setAttribute('aria-label', opt.name + ' — ' + opt.note + (on ? ' · chosen' : ''));
+                    b.setAttribute('data-focus', 'density:' + opt.key);
+                    b.addEventListener('click', function (ev) {
+                        ev.stopPropagation();
+                        density = opt.key;
+                        savePrefs();
+                        rerender();
+                    });
+                    opts.appendChild(b);
+                });
+                body.appendChild(opts);
+            } else if (settingsTab === 'models') {
+                body.appendChild(el('div', 'settings-note',
+                    'Which windows a row in the account list shows. The card of '
+                    + 'the account you open is not affected.'));
+                if (!groups.length) {
+                    body.appendChild(el('div', 'settings-note', 'No agent family has been read yet.'));
+                }
+                groups.forEach(function (group) {
+                    var chosen = modelView(group.harness_id);
+                    var row = el('div', 'models-row');
+                    var head = el('span', 'models-family');
+                    if (BRAND_PATHS[group.harness_id]) head.appendChild(brandIcon(group.harness_id, 14));
+                    head.appendChild(el('span', null, familyName(group)));
+                    row.appendChild(head);
+
+                    var modelName = familyModelName(group);
+                    var seg = el('div', 'models-seg');
+                    seg.setAttribute('role', 'group');
+                    seg.setAttribute('aria-label', familyName(group) + ' — windows shown in the list');
+                    MODEL_VIEWS.forEach(function (key) {
+                        var on = key === chosen;
+                        var words = modelViewWords(key, modelName);
+                        var b = el('button', 'models-opt' + (on ? ' active' : ''));
+                        b.appendChild(document.createTextNode(words.plain));
+                        // The model's own name carries the same red it wears as
+                        // a chip beside a window: one name, one colour, wherever
+                        // it turns up.
+                        if (words.name) b.appendChild(el('span', 'models-name', words.name));
+                        b.setAttribute('aria-pressed', on ? 'true' : 'false');
+                        b.setAttribute('aria-label', words.spoken);
+                        b.title = words.spoken;
+                        b.setAttribute('data-focus', 'models:' + group.harness_id + ':' + key);
+                        b.addEventListener('click', function (ev) {
+                            ev.stopPropagation();
+                            modelChoices[group.harness_id] = key;
+                            savePrefs();
+                            rerender();
+                        });
+                        seg.appendChild(b);
+                    });
+                    row.appendChild(seg);
+                    body.appendChild(row);
+                    // Only Claude arrives with its windows tied to models. Saying
+                    // so beats hiding the row: silence would read as "we forgot
+                    // this family", and guessing a model out of a window's name
+                    // is a claim the engine never made.
+                    if (!familyHasModelWindows(group)) {
+                        body.appendChild(el('div', 'models-note',
+                            'No window here is tied to a named model, so this changes nothing yet.'));
+                    }
+                });
+            } else {
+                // Word for word from the strip this replaced: same wording,
+                // same tones, same order of facets.
+                body.appendChild(el('div', 'settings-note',
+                    'What the daemon answered on this read.'));
+                var stateRow = el('div', 'settings-state');
+                var dRow = daemon.state
+                    ? dotLabel('daemon ' + daemon.state
+                        + (daemon.engine_version ? ' · ' + daemon.engine_version : ''),
+                        daemonDown ? 'bad' : 'ok')
+                    : dotLabel('daemon not reported', 'muted');
+                dRow.className = 'dot-label strong';
+                stateRow.appendChild(dRow);
+                // "next up" is a fact about routing, and on a wire that
+                // carries no verdict the widget shows no marker anywhere. That
+                // looks exactly like "nobody is next", which is a claim it was
+                // never told — so the absence is named here instead.
+                var mute = groups.filter(function (g) { return g.routing_read === false; });
+                if (mute.length) {
+                    stateRow.appendChild(dotLabel('rotation not reported for '
+                        + mute.map(familyName).join(', '), 'warn'));
+                }
+                FACET_ORDER.forEach(function (f) {
+                    var state = facets[f] || 'indeterminate';
+                    // A green dot already says "read". The word is spent only
+                    // on the states where something actually went wrong.
+                    stateRow.appendChild(dotLabel(state === 'ok' ? f : f + ' ' + facetWord(state), facetTone(state)));
+                });
+                body.appendChild(stateRow);
+            }
+            panel.appendChild(body);
+            root.appendChild(panel);
+        } else if (selection.account) {
             renderAccount(root, selection.group, selection.account, facets);
         } else if (!hasAnswer) {
             // Nothing has been read yet. An empty verdict here would be a claim
@@ -1625,6 +2316,7 @@
             }
             if (view.ok) { lastGood = view; lastGoodAt = Date.now(); }
             actionMessage = '';
+            applyPrefs(view.prefs);
             // An answer that reports itself as not ok normally carries its own
             // reason. If it does not, say so rather than draw it as fresh.
             var unexplained = !view.ok && !view.transport_error && !view.facet_note;
@@ -1731,27 +2423,28 @@
     // so that stop() can take them off the document again.
     function onDocumentClick(e) {
         var t = e.target;
-        var inside = t && typeof t.closest === 'function' ? t.closest('.status-wrap, .acct-wrap') : null;
+        var inside = t && typeof t.closest === 'function' ? t.closest('.settings-panel, .acct-wrap') : null;
         if (inside) return;
         var changed = false;
-        if (statusOpen) { statusOpen = false; changed = true; }
+        if (settingsOpen) { settingsOpen = false; changed = true; }
         if (accountsOpen) { accountsOpen = false; changed = true; }
         if (changed) rerender();
     }
 
     function onDocumentKey(e) {
         if (e.key !== 'Escape') return;
+        if (settingsOpen) {
+            settingsOpen = false;
+            rerender();
+            return;
+        }
         // Only one of the two is ever open — each opening closes the other —
         // so this order is a safety rail, not a stack.
         if (accountsOpen) {
             accountsOpen = false;
             focusAccountBtn = true;
             rerender();
-            return;
         }
-        if (!statusOpen) return;
-        statusOpen = false;
-        rerender();
     }
 
     function stop() {
@@ -1765,7 +2458,7 @@
     // Both the first run and the return from the back/forward cache need the
     // same three things started; describing them twice is how they drift.
     // The sheet is static, so it is written once and lives outside the tree
-    // render() clears. Rebuilding it on every redraw re-applied 14 KB of CSS
+    // render() clears. Rebuilding it on every redraw re-applied 18 KB of CSS
     // twice a cycle — and made the progress bars' transition impossible, since
     // a transition needs the previous computed width and every fill was new.
     function installStyle() {
@@ -1785,6 +2478,7 @@
         document.addEventListener('click', onDocumentClick);
         document.addEventListener('keydown', onDocumentKey);
         if (dataTimer === null) {
+            timerStartedAt = Date.now();
             dataTimer = window.setInterval(function () {
                 if (document.visibilityState === 'visible') load();
             }, REFRESH_MS);

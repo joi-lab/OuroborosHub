@@ -1,7 +1,7 @@
 ---
 name: claudexor_quotas
-description: Quota widget showing fresh and last-known limits for every authorized Claudexor account, with honest foreground refresh and per-facet read state.
-version: 0.3.1
+description: Quota widget showing fresh and last-known limits for every authorized Claudexor account, with honest foreground refresh and per-facet read state. Writes nothing but the reader's display choices, into its own state directory.
+version: 0.4.0
 type: extension
 runtime: python3
 entry: plugin.py
@@ -9,7 +9,7 @@ plugin_api: "2.0"
 permissions: [net, route, widget]
 env_from_settings: []
 when_to_use: The owner wants to see, at a glance, the quota windows, limits and reset times of every authorized Claudexor account, including which facets could not be read.
-timeout_sec: 60
+timeout_sec: 180
 ui_tab:
   tab_id: quotas
   title: Claudexor Quotas
@@ -20,12 +20,19 @@ ui_tab:
     entry: widget.js
 ---
 
-# Claudexor Quotas (v0.3.1)
+# Claudexor Quotas (v0.4.0)
 
 A projection of the host's own account surface. Cached projection reads remain
 read-only. The owner's explicit Refresh button invokes the host's dedicated
 foreground quota action; the skill reads no daemon token and owns no quota
 freshness, routing, retry, pacing, or vendor policy.
+
+The one thing it writes is the reader's own display choices — how much of a row
+to unfold, and which windows a row shows per agent family — into `prefs.json`
+in its own state directory. The widget cannot keep them itself: module widgets
+run in an opaque-origin sandbox where every browser store throws, so a
+preference kept there is silently forgotten. The route accepts those two
+values and nothing else; anything unrecognized is dropped rather than stored.
 
 ## What it reads
 
@@ -98,7 +105,7 @@ exhausted window is never reported as the default login's.
 6. **Degraded accounts keep their rows as "last known"** and lose any green
    verified claim; rotation wording counts only accounts actually signed in.
 
-## Interactive Features (v0.3.1)
+## Interactive Features
 
 - **One control row, no header**: the frame is short and the host already prints the widget's name, so there is no title row. A status button carries a pip — green when all three facets answered, red when one did not — and opens sideways into daemon state, engine version and per-facet read state (`catalog`, `accounts`, `quota`). A facet that did not answer also raises a banner above the list, so a failure is never hidden behind the button.
 - **One account at a time, chosen in the row**: the frame opens at 320px and grows only when the module asks, so the screen shows one account in full — every window, every reset time — instead of a list whose remainder is scrolled out of sight without a scrollbar to say so. The family is picked from a segment carrying each vendor's own mark; the account selector beside it names the account on screen, shows how full its hottest window is and says how many of the family's other accounts need attention; opening it gives every account a state dot and a second line — its live quota windows, a typed generic state, or its plan and quota observation age. Raw status detail and local paths stay out of visible text, ARIA, and titles. What is hidden still speaks: a pip on the family mark whenever any of its accounts needs attention, and the banners above the account speak for every family, not for the selection.
@@ -120,5 +127,7 @@ The skill declares no secrets (`env_from_settings: []`). Its permissions are
 `net` + `route` + `widget`: `net` is declared because the route reads the host's
 own endpoints over loopback with `urllib` (no external host and no proxy
 handler): passive status GET uses 25 seconds, while the explicit foreground
-quota POST uses 180 seconds. No secret key grant is required. Enabling a
-reviewed skill remains the owner's action in Skills.
+quota POST uses 180 seconds. No secret key grant is required. The one file the
+skill writes, `prefs.json`, lives in the state directory the host hands it and
+holds two display choices; no account name, address or figure is ever written
+down. Enabling a reviewed skill remains the owner's action in Skills.

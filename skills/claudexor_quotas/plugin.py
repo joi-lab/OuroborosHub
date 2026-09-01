@@ -4,6 +4,11 @@ Cached reads use the existing host status endpoint. The owner's explicit
 Refresh action uses the dedicated host quota-refresh endpoint. No daemon token
 is touched and quota policy remains in Claudexor.
 
+The one thing this skill does write is the reader's own display choices, into
+its own state directory. The widget cannot keep them itself: it runs in an
+opaque-origin sandbox where every browser store throws, so a preference kept
+there is silently forgotten — which is worse than not offering it.
+
 Every projection below preserves provenance: a facet that was not read or that
 failed is reported as such, never as an empty or zero value.
 """
@@ -23,6 +28,18 @@ STATUS_TIMEOUT_SEC = 25.0
 REFRESH_TIMEOUT_SEC = 180.0
 STATUS_PATH = "/api/claudexor/status"
 REFRESH_PATH = "/api/claudexor/quota/refresh"
+
+# Display choices, and only those. Anything the reader picks that is not in
+# these tables is not stored: the file is written by a route, and a route takes
+# whatever it is given.
+PREFS_FILE = "prefs.json"
+DENSITIES = ("compact", "normal", "detailed")
+MODEL_VIEWS = ("all", "models", "shared")
+DEFAULT_PREFS: Dict[str, Any] = {"density": "normal", "models": {}}
+# A harness id is a short slug from the host's own catalog. The cap is there so
+# a malformed call cannot grow the file without bound.
+MAX_MODEL_ENTRIES = 32
+MAX_HARNESS_ID = 64
 
 FACETS = ("catalog", "accounts", "quota")
 READ_OK = "ok"
@@ -426,6 +443,37 @@ def verification_view(
     return view
 
 
+def pool_routing(profiles_block: Dict[str, Any]) -> Dict[str, Any]:
+    """Routing verdicts by harness. A unified engine empties `harnessAccounts`
+    and carries them in the additive `accountPools` key instead; on a legacy
+    engine this is simply empty and the old per-harness row keeps answering."""
+    rows = profiles_block.get("accountPools")
+    out: Dict[str, Any] = {}
+    for row in rows if isinstance(rows, list) else []:
+        if not isinstance(row, dict):
+            continue
+        hid = str(row.get("harness_id") or "")
+        if hid:
+            out[hid] = row.get("next_up") if isinstance(row.get("next_up"), dict) else {}
+    return out
+
+
+def is_next_up(verdict: Any, kind: str, subject_id: str) -> bool:
+    """Whether this account is the one the harness would use next. Routing is
+    never re-derived from the profile list: with no verdict on the wire the
+    honest answer is "not stated", which is False here and disclosed as
+    `routing_read` on the group."""
+    if not isinstance(verdict, dict):
+        return False
+    if str(verdict.get("kind") or "") != kind:
+        return False
+    if kind == "native":
+        return True
+    # The pool spells it camelCase, the legacy row snake_case. Same fact.
+    named = str(verdict.get("profileId") or verdict.get("profile_id") or "")
+    return bool(named) and named == subject_id
+
+
 def build_groups(payload: Dict[str, Any], states: Dict[str, str]) -> List[Dict[str, Any]]:
     """One card per agent family; account rows inside it."""
     harnesses = payload.get("harnesses")
@@ -436,6 +484,7 @@ def build_groups(payload: Dict[str, Any], states: Dict[str, str]) -> List[Dict[s
     profile_rows = [r for r in (profiles_block.get("profiles") or []) if isinstance(r, dict)]
     snapshots = payload.get("quota")
     absences = payload.get("quota_absences")
+    pools = pool_routing(profiles_block)
     accounts_read = states.get("accounts", "indeterminate")
     quota_read = states.get("quota", "indeterminate")
 
@@ -453,18 +502,25 @@ def build_groups(payload: Dict[str, Any], states: Dict[str, str]) -> List[Dict[s
     for hid in order:
         meta = next((h for h in harnesses if str(h.get("id") or "") == hid), {})
         accounts: List[Dict[str, Any]] = []
+        native_row = next(
+            (r for r in native_rows if str(r.get("harness_id") or "") == hid), None
+        )
+        # The pool owns routing where it speaks; the legacy row answers where it
+        # does not. Neither present means routing was not stated at all.
+        verdict = pools.get(hid) if hid in pools else (native_row or {}).get("next_up")
+        routing_read = hid in pools or native_row is not None
         for row in native_rows:
             if str(row.get("harness_id") or "") != hid:
                 continue
             accounts.append(_native_account(
-                row, snapshots, absences, hid, quota_read, accounts_read,
+                row, snapshots, absences, hid, quota_read, accounts_read, verdict,
             ))
         for row in profile_rows:
             profile = row.get("profile") or {}
             if str(profile.get("harness_id") or "") != hid:
                 continue
             accounts.append(_profile_account(
-                row, native_rows, snapshots, absences, hid, quota_read, accounts_read,
+                row, snapshots, absences, hid, quota_read, accounts_read, verdict,
             ))
         groups.append({
             "harness_id": hid,
@@ -473,6 +529,7 @@ def build_groups(payload: Dict[str, Any], states: Dict[str, str]) -> List[Dict[s
             "harness_enabled": bool(meta.get("enabled")) if meta else None,
             "provider_family": str(meta.get("provider_family") or meta.get("providerFamily") or ""),
             "catalog_known": states.get("catalog") == READ_OK and bool(meta),
+            "routing_read": routing_read,
             "accounts": accounts,
             "accounts_signed_in": sum(1 for a in accounts if a["signed_in"]),
             "accounts_unavailable": accounts_read != READ_OK,
@@ -487,10 +544,10 @@ def _native_account(
     hid: str,
     quota_read: str,
     accounts_read: str,
+    verdict: Any = None,
 ) -> Dict[str, Any]:
     identity = row.get("identity") or {}
     signed_in = bool(row.get("native_login_detected"))
-    next_up = row.get("next_up") or {}
     return {
         "key": f"{hid}:native",
         "kind": "native",
@@ -501,7 +558,7 @@ def _native_account(
         "plan": str(identity.get("plan") or ""),
         "enabled": bool(row.get("native_credentials_enabled")),
         "signed_in": signed_in,
-        "next_up": str(next_up.get("kind") or "") == "native",
+        "next_up": is_next_up(verdict, "native", ""),
         "last_verified_at": "",
         "verification_state": "",
         "verification_source": "",
@@ -513,12 +570,12 @@ def _native_account(
 
 def _profile_account(
     row: Dict[str, Any],
-    native_rows: List[Dict[str, Any]],
     snapshots: Any,
     absences: Any,
     hid: str,
     quota_read: str,
     accounts_read: str,
+    verdict: Any = None,
 ) -> Dict[str, Any]:
     profile = row.get("profile") or {}
     status = row.get("status") or {}
@@ -528,12 +585,6 @@ def _profile_account(
     verification_source = str(status.get("verification_source") or "")
     availability = str(status.get("availability") or "")
     signed_in = verification == "passed" or availability == "available"
-    native = next((r for r in native_rows if str(r.get("harness_id") or "") == hid), {})
-    next_up = native.get("next_up") or {}
-    is_next = (
-        str(next_up.get("kind") or "") == "profile"
-        and str(next_up.get("profile_id") or "") == profile_id
-    )
     return {
         "key": f"{hid}:{profile_id}",
         "kind": "profile",
@@ -544,7 +595,7 @@ def _profile_account(
         "plan": str(identity.get("plan") or status.get("plan_label") or ""),
         "enabled": bool(profile.get("enabled")),
         "signed_in": bool(signed_in),
-        "next_up": is_next,
+        "next_up": is_next_up(verdict, "profile", profile_id),
         "last_verified_at": str(status.get("last_verified_at") or ""),
         "verification_state": verification,
         "verification_source": verification_source,
@@ -630,12 +681,88 @@ def build_view(payload: Optional[Dict[str, Any]], transport_error: str) -> Dict[
     return view
 
 
+def clean_prefs(raw: Any) -> Dict[str, Any]:
+    """Whatever comes back from disk or from the widget, reduced to what this
+    skill is willing to remember. An unknown value is not corrected into a
+    guess — it is dropped, and the default stands in its place."""
+    out: Dict[str, Any] = {"density": DEFAULT_PREFS["density"], "models": {}}
+    if not isinstance(raw, dict):
+        return out
+    density = raw.get("density")
+    if density in DENSITIES:
+        out["density"] = density
+    models = raw.get("models")
+    if isinstance(models, dict):
+        for harness_id, choice in list(models.items())[:MAX_MODEL_ENTRIES]:
+            key = str(harness_id)[:MAX_HARNESS_ID].strip()
+            if key and choice in MODEL_VIEWS:
+                out["models"][key] = choice
+    return out
+
+
+def _prefs_path(api: Any) -> Optional[Path]:
+    try:
+        return Path(api.get_state_dir()) / PREFS_FILE
+    except Exception:
+        return None
+
+
+def read_prefs(api: Any) -> Dict[str, Any]:
+    """Never raises: a widget that cannot learn the saved choice still has to
+    draw one, and the default is a fine answer."""
+    path = _prefs_path(api)
+    if path is None or not path.is_file():
+        return clean_prefs(None)
+    try:
+        return clean_prefs(json.loads(path.read_text(encoding="utf-8")))
+    except Exception:
+        return clean_prefs(None)
+
+
+def write_prefs(api: Any, raw: Any) -> Tuple[Dict[str, Any], str]:
+    """Returns (what is now stored, error). The stored value is returned rather
+    than echoed back from the request: the widget then draws what the skill
+    actually kept, not what it hoped to send."""
+    prefs = clean_prefs(raw)
+    path = _prefs_path(api)
+    if path is None:
+        return prefs, "no state directory"
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(prefs), encoding="utf-8")
+    except Exception as exc:
+        return prefs, f"{type(exc).__name__}: {exc}"
+    return prefs, ""
+
+
 def register(api: Any) -> None:
     def quotas_route(_request: Any) -> Dict[str, Any]:
         payload, transport_error = _fetch_status(_server_port(api))
         if transport_error:
             api.log("error", f"claudexor status read failed: {transport_error}")
-        return build_view(payload, transport_error)
+        view = build_view(payload, transport_error)
+        # Sent with the reading rather than behind a second request: the widget
+        # would otherwise draw one frame with the wrong choice and correct
+        # itself, which reads as a flicker nobody asked for.
+        view["prefs"] = read_prefs(api)
+        return view
+
+    async def prefs_route(request: Any) -> Dict[str, Any]:
+        unread = object()
+        try:
+            payload = await request.json()
+        except Exception:
+            payload = unread
+        # A body that did not parse is not a request to forget everything.
+        # Writing the cleaned defaults here would wipe the reader's choices and
+        # answer as if it had saved them.
+        if payload is unread:
+            api.log("error", "claudexor prefs write refused: request body was not JSON")
+            return {"prefs": read_prefs(api), "error": "request body was not JSON"}
+        prefs, error = write_prefs(api, payload)
+        if error:
+            api.log("error", f"claudexor prefs write failed: {error}")
+        return {"prefs": prefs, "error": error}
 
     def refresh_route(_request: Any) -> Dict[str, Any]:
         payload, transport_error, status = _refresh_quota(_server_port(api))
@@ -655,6 +782,7 @@ def register(api: Any) -> None:
 
     api.register_route("quotas", quotas_route, methods=("GET",))
     api.register_route("refresh", refresh_route, methods=("POST",))
+    api.register_route("prefs", prefs_route, methods=("POST",))
     api.register_ui_tab(
         "quotas",
         "Claudexor Quotas",
