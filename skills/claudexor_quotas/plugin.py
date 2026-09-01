@@ -1,8 +1,8 @@
-"""Claudexor Quotas — read-only quota/limit projection for authorized accounts.
+"""Claudexor Quotas — quota/limit projection for authorized accounts.
 
-Reads exactly one existing host endpoint (GET /api/claudexor/status) over
-loopback and normalizes it for the widget. No daemon token is touched, no
-gateway route is added to the core repo, nothing is mutated.
+Cached reads use the existing host status endpoint. The owner's explicit
+Refresh action uses the dedicated host quota-refresh endpoint. No daemon token
+is touched and quota policy remains in Claudexor.
 
 Every projection below preserves provenance: a facet that was not read or that
 failed is reported as such, never as an empty or zero value.
@@ -19,8 +19,10 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-FETCH_TIMEOUT_SEC = 25.0
+STATUS_TIMEOUT_SEC = 25.0
+REFRESH_TIMEOUT_SEC = 180.0
 STATUS_PATH = "/api/claudexor/status"
+REFRESH_PATH = "/api/claudexor/quota/refresh"
 
 FACETS = ("catalog", "accounts", "quota")
 READ_OK = "ok"
@@ -59,28 +61,58 @@ def _port_candidates(api: Any) -> List[Any]:
     return out
 
 
-def _fetch_status(port: int) -> Tuple[Optional[Dict[str, Any]], str]:
-    """Return (payload, transport_error). Exactly one of them is meaningful."""
-    url = f"http://127.0.0.1:{port}{STATUS_PATH}"
-    request = urllib.request.Request(url, headers={"Accept": "application/json"})
+def _request_json(
+    port: int,
+    path: str,
+    method: str = "GET",
+    timeout_sec: float = STATUS_TIMEOUT_SEC,
+) -> Tuple[Optional[Dict[str, Any]], str, int]:
+    """Return one loopback JSON response without exposing host credentials."""
+    url = f"http://127.0.0.1:{port}{path}"
+    body = b"{}" if method == "POST" else None
+    headers = {"Accept": "application/json"}
+    if body is not None:
+        headers["Content-Type"] = "application/json"
+    request = urllib.request.Request(
+        url,
+        data=body,
+        headers=headers,
+        method=method,
+    )
     try:
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-        with opener.open(request, timeout=FETCH_TIMEOUT_SEC) as response:
-            body = response.read().decode("utf-8", "replace")
+        with opener.open(request, timeout=timeout_sec) as response:
+            response_body = response.read().decode("utf-8", "replace")
             code = int(getattr(response, "status", 200) or 200)
     except urllib.error.HTTPError as exc:
-        return None, f"HTTP {exc.code} from {STATUS_PATH}"
+        return None, f"HTTP {exc.code} from {path}", int(exc.code)
     except Exception as exc:
-        return None, f"{type(exc).__name__}: {exc}"
+        return None, f"{type(exc).__name__}: {exc}", 0
     if code != 200:
-        return None, f"HTTP {code} from {STATUS_PATH}"
+        return None, f"HTTP {code} from {path}", code
     try:
-        payload = json.loads(body)
+        payload = json.loads(response_body)
     except Exception:
-        return None, "status response was not JSON"
+        return None, "response was not JSON", code
     if not isinstance(payload, dict):
-        return None, "status response was not a JSON object"
-    return payload, ""
+        return None, "response was not a JSON object", code
+    return payload, "", code
+
+
+def _fetch_status(port: int) -> Tuple[Optional[Dict[str, Any]], str]:
+    """Return the passive cached status projection."""
+    payload, error, _status = _request_json(port, STATUS_PATH)
+    return payload, error
+
+
+def _refresh_quota(port: int) -> Tuple[Optional[Dict[str, Any]], str, int]:
+    """Request exactly one foreground quota refresh through the host."""
+    return _request_json(
+        port,
+        REFRESH_PATH,
+        method="POST",
+        timeout_sec=REFRESH_TIMEOUT_SEC,
+    )
 
 
 def facet_states(payload: Optional[Dict[str, Any]]) -> Dict[str, str]:
@@ -108,6 +140,94 @@ def _subject_key(value: Any) -> str:
     if value is None:
         return ""
     return str(value).strip()
+
+
+def _latest_observed_at(rows: List[Dict[str, Any]]) -> str:
+    values = [str(row.get("observed_at") or "") for row in rows]
+    return max((value for value in values if value), default="")
+
+
+def _retry_deadline(absence: Dict[str, Any]) -> str:
+    """Translate a typed vendor Retry-After into one absolute deadline."""
+    try:
+        retry_ms = int(absence.get("retry_after_ms"))
+    except (TypeError, ValueError):
+        return ""
+    if retry_ms < 0:
+        return ""
+    raw = str(absence.get("observed_at") or "")
+    try:
+        observed = _dt.datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except Exception:
+        return ""
+    if observed.tzinfo is None:
+        observed = observed.replace(tzinfo=_dt.timezone.utc)
+    return (observed + _dt.timedelta(milliseconds=retry_ms)).isoformat()
+
+
+def _later_deadline(first: str, second: str) -> str:
+    """Return the later parseable ISO instant, preferring current evidence."""
+    parsed: List[Tuple[_dt.datetime, str]] = []
+    for raw in (first, second):
+        try:
+            instant = _dt.datetime.fromisoformat(str(raw or "").replace("Z", "+00:00"))
+        except Exception:
+            continue
+        if instant.tzinfo is None:
+            instant = instant.replace(tzinfo=_dt.timezone.utc)
+        parsed.append((instant, str(raw)))
+    fallback = (_dt.datetime.min.replace(tzinfo=_dt.timezone.utc), second)
+    return max(parsed, default=fallback)[1]
+
+
+def _absence_view(
+    absences: Any,
+    harness_id: str,
+    subject_id: str,
+    refresh_skipped: Any = None,
+) -> Optional[Dict[str, str]]:
+    """Map typed absence facts to the approved generic action vocabulary."""
+    matching = [
+        row for row in (absences if isinstance(absences, list) else [])
+        if isinstance(row, dict)
+        and str((row.get("subject") or {}).get("harness") or "") == harness_id
+        and _subject_key((row.get("subject") or {}).get("subject_id")) == subject_id
+    ]
+    matching.sort(key=lambda row: str(row.get("observed_at") or ""), reverse=True)
+    row = matching[0] if matching else None
+    action_kind = ""
+    retry_at = ""
+    observed_at = str((row or {}).get("observed_at") or "")
+    reason = str((row or {}).get("reason") or "")
+    if reason in {"not_logged_in", "auth_revoked"}:
+        action_kind = "sign_in_if_unverified"
+    elif reason == "no_source":
+        action_kind = "source_missing"
+    elif reason == "rate_limited":
+        retry_at = _retry_deadline(row or {})
+        action_kind = "retry" if retry_at else ""
+
+    skipped = next((
+        item for item in (refresh_skipped if isinstance(refresh_skipped, list) else [])
+        if isinstance(item, dict)
+        and str(item.get("vendor") or "") == harness_id
+        and str(item.get("not_before") or "")
+    ), None)
+    if skipped is not None:
+        skipped_at = str(skipped.get("not_before") or "")
+        if action_kind == "retry":
+            retry_at = _later_deadline(retry_at, skipped_at)
+        elif not action_kind:
+            retry_at = skipped_at
+            action_kind = "retry"
+    if row is None and skipped is None:
+        return None
+    return {
+        "message": "Quota temporarily unavailable",
+        "action_kind": action_kind,
+        "retry_at": retry_at,
+        "observed_at": observed_at,
+    }
 
 
 def _is_future(iso_text: Any) -> Optional[bool]:
@@ -159,6 +279,8 @@ def quota_for(
     harness_id: str,
     subject_id: str,
     quota_read: str,
+    absences: Any = None,
+    refresh_skipped: Any = None,
 ) -> Dict[str, Any]:
     """Project quota for ONE account. Absence is stated, never invented."""
     if quota_read != READ_OK:
@@ -170,6 +292,8 @@ def quota_for(
             "constraints": [],
             "stale": [],
             "availability": "",
+            "observed_at": "",
+            "absence": None,
         }
     rows = [
         row for row in (snapshots if isinstance(snapshots, list) else [])
@@ -179,6 +303,12 @@ def quota_for(
     ]
     fresh = [row for row in rows if str(row.get("freshness") or "") == "fresh"]
     other = [row for row in rows if row not in fresh]
+    absence = _absence_view(
+        absences,
+        harness_id,
+        subject_id,
+        refresh_skipped,
+    )
     stale_views = [
         {
             "observed_at": str(row.get("observed_at") or ""),
@@ -198,10 +328,15 @@ def quota_for(
                 "state": "no_fresh_window",
                 "label": "No fresh reading — last reading is stale",
                 "resets_at": "",
-                "note": "A stale reading does not gate routing; shown below as-is.",
+                "note": (
+                    "Stale percentages do not grant routing; "
+                    "live cooldown evidence may still deny or rank."
+                ),
                 "constraints": [],
                 "stale": stale_views,
                 "availability": "",
+                "observed_at": _latest_observed_at(other),
+                "absence": absence,
             }
         return {
             "state": "no_data",
@@ -211,6 +346,8 @@ def quota_for(
             "constraints": [],
             "stale": [],
             "availability": "",
+            "observed_at": "",
+            "absence": absence,
         }
 
     views: List[Dict[str, Any]] = []
@@ -259,6 +396,8 @@ def quota_for(
         "constraints": views,
         "stale": stale_views,
         "availability": availability,
+        "observed_at": _latest_observed_at(fresh),
+        "absence": absence,
     }
 
 
@@ -296,6 +435,7 @@ def build_groups(payload: Dict[str, Any], states: Dict[str, str]) -> List[Dict[s
     native_rows = [r for r in (profiles_block.get("harnessAccounts") or []) if isinstance(r, dict)]
     profile_rows = [r for r in (profiles_block.get("profiles") or []) if isinstance(r, dict)]
     snapshots = payload.get("quota")
+    absences = payload.get("quota_absences")
     accounts_read = states.get("accounts", "indeterminate")
     quota_read = states.get("quota", "indeterminate")
 
@@ -316,13 +456,15 @@ def build_groups(payload: Dict[str, Any], states: Dict[str, str]) -> List[Dict[s
         for row in native_rows:
             if str(row.get("harness_id") or "") != hid:
                 continue
-            accounts.append(_native_account(row, snapshots, hid, quota_read, accounts_read))
+            accounts.append(_native_account(
+                row, snapshots, absences, hid, quota_read, accounts_read,
+            ))
         for row in profile_rows:
             profile = row.get("profile") or {}
             if str(profile.get("harness_id") or "") != hid:
                 continue
             accounts.append(_profile_account(
-                row, native_rows, snapshots, hid, quota_read, accounts_read,
+                row, native_rows, snapshots, absences, hid, quota_read, accounts_read,
             ))
         groups.append({
             "harness_id": hid,
@@ -341,6 +483,7 @@ def build_groups(payload: Dict[str, Any], states: Dict[str, str]) -> List[Dict[s
 def _native_account(
     row: Dict[str, Any],
     snapshots: Any,
+    absences: Any,
     hid: str,
     quota_read: str,
     accounts_read: str,
@@ -351,6 +494,7 @@ def _native_account(
     return {
         "key": f"{hid}:native",
         "kind": "native",
+        "subject_id": None,
         "label": "Default CLI login",
         "caption": "managed by the vendor CLI",
         "email": str(identity.get("email") or ""),
@@ -359,8 +503,11 @@ def _native_account(
         "signed_in": signed_in,
         "next_up": str(next_up.get("kind") or "") == "native",
         "last_verified_at": "",
+        "verification_state": "",
+        "verification_source": "",
+        "verified_live": False,
         "verification": verification_view("", "", accounts_read, signed_in),
-        "quota": quota_for(snapshots, hid, "", quota_read),
+        "quota": quota_for(snapshots, hid, "", quota_read, absences),
     }
 
 
@@ -368,6 +515,7 @@ def _profile_account(
     row: Dict[str, Any],
     native_rows: List[Dict[str, Any]],
     snapshots: Any,
+    absences: Any,
     hid: str,
     quota_read: str,
     accounts_read: str,
@@ -377,6 +525,7 @@ def _profile_account(
     identity = row.get("identity") or {}
     profile_id = str(profile.get("profile_id") or "")
     verification = str(status.get("verification") or "")
+    verification_source = str(status.get("verification_source") or "")
     availability = str(status.get("availability") or "")
     signed_in = verification == "passed" or availability == "available"
     native = next((r for r in native_rows if str(r.get("harness_id") or "") == hid), {})
@@ -388,6 +537,7 @@ def _profile_account(
     return {
         "key": f"{hid}:{profile_id}",
         "kind": "profile",
+        "subject_id": profile_id,
         "label": str(profile.get("display_name") or profile_id or "account"),
         "caption": str(profile.get("credential_kind") or ""),
         "email": str(identity.get("email") or ""),
@@ -396,13 +546,65 @@ def _profile_account(
         "signed_in": bool(signed_in),
         "next_up": is_next,
         "last_verified_at": str(status.get("last_verified_at") or ""),
+        "verification_state": verification,
+        "verification_source": verification_source,
+        "verified_live": (
+            accounts_read == READ_OK
+            and verification == "passed"
+            and verification_source == "vendor"
+        ),
         "detail": str(status.get("detail") or ""),
         "availability": availability,
         "verification": verification_view(
-            verification, str(status.get("verification_source") or ""),
+            verification, verification_source,
             accounts_read, bool(signed_in),
         ),
-        "quota": quota_for(snapshots, hid, profile_id, quota_read),
+        "quota": quota_for(snapshots, hid, profile_id, quota_read, absences),
+    }
+
+
+def build_quota_updates(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Normalize one exact foreground envelope without rebuilding status."""
+    if (
+        not isinstance(payload.get("snapshots"), list)
+        or not isinstance(payload.get("absences"), list)
+        or "refreshed_at" not in payload
+    ):
+        return {"ok": False, "message": "Live quota refresh returned an invalid response"}
+    snapshots = [
+        row for row in (payload.get("snapshots") or []) if isinstance(row, dict)
+    ]
+    absences = [
+        row for row in (payload.get("absences") or []) if isinstance(row, dict)
+    ]
+    refresh_skipped = [
+        row for row in (payload.get("refresh_skipped") or []) if isinstance(row, dict)
+    ]
+    identities: List[Tuple[str, str]] = []
+    for row in snapshots + absences:
+        subject = row.get("subject") if isinstance(row.get("subject"), dict) else {}
+        harness_id = str(subject.get("harness") or "")
+        identity = (harness_id, _subject_key(subject.get("subject_id")))
+        if harness_id and identity not in identities:
+            identities.append(identity)
+    return {
+        "ok": True,
+        "quota_updates": [
+            {
+                "harness": harness_id,
+                "subject_id": None if subject_id == "" else subject_id,
+                "quota": quota_for(
+                    snapshots,
+                    harness_id,
+                    subject_id,
+                    READ_OK,
+                    absences,
+                    refresh_skipped,
+                ),
+            }
+            for harness_id, subject_id in identities
+        ],
+        "refreshed_at": str(payload.get("refreshed_at") or ""),
     }
 
 
@@ -435,7 +637,24 @@ def register(api: Any) -> None:
             api.log("error", f"claudexor status read failed: {transport_error}")
         return build_view(payload, transport_error)
 
+    def refresh_route(_request: Any) -> Dict[str, Any]:
+        payload, transport_error, status = _refresh_quota(_server_port(api))
+        if transport_error:
+            api.log("error", f"claudexor live quota refresh failed: {transport_error}")
+            compatibility_error = status in {404, 405}
+            return {
+                "ok": False,
+                "compatibility_error": compatibility_error,
+                "message": (
+                    "Live refresh requires a newer Ouroboros host"
+                    if compatibility_error
+                    else "Live quota refresh failed"
+                ),
+            }
+        return build_quota_updates(payload or {})
+
     api.register_route("quotas", quotas_route, methods=("GET",))
+    api.register_route("refresh", refresh_route, methods=("POST",))
     api.register_ui_tab(
         "quotas",
         "Claudexor Quotas",
