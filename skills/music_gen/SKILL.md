@@ -5,6 +5,7 @@ version: 0.5.3
 type: extension
 runtime: python3
 entry: plugin.py
+plugin_api: "2.0"
 permissions: [net, tool, route, widget, read_settings]
 env_from_settings: [OPENROUTER_API_KEY]
 when_to_use: User wants to generate music or an audio clip from a text prompt and listen to it inline in the web UI.

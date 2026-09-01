@@ -5,6 +5,7 @@ version: 0.1.0
 type: extension
 runtime: python3
 entry: plugin.py
+plugin_api: "2.0"
 permissions: [net, tool, route, widget, read_settings]
 env_from_settings: [GDELT_API_KEY]
 when_to_use: >

@@ -4,6 +4,7 @@ description: Wide polished weather widget — current conditions, compact foreca
 version: 0.3.2
 type: extension
 entry: plugin.py
+plugin_api: "2.0"
 permissions: [net, tool, route, widget]
 env_from_settings: []
 when_to_use: User asks about weather, temperature, forecast, current conditions, wind, humidity, sunrise/sunset, or a weather dashboard for a city.

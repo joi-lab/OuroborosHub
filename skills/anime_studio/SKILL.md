@@ -4,6 +4,7 @@ description: AI-powered 2D anime generator with VLM-verified assets, video analy
 version: 3.2.0
 type: extension
 entry: plugin.py
+plugin_api: "2.0"
 permissions: [net, route, widget, ws_handler, tool, read_settings, subprocess, companion_process, inject_chat]
 env_from_settings: [OPENROUTER_API_KEY]
 when_to_use: User wants to generate a short animated 2D anime cartoon, music video, or animated scene with consistent characters, VLM verification, and narrative continuity.

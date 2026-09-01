@@ -4,6 +4,7 @@ description: Agent-to-Agent protocol bridge for Ouroboros. Provides a local A2A-
 version: 1.3.0
 type: extension
 entry: plugin.py
+plugin_api: "2.0"
 runtime: python3
 permissions: [net, tool, route, widget, companion_process, inject_chat]
 env_from_settings: []

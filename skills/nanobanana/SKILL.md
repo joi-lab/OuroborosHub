@@ -5,6 +5,7 @@ version: 0.2.4
 type: extension
 runtime: python3
 entry: plugin.py
+plugin_api: "2.0"
 permissions: [net, tool, route, widget, read_settings]
 env_from_settings: [OPENROUTER_API_KEY]
 when_to_use: User wants to generate or render an image from a text description, right now, inside the web UI. Also saves the image to disk so it can be downloaded.
