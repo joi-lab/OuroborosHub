@@ -271,33 +271,33 @@
       "when_to_use": "When the user wants to play an authentic Classic Doom (1993) 2.5D FPS raycaster game directly in an Ouroboros extension widget with monsters, weapons, sound effects, and heavy metal synth."
     },
     {
-      "description": "Read-only widget showing quota windows and limits for every authorized Claudexor account, with per-facet read-state honesty.",
+      "description": "Quota widget showing fresh and last-known limits for every authorized Claudexor account, with honest foreground refresh and per-facet read state.",
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "5942434eed2c3cd2f48bc9d45e9121910e58e37aa21cd6c262dad3b65eac1cbd",
-          "size": 6196
+          "sha256": "e6252c53c2e98a083e0fda6ab8712982ff1ca941254ebb84445ef3ee67436350",
+          "size": 7857
         },
         {
           "path": "plugin.py",
-          "sha256": "4f6440d5e6da5fbb12d2969b69f40945123d293762bb6c3526b4e69e91015eb0",
-          "size": 16789
+          "sha256": "bb44ef1fca743029cb0a5d85acc4d62e13d5fb0b41cb6e56ebb36d62db1dae59",
+          "size": 24618
         },
         {
           "path": "test_quotas.py",
-          "sha256": "e80b1e210aec46a3db13e52aa08d1efdcb07c296ee66b4731afa4a04b4e7ef63",
-          "size": 14249
+          "sha256": "a04b287d3466eecdce4246bb79c7612f8ee4f7bf3721e0c7a588486066a15409",
+          "size": 43133
         },
         {
           "path": "widget.js",
-          "sha256": "15bba1a4d2a66332a455e810ee29ecfe64d009a2892a47c84920f05261a605a2",
-          "size": 91625
+          "sha256": "e2960fa3ebe3df219066e116ca8e7d8f70f3c8a07daa78be1133a07913315ef1",
+          "size": 95382
         }
       ],
       "name": "claudexor_quotas",
       "slug": "claudexor_quotas",
       "type": "extension",
-      "version": "0.3.0",
+      "version": "0.3.1",
       "when_to_use": "The owner wants to see, at a glance, the quota windows, limits and reset times of every authorized Claudexor account, including which facets could not be read."
     },
     {

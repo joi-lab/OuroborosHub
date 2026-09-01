@@ -1,4 +1,4 @@
-/* Claudexor Quotas widget — v0.3.0 (UI/UX Redesign)
+/* Claudexor Quotas widget — v0.3.1
  *
  * Runs as a reviewed module widget: a classic inline script inside an
  * opaque-origin sandboxed iframe whose window.fetch is a parent-mediated
@@ -11,6 +11,7 @@
     'use strict';
 
     var ROUTE = '/api/extensions/claudexor_quotas/quotas';
+    var REFRESH_ROUTE = '/api/extensions/claudexor_quotas/refresh';
     var REFRESH_MS = 30000;
     var FACET_ORDER = ['catalog', 'accounts', 'quota'];
     var TONE_WORD = { ok: 'ready', warn: 'heavy use', bad: 'alert', muted: 'no live reading' };
@@ -32,6 +33,7 @@
     var focusAccountBtn = false;
     var currentView = null;
     var staleMessage = '';
+    var actionMessage = '';
 
     var STYLE_ID = 'claudexor-quotas-style';
 
@@ -59,6 +61,7 @@
         '--status-ok:#22c55e;',
         '--grad-ok:linear-gradient(90deg, #16a34a 0%, #4ade80 100%);',
         '--status-warn:#f59e0b;',
+        '--status-stale:#d6a54a;',
         '--status-warn-bg:rgba(245, 158, 11, 0.12);',
         '--status-warn-border:rgba(245, 158, 11, 0.35);',
         '--grad-warn:linear-gradient(90deg, #d97706 0%, #fbbf24 100%);',
@@ -218,9 +221,6 @@
            rather than pushing the list sideways. */
         '.acct-win-tag{color:var(--text-muted);min-width:0;overflow:hidden;text-overflow:ellipsis}',
         '.acct-win-pct{color:var(--text-secondary)}',
-        '.acct-do{display:inline-flex;align-items:center;font-size:10px;margin-left:6px;',
-        'padding:1px 7px;border-radius:var(--radius-pill);color:var(--status-bad);',
-        'background:var(--status-bad-bg);white-space:nowrap}',
         '.acct-line3{font-size:10px;color:var(--text-muted);margin-top:3px;overflow:hidden;',
         'text-overflow:ellipsis;white-space:nowrap}',
         '.acct-cap{font-size:10px;color:var(--text-secondary);background:rgba(255, 255, 255, 0.07);',
@@ -328,6 +328,7 @@
         '.progress-fill.ok{background:var(--grad-ok)}',
         '.progress-fill.warn{background:var(--grad-warn)}',
         '.progress-fill.bad{background:var(--grad-bad)}',
+        '.progress-fill.stale{background:linear-gradient(90deg, #9a6b21 0%, #d6a54a 100%)}',
         '.progress-fill.unmetered{background:repeating-linear-gradient(45deg, rgba(255,255,255,0.10), rgba(255,255,255,0.10) 6px, rgba(255,255,255,0.04) 6px, rgba(255,255,255,0.04) 12px);width:100%}',
 
         /* Window tiles — the grid gives them their place, the inset ground and
@@ -338,6 +339,18 @@
         'font-weight:500;color:var(--text-secondary);gap:8px}',
         '.tile-meta{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;',
         'font-size:11px;color:var(--text-muted);margin-top:6px}',
+        '.quota-last-known{margin-top:10px;padding:9px 10px;border:1px solid rgba(214,165,74,0.34);',
+        'border-radius:var(--radius-md);background:rgba(214,165,74,0.07)}',
+        '.last-known-copy{font-size:11px;color:#e5c27b}',
+        '.quota-tile.stale{border-color:rgba(214,165,74,0.30);background:rgba(214,165,74,0.06)}',
+        '.quota-tile.stale .tile-pct,.quota-tile.stale .tile-when-word{color:var(--status-stale)!important}',
+        '.quota-tile.stale .tile-model,.quota-tile.stale .model-chip,.quota-tile.stale .ticker{',
+        'color:#e5c27b;background:rgba(214,165,74,0.10)}',
+        '.quota-observed{font-size:11px;color:var(--text-muted)}',
+        '.quota-unavailable{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px;',
+        'font-size:11px;color:#fde68a}',
+        '.quota-action{padding:1px 7px;border-radius:var(--radius-pill);background:var(--status-warn-bg);',
+        'color:#fde68a}',
 
         /* Tickers & Monospace Counters */
         '.ticker{font-family:var(--font-mono);font-variant-numeric:tabular-nums;font-weight:500;',
@@ -349,16 +362,6 @@
         '.model-chip{display:inline-flex;align-items:center;font-size:11px;padding:1px 6px;',
         'border-radius:var(--radius-sm);background:rgba(255,255,255,0.07);color:var(--text-secondary)}',
         '.model-chip.exhausted{color:var(--status-bad);background:var(--status-bad-bg)}',
-
-        /* Stale Details Accordion */
-        '.stale-accordion{margin-top:8px;border:1px solid rgba(245, 158, 11, 0.25);border-radius:var(--radius-sm);',
-        'background:rgba(245, 158, 11, 0.05);overflow:hidden}',
-        '.stale-summary{padding:6px 10px;font-size:11px;font-weight:500;color:#fde68a;cursor:pointer;',
-        'user-select:none;display:flex;align-items:center;gap:6px}',
-        '.stale-summary:hover{background:rgba(245, 158, 11, 0.08)}',
-        '.stale-content{padding:8px 12px;border-top:1px solid rgba(245, 158, 11, 0.15);font-size:11px;color:var(--text-muted)}',
-        '.stale-list{margin:0;padding-left:16px}',
-        '.stale-list li{margin:3px 0}',
 
         /* Empty State */
         '.empty-card{background:var(--glass-fill);border-radius:var(--radius-lg);',
@@ -532,18 +535,18 @@
     // The fill is the same everywhere: same threshold, same clamp, same class.
     // Only the shell around it differs — a full-width bar in the card, a short
     // one on the button and in a row.
-    function progressFill(usedPct) {
-        var fill = el('div', 'progress-fill ' + getProgressTone(usedPct));
+    function progressFill(usedPct, stale) {
+        var fill = el('div', 'progress-fill ' + (stale ? 'stale' : getProgressTone(usedPct)));
         if (hasPct(usedPct)) {
             fill.style.width = Math.min(100, Math.max(0, usedPct)) + '%';
         }
         return fill;
     }
 
-    function renderProgressBar(usedPct) {
+    function renderProgressBar(usedPct, stale) {
         var wrap = el('div', 'progress-wrap');
         var bar = el('div', 'progress-bar');
-        bar.appendChild(progressFill(usedPct));
+        bar.appendChild(progressFill(usedPct, stale));
         wrap.appendChild(bar);
         return wrap;
     }
@@ -674,8 +677,8 @@
         return { model: rest, role: role };
     }
 
-    function renderConstraint(view) {
-        var card = el('div', 'quota-tile');
+    function renderConstraint(view, stale) {
+        var card = el('div', 'quota-tile' + (stale ? ' stale' : ''));
         var pct = view.used_pct;
         var length = windowLength(view.window_seconds);
         var name = splitWindowName(view.label, view.window_seconds);
@@ -695,7 +698,7 @@
         // is actually spent: red here means "this model is out", which is the
         // one thing a per-model cap says and a plain window does not. A scoped
         // window at 10 %, or one with no ratio at all, is not an exhausted one.
-        var spent = scoped && hasPct(pct) && pct >= 100;
+        var spent = !stale && scoped && hasPct(pct) && pct >= 100;
         if (name.model) {
             var chip = el('span', 'tile-model' + (spent ? ' spent' : ''), name.model);
             chip.title = view.label || '';
@@ -704,12 +707,12 @@
 
         var right = el('span', 'tile-pct');
         right.textContent = hasPct(pct) ? (pct + '% used') : 'Unmetered / No ratio';
-        right.style.color = TONE_COLOR[getProgressTone(pct)];
+        right.style.color = stale ? 'var(--status-stale)' : TONE_COLOR[getProgressTone(pct)];
         header.appendChild(left);
         header.appendChild(right);
         card.appendChild(header);
 
-        card.appendChild(renderProgressBar(view.used_pct));
+        card.appendChild(renderProgressBar(view.used_pct, stale));
 
         var meta = el('div', 'tile-meta');
         var metaLeft = el('div', 'tile-foot');
@@ -739,7 +742,7 @@
         // An empty foot or an empty when-line would still take a row's margin,
         // so neither is appended until it has something in it.
         if (metaLeft.firstChild) meta.appendChild(metaLeft);
-        var when = renderWhen(view);
+        var when = renderWhen(view, stale);
         if (when.firstChild) meta.appendChild(when);
         if (meta.firstChild) card.appendChild(meta);
         // Read straight through, a tile says "week codex 100% used primary 27
@@ -766,7 +769,7 @@
         // an unreadable timestamp printed nothing at all, which is the display
         // law of this widget read backwards.
         if (iso && !formatResetAt(iso)) {
-            wrap.appendChild(el('span', 'ticker bad', 'unreadable date'));
+            wrap.appendChild(el('span', 'ticker' + (bad ? ' bad' : ''), 'unreadable date'));
             return true;
         }
         var stamp = formatResetAt(iso);
@@ -794,7 +797,7 @@
     // A cooldown and a reset are two different facts, and the card used to
     // print both. Showing only the nearer one dropped the other: a window can
     // be cooling until tonight and still not reset until Sunday.
-    function renderWhen(view) {
+    function renderWhen(view, stale) {
         var wrap = el('div', 'tile-when');
         // A cooldown that cannot be parsed is still a cooldown the engine sent:
         // isCooling says no to it, and without this branch the row would drop
@@ -803,7 +806,7 @@
         var cooling = isCooling(view) || unreadableCooldown;
         if (cooling) {
             wrap.appendChild(el('span', 'tile-when-word', 'cooldown'));
-            appendStamp(wrap, view.cooldown_until, true, true);
+            appendStamp(wrap, view.cooldown_until, !stale, true);
         }
         // With a cooldown already spelled out, the reset needs its date, not a
         // second relative reading beside the first. The word goes in only once
@@ -833,36 +836,71 @@
         return p;
     }
 
-    function renderQuota(parent, quota) {
+    function quotaObservedAt(account) {
+        return String(((account || {}).quota || {}).observed_at || '');
+    }
+
+    function retryAction(retryAt) {
+        var at = Date.parse(String(retryAt || ''));
+        if (!isFinite(at) || at <= Date.now()) return '';
+        return 'Retry after ' + Math.max(1, Math.ceil((at - Date.now()) / 60000)) + 'm';
+    }
+
+    function absenceAction(account, absence) {
+        if (!absence) return '';
+        if (absence.action_kind === 'sign_in_if_unverified') {
+            return account && account.verified_live ? '' : 'Sign-in required';
+        }
+        if (absence.action_kind === 'source_missing') return 'No live quota source';
+        if (absence.action_kind === 'retry') return retryAction(absence.retry_at);
+        return '';
+    }
+
+    function renderAbsence(parent, account, absence) {
+        if (!absence) return;
+        var row = el('div', 'quota-unavailable');
+        row.appendChild(icon('warn', 13));
+        row.appendChild(el('span', null, absence.message || 'Quota temporarily unavailable'));
+        var action = absenceAction(account, absence);
+        if (action) row.appendChild(el('span', 'quota-action', action));
+        parent.appendChild(row);
+    }
+
+    function renderQuota(parent, quota, account) {
         if (quota.note) {
             var noteP = withIcon(el('div', 'meta', quota.note), 'info');
             noteP.style.margin = '4px 0 0 2px';
             parent.appendChild(noteP);
         }
 
+        renderAbsence(parent, account, quota.absence);
+
         if (quota.constraints && quota.constraints.length) {
             var constraintsWrap = el('div', 'quotas-container');
             quota.constraints.forEach(function (view) {
-                constraintsWrap.appendChild(renderConstraint(view));
+                constraintsWrap.appendChild(renderConstraint(view, false));
             });
             parent.appendChild(constraintsWrap);
         }
 
         if (quota.stale && quota.stale.length) {
-            var staleDetails = el('details', 'stale-accordion');
-            var summary = withIcon(el('summary', 'stale-summary', 'Stale reading(s) — preserved for history, not used for routing'), 'warn');
-            staleDetails.appendChild(summary);
-            var sContent = el('div', 'stale-content');
-            var slist = el('ul', 'stale-list');
             quota.stale.forEach(function (snap) {
-                var item = el('li');
-                item.textContent = 'Observed ' + (relTime(snap.observed_at) || 'at an unreported time')
-                    + ' · freshness: ' + (snap.freshness || 'unknown');
-                slist.appendChild(item);
+                var staleBlock = el('div', 'quota-last-known');
+                staleBlock.appendChild(withIcon(el(
+                    'div',
+                    'last-known-copy',
+                    'Last known · observed ' + (relTime(snap.observed_at) || 'at an unreported time')
+                        + ' · not used to grant routing'
+                ), 'warn', 12));
+                if (snap.constraints && snap.constraints.length) {
+                    var staleConstraints = el('div', 'quotas-container');
+                    snap.constraints.forEach(function (view) {
+                        staleConstraints.appendChild(renderConstraint(view, true));
+                    });
+                    staleBlock.appendChild(staleConstraints);
+                }
+                parent.appendChild(staleBlock);
             });
-            sContent.appendChild(slist);
-            staleDetails.appendChild(sContent);
-            parent.appendChild(staleDetails);
         }
     }
 
@@ -966,12 +1004,13 @@
         if (account.email && account.email !== account.label) {
             meta.appendChild(el('span', null, account.email));
         }
-        if (account.kind === 'profile') {
-            var checked = relTime(account.last_verified_at);
-            meta.appendChild(el('span', null, checked ? ('Checked ' + checked) : 'No check time reported'));
-        } else {
+        if (account.kind !== 'profile') {
             meta.appendChild(el('span', null, 'Vendor CLI login'));
         }
+        var observed = relTime(quotaObservedAt(account));
+        meta.appendChild(el('span', 'quota-observed', observed
+            ? ('Quota observed ' + observed)
+            : 'No quota observation time reported'));
 
         if (account.verification && account.verification.label) {
             var vClass = verificationFailed(account) ? 'meta-bad' : null;
@@ -998,16 +1037,15 @@
         if (!echoesTiles) head.appendChild(renderQuotaVerdict(quota));
         tile.appendChild(head);
 
-        renderQuota(tile, account.quota || {});
+        renderQuota(tile, account.quota || {}, account);
         parent.appendChild(tile);
     }
 
     // "claude_max" beside "Claude Code" says Claude twice and keeps a wire
     // underscore in the middle of a word. The vendor prefix is dropped only
     // when the family name already carries it, and the whole value stays in
-    // the title. Together with splitDetail below, this is one of exactly two
-    // places where the widget shortens what the engine sent — both keep the
-    // full value one hover away.
+    // the title, so the abbreviated display keeps the full value one hover
+    // away.
     function planWord(plan, group) {
         var text = String(plan || '').replace(/_/g, ' ').replace(/\s+/g, ' ').trim();
         var family = String(familyName(group) || '').trim().split(/\s+/)[0];
@@ -1194,22 +1232,6 @@
         return bar;
     }
 
-    // The engine writes one sentence for a human and one path for itself:
-    // "no ChatGPT login in the profile CODEX_HOME (run the profile login)".
-    // The path is the same for every account of a family, so it never helps
-    // choose between them; the bracket is the only part that says what to do,
-    // and it reads better as a chip than as punctuation. Nothing is reworded:
-    // the path is trimmed for reading, and the whole sentence stays in the
-    // title, one hover away.
-    function splitDetail(detail) {
-        var text = String(detail || '').trim();
-        var bracket = /^([\s\S]*?)\s*\(([^()]*)\)\s*$/.exec(text);
-        var head = bracket ? bracket[1] : text;
-        var action = bracket ? bracket[2] : '';
-        head = head.replace(/\s+in the profile\b[\s\S]*$/i, '');
-        return { head: head, action: action };
-    }
-
     // The second floor of a row is one of three things, in this order, and each
     // has its own condition: nothing falls through to it by default, because a
     // line drawn "because there was room" is a claim nobody checked.
@@ -1263,26 +1285,18 @@
             }
             return spoken.join(', ') + (named.length ? ' · windows: ' + named.join(', ') : '');
         }
-        // The engine's own sentence about what is wrong — the only line in the
-        // whole widget that says what to do about it. It reaches the screen for
-        // an account in trouble that has no live windows to show instead; a
-        // healthy account's detail is just "login verified".
-        if (isTroubled(account) && account.detail) {
-            var said = splitDetail(account.detail);
-            var why = el('div', 'acct-line2', said.head);
-            if (said.action) {
-                why.appendChild(el('span', 'acct-do', said.action));
-            }
-            // Both the profile path and the full sentence stay one hover away:
-            // the line is trimmed for reading, not for hiding.
-            why.title = account.detail;
-            parent.appendChild(why);
-            return said.head + (said.action ? ' — ' + said.action : '');
+        // Raw engine detail may contain local paths or vendor bodies. The row
+        // uses only the independently typed account state; quota actions are
+        // mapped separately from typed quota absences.
+        if (isTroubled(account)) {
+            var reason = troubleReason(account);
+            parent.appendChild(el('div', 'acct-line2', reason));
+            return reason;
         }
         var bits = [];
         if (account.plan) bits.push(account.plan);
-        var checked = relTime(account.last_verified_at);
-        if (checked) bits.push('checked ' + checked);
+        var observed = relTime(quotaObservedAt(account));
+        if (observed) bits.push('quota observed ' + observed);
         if (!bits.length) return '';
         parent.appendChild(el('div', 'acct-line2', bits.join(' · ')));
         return bits.join(', ');
@@ -1396,9 +1410,48 @@
         parent.appendChild(wrap);
     }
 
-    function render(view, staleText) {
+    function quotaIdentity(harness, subjectId) {
+        return String(harness || '') + '\u0000' + String(subjectId || '');
+    }
+
+    function facetProblemNote(facets) {
+        return FACET_ORDER.filter(function (name) {
+            return (facets[name] || 'indeterminate') !== 'ok';
+        }).map(function (name) {
+            return name + ': ' + (facets[name] || 'indeterminate');
+        }).join('; ');
+    }
+
+    // A foreground answer contains quota evidence only. Match it by the
+    // engine-owned subject id, and preserve every non-quota account facet.
+    function mergeQuotaFacet(view, response) {
+        var updates = {};
+        (response.quota_updates || []).forEach(function (update) {
+            if (!update || !update.harness || !update.quota) return;
+            updates[quotaIdentity(update.harness, update.subject_id)] = update.quota;
+        });
+        var merged = Object.assign({}, view || {});
+        var facets = Object.assign({}, merged.facets || {});
+        facets.quota = 'ok';
+        merged.facets = facets;
+        merged.facet_note = facetProblemNote(facets);
+        merged.groups = (merged.groups || []).map(function (group) {
+            var changed = false;
+            var accounts = (group.accounts || []).map(function (account) {
+                var quota = updates[quotaIdentity(group.harness_id, account.subject_id)];
+                if (!quota) return account;
+                changed = true;
+                return Object.assign({}, account, { quota: quota });
+            });
+            return changed ? Object.assign({}, group, { accounts: accounts }) : group;
+        });
+        return merged;
+    }
+
+    function render(view, staleText, actionText) {
         currentView = view;
         staleMessage = staleText;
+        actionMessage = actionText || '';
 
         // The whole tree is rebuilt every 30 seconds on its own. Without this
         // the keyboard focus would drop to the body mid-use — including focus
@@ -1484,7 +1537,7 @@
         refreshBtn.setAttribute('data-focus', 'refresh');
         refreshBtn.addEventListener('click', function () {
             if (inFlight) return;
-            load();
+            refreshQuota();
         });
         controlBar.appendChild(refreshBtn);
         root.appendChild(controlBar);
@@ -1495,15 +1548,17 @@
            every family, not only the one on screen. */
         if (daemonDown) {
             banner('warn', 'Claudexor daemon is ' + daemon.state
-                + (daemon.last_error ? ' (' + daemon.last_error + ')' : '')
                 + '. Readings below are last known, not live.', true);
         }
         if (staleMessage) {
             banner('warn', 'Reading could not be refreshed (' + staleMessage + '). Cached data from '
                 + (relTime(new Date(lastGoodAt).toISOString()) || 'earlier') + ' is shown.', true);
         }
+        if (actionMessage) {
+            banner('warn', actionMessage, true);
+        }
         if (view.transport_error && !staleMessage) {
-            banner('error', 'Endpoint unreachable: ' + view.transport_error + '. No quota claims made.', true);
+            banner('error', 'Endpoint unreachable. No quota claims made.', true);
         }
         if (view.facet_note) {
             banner('info', 'Facets unavailable: ' + view.facet_note + '. Values shown as unread/last known, not zero.', false);
@@ -1569,6 +1624,7 @@
                 return;
             }
             if (view.ok) { lastGood = view; lastGoodAt = Date.now(); }
+            actionMessage = '';
             // An answer that reports itself as not ok normally carries its own
             // reason. If it does not, say so rather than draw it as fresh.
             var unexplained = !view.ok && !view.transport_error && !view.facet_note;
@@ -1576,10 +1632,51 @@
         }).catch(function (err) {
             inFlight = false;
             if (mine !== generation || stopped) return;
-            var why = (err && err.message) ? err.message : 'bridge error';
+            var why = 'bridge error';
             if (lastGood) { render(lastGood, why); } else {
                 render({ facets: {}, groups: [], daemon: {}, transport_error: why }, '');
             }
+        });
+    }
+
+    function refreshQuota() {
+        if (inFlight) return;
+        inFlight = true;
+        actionMessage = '';
+        rerender();
+
+        var mine = ++generation;
+        Promise.resolve().then(function () {
+            return window.fetch(REFRESH_ROUTE, { method: 'POST' });
+        }).then(function (response) {
+            return response.text().then(function (body) {
+                return { ok: response.ok, status: response.status, body: body };
+            });
+        }).then(function (result) {
+            inFlight = false;
+            if (mine !== generation || stopped) return;
+            var response = null;
+            try { response = JSON.parse(result.body); } catch (err) { response = null; }
+            if (!result.ok || !response || typeof response !== 'object' || !response.ok) {
+                var compatible = response && response.compatibility_error;
+                actionMessage = compatible
+                    ? 'Live refresh requires a newer Ouroboros host.'
+                    : 'Live quota refresh failed. Cached quota data remains visible.';
+                rerender();
+                return;
+            }
+            var merged = mergeQuotaFacet(currentView || lastGood || {}, response);
+            currentView = merged;
+            lastGood = merged;
+            lastGoodAt = Date.now();
+            staleMessage = '';
+            actionMessage = '';
+            render(merged, '', '');
+        }).catch(function () {
+            inFlight = false;
+            if (mine !== generation || stopped) return;
+            actionMessage = 'Live quota refresh failed. Cached quota data remains visible.';
+            rerender();
         });
     }
 
@@ -1626,7 +1723,7 @@
     }
 
     function rerender() {
-        render(currentView || { facets: {}, groups: [], daemon: {} }, staleMessage);
+        render(currentView || { facets: {}, groups: [], daemon: {} }, staleMessage, actionMessage);
     }
 
     // What opens inside the row has to be dismissible the way every popover is:
