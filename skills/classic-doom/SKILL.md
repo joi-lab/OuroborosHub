@@ -6,6 +6,7 @@ author: Ouroboros Swarm
 type: extension
 runtime: python3
 entry: plugin.py
+plugin_api: "2.0"
 permissions: [widget, route]
 env_from_settings: []
 when_to_use: When the user wants to play an authentic Classic Doom (1993) 2.5D FPS raycaster game directly in an Ouroboros extension widget with monsters, weapons, sound effects, and heavy metal synth.

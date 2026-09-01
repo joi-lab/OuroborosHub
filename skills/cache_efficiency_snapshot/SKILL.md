@@ -6,6 +6,7 @@ description: Interactive dark-glassmorphic cache observability dashboard with mu
 type: extension
 runtime: python3
 entry: plugin.py
+plugin_api: "2.0"
 timeout_sec: 30
 permissions:
   - route

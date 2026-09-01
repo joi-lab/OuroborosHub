@@ -9,8 +9,8 @@
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "1af711118d5c5f078dc99d4dfcf12d759f52b66e3c71501930c81e179b28b7cf",
-          "size": 5060
+          "sha256": "dfbc144d2355d31bba66ab6264fd15c78d2b82b60f1328bf570a3e67621b904f",
+          "size": 5078
         },
         {
           "path": "lib/client.py",
@@ -74,8 +74,8 @@
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "6f14a56b4739a0eac1282916254118f3a73897d2d400ca93fe6bead7dc2476ab",
-          "size": 3240
+          "sha256": "d6bb32085b74866ccb8ce17e8163a46de52254d8ad880c0224122330fdc56246",
+          "size": 3258
         },
         {
           "path": "listener.py",
@@ -99,8 +99,8 @@
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "9f809124a4b081ff300ac130d508f679801684dd5bf03969766b14fcef525c7d",
-          "size": 32015
+          "sha256": "3ac40cf8c96f0eb720104c8c7869adffda23cd4faabb92f14b2937378d2df176",
+          "size": 32033
         },
         {
           "path": "__init__.py",
@@ -187,8 +187,8 @@
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "88f0c573974f53b84347d3060561de4d8e87822a57467b08242a2024c907ece8",
-          "size": 4197
+          "sha256": "d65adfeefe5700553d717fb003635709ada3c322bffbb70f01f54d807ff0f0c1",
+          "size": 4215
         },
         {
           "path": "plugin.py",
@@ -221,8 +221,8 @@
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "aa1c19f6d08e7ed1ba0aac284f07aa61a681aa909d3693c7a26e6f22cd944ee6",
-          "size": 2203
+          "sha256": "044ee2d34f57bfb139ebe443a35258dd00b9460b28ad747eb7e7afa9fde6f1d8",
+          "size": 2221
         },
         {
           "path": "plugin.py",
@@ -250,8 +250,8 @@
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "ceceef41d7a482960b89da0cbe39b57df1f474b63da0ef19fdb555366979416d",
-          "size": 2590
+          "sha256": "96ccc5085d6f80c15ac87a9c214756a37900dde0ac0126cb206af731cbecfdcd",
+          "size": 2608
         },
         {
           "path": "plugin.py",
@@ -275,8 +275,8 @@
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "e6252c53c2e98a083e0fda6ab8712982ff1ca941254ebb84445ef3ee67436350",
-          "size": 7857
+          "sha256": "093972a06ed1d3d6f8e7a591cda5b0b3a99e6a268ce9eec8a444f5a9c9cda3ee",
+          "size": 7875
         },
         {
           "path": "plugin.py",
@@ -305,8 +305,8 @@
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "350a4e9a15a4135ddab6bfa376e1b3094bca9974e34f8fa5db8c31d7e066846a",
-          "size": 1733
+          "sha256": "027b309de85882eec195df66da676533489a87fe3db86a36efc370fb0a626666",
+          "size": 1751
         },
         {
           "path": "plugin.py",
@@ -328,8 +328,8 @@
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "e72cf549714cefde4484f9e7557d0d91ac53806d5371c18ee867f8dfe45370c9",
-          "size": 3638
+          "sha256": "a5558927c2bb863dd36d4d761d722611e9369e8578e687faf5f48d8b978701a8",
+          "size": 3656
         },
         {
           "path": "plugin.py",
@@ -348,8 +348,8 @@
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "7d49c6bcb6ea021de9716fcf0e04c792e5d7de7521a719a784da04609924943e",
-          "size": 1653
+          "sha256": "e78cc4cfc909da67fb55d39a3d5d7622cc5ae47900467b44a6bde42f121b97f6",
+          "size": 1671
         },
         {
           "path": "plugin.py",
@@ -378,8 +378,8 @@
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "1a14566d66c6badbecc0187a7179a3eae06adf697db9931edae5bd28313768c4",
-          "size": 13592
+          "sha256": "2b426222a5ce27528bcf21f3d2e5a2be8779531d144944c48ea24f22243e800c",
+          "size": 13610
         },
         {
           "path": "core/__init__.py",
@@ -453,8 +453,8 @@
         },
         {
           "path": "SKILL.md",
-          "sha256": "4007f6659ee037546c8e16fa926db0ececc8dc6da0319d20be595feecf8bacf3",
-          "size": 23587
+          "sha256": "f9cb49332f6bd54b3733a021be2512c2176d442900ff9ef9ef48eeb329657cf8",
+          "size": 23605
         },
         {
           "path": "keenable_client.py",
@@ -483,8 +483,8 @@
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "2aa533db76e5b2688f699162bef835afb2b5a6ef55386d5b9d392538e425e9b6",
-          "size": 3716
+          "sha256": "3e2ad8e11b8cdbe84c5426f40465b24de03134e2c9ccb162f74584e3efc3eb60",
+          "size": 3734
         },
         {
           "path": "plugin.py",
@@ -502,8 +502,8 @@
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "fce5d7117e7c9802ff2feddd0d5e40487120a0cfae8e7f2e1ce430f2922b76c1",
-          "size": 4616
+          "sha256": "c39455f61fe0949439d90b04388b3a342dd1bebc0eccc5c006a6b6c5e5843bbc",
+          "size": 4634
         },
         {
           "path": "plugin.py",
@@ -522,8 +522,8 @@
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "5ff32096a17097ec7d7cffa50d88997d14f78cb936957b526d3d6f6c4b892f74",
-          "size": 2125
+          "sha256": "cea1db68e9606a6ccc8225928e091b12c9dd5aff3fa85164852e203058bc82a1",
+          "size": 2143
         },
         {
           "path": "plugin.py",
@@ -541,8 +541,8 @@
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "8a8d76e88d4c452a0ff4541dcf89d519b431c91efa93ad901d8eda43a9de9df3",
-          "size": 7301
+          "sha256": "f452f334dc68e0aac47c0b24245dc5745eb8322ff14d41aa79570da2d2e0c88d",
+          "size": 7319
         },
         {
           "path": "plugin.py",
@@ -560,8 +560,8 @@
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "ec97affdfef2e785d74019433e807fc83d6914d8c2cab7b8130368942f3ee738",
-          "size": 4763
+          "sha256": "4ee8dff9eed0d506e263e9960846f61d24f1fea83383dd0ca66dcb47053cfd6a",
+          "size": 4781
         },
         {
           "path": "core.py",
@@ -606,8 +606,8 @@
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "ec23a0c050415cc76cd3a1a86207434881d22df9c23272ee11fc763f0c878eda",
-          "size": 5928
+          "sha256": "394f3ad418bb617e9c69dc0efc68d2a98d9abc2519b75022357b14cc17fd8455",
+          "size": 5946
         },
         {
           "path": "plugin.py",
@@ -632,8 +632,8 @@
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "24d7b7e609ce6ef5c26f33a572411f69b333a1757b275b36d01ba0a1f841bf8a",
-          "size": 6672
+          "sha256": "d9c9a1a8adcc29895796f64b21209499dad597be652e87e99a4ed5888b6a3e31",
+          "size": 6690
         },
         {
           "path": "lib/telegram_api.py",
@@ -702,8 +702,8 @@
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "bbcda3f2ef5d8cc12ec1acabed16c5eaa43f098f3a5f0833bf1ae44725a7e2b8",
-          "size": 6891
+          "sha256": "6e9edffd202c257f8a60c48a3cfcb3dd88eff3cd7d1ae66f44300716ab201397",
+          "size": 6909
         },
         {
           "path": "plugin.py",
@@ -831,8 +831,8 @@
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "e495d6af20d51ac48a0fccb06c1d57fc5933d6a941bda5430dc13144db5d3b49",
-          "size": 5972
+          "sha256": "3dc58cc277f947c023e8a1cdfeb7cdc33a9addd74aa087c5e44cf7354e0a6157",
+          "size": 5990
         },
         {
           "path": "__init__.py",
@@ -899,8 +899,8 @@
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "199e7406eba3cc9f63f8af6a03f61b4a37e2dd90ceee35205984e370ec24f97c",
-          "size": 3971
+          "sha256": "87dee6ed78f7719503bcb9acce6383d9bb8313d195651af52da6b9da35018e9a",
+          "size": 3989
         },
         {
           "path": "plugin.py",

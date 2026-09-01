@@ -5,6 +5,7 @@ version: 0.1.0
 type: extension
 runtime: python3
 entry: plugin.py
+plugin_api: "2.0"
 permissions: [widget, route]
 env_from_settings: []
 when_to_use: When the user wants to play a cozy farming simulation game in an Ouroboros widget with crops, livestock, crafting, progression, and rich audiovisuals.

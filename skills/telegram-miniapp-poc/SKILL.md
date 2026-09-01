@@ -4,6 +4,7 @@ description: Automatic owner-only Telegram Mini App gateway for the unchanged Ou
 version: 0.3.0
 type: extension
 entry: plugin.py
+plugin_api: "2.0"
 runtime: python3
 os: any
 permissions: [net, widget, route, subprocess, companion_process]

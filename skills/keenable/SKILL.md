@@ -5,6 +5,7 @@ version: 0.3.1
 type: extension
 runtime: python3
 entry: plugin.py
+plugin_api: "2.0"
 permissions: [net, tool, route, widget, read_settings]
 env_from_settings: [KEENABLE_API_KEY]
 when_to_use: The user wants web search or page extraction through Keenable, especially for fresh pages, site-scoped or date-filtered retrieval, or an LLM-extracted summary of one page.

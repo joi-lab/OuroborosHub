@@ -9,6 +9,7 @@ description: >
 type: extension
 version: 2.2.0
 entry: plugin.py
+plugin_api: "2.0"
 runtime: python3
 timeout_sec: 120
 permissions:
