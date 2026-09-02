@@ -1093,6 +1093,81 @@ function view(accounts) {
   assert.match(env.root.textContent, /Live refresh requires a newer Ouroboros host/);
   assert.deepEqual(env.calls.map((call) => call.method), ['GET', 'POST']);
 
+  // Each row-detail choice carries a picture of itself, and the pictures differ
+  // by the one thing the choices differ by: how many lines open under the bars.
+  env = await boot(view([account('p1', quota())]));
+  byFocus(env.root, 'settings').listeners.click[0]({ stopPropagation() {} });
+  // An svg's class lives in the attribute, not in className: in a browser the
+  // property is not a string there, so the widget sets the attribute.
+  const previews = walk(env.root).filter(
+    (node) => String(node.getAttribute('class') || '').includes('dens-pv'));
+  assert.equal(previews.length, 3);
+  const lineCounts = previews.map((pv) => pv.childNodes.filter(
+    (node) => String(node.getAttribute('class') || '').includes('pv-line')).length);
+  assert.deepEqual(lineCounts, [0, 2, 4]);
+
+  // Every family is named with something in front of it — its own mark, or the
+  // ring with its initial. A family the widget has no mark for is the common
+  // case, not the rare one, and it must not start the row with bare text.
+  const twoFamilies = view([account('p1', quota())]);
+  twoFamilies.groups.push({
+    harness_id: 'openrouter', family_label: 'OpenRouter', harness_status: 'ok',
+    harness_enabled: true, provider_family: '', catalog_known: true,
+    accounts: [], accounts_signed_in: 0, accounts_unavailable: false,
+  });
+  env = await boot(twoFamilies);
+  assert.equal(classes(env.root, 'harness-initial').length, 1);
+  byFocus(env.root, 'settings').listeners.click[0]({ stopPropagation() {} });
+  byFocus(env.root, 'settings-tab:models').listeners.click[0]({ stopPropagation() {} });
+  const familyRows = classes(env.root, 'models-family');
+  assert.equal(familyRows.length, 2);
+  familyRows.forEach((row) => {
+    const marked = row.childNodes.some(
+      (node) => String(node.getAttribute('class') || node.className || '').includes('harness-initial')
+        || node.tagName === 'SVG');
+    assert.ok(marked, 'a family row starts with a mark or a ring');
+  });
+
+  // The family mark answers in three colours, not by appearing: green while the
+  // windows have room, amber once one is at its edge, red when nothing runs.
+  const pipTone = (root) => {
+    const pip = classes(root, 'seg-pip')[0];
+    return pip ? String(pip.className).split(/\s+/).find((c) => ['ok', 'warn', 'bad', 'muted'].includes(c)) : null;
+  };
+  env = await boot(view([account('p1', quota())]));
+  assert.equal(pipTone(env.root), 'ok');
+  env = await boot(view([account('p1', quota({
+    label: '90% used',
+    constraints: [{ id: 'weekly', label: 'Weekly', used_pct: 90, resets_at: '',
+      cooldown_until: '', scoped_models: [], window_seconds: 604800 }],
+  }))]));
+  assert.equal(pipTone(env.root), 'warn');
+  env = await boot(view([account('p1', quota({
+    state: 'exhausted', label: 'Limit reached',
+    constraints: [{ id: 'weekly', label: 'Weekly', used_pct: 100, resets_at: '',
+      cooldown_until: '', scoped_models: [], window_seconds: 604800 }],
+  }))]));
+  assert.equal(pipTone(env.root), 'bad');
+  // Every tone the mark can carry has a colour rule of its own; an unpainted
+  // pip would be an invisible answer.
+  ['ok', 'warn', 'bad', 'muted'].forEach((tone) => {
+    assert.ok(widgetSource.includes(`'.pip.${tone}{`), `.pip.${tone} has no colour`);
+  });
+
+  // A redraw arriving under the reader's hand must not throw them back to the
+  // first row: the tree is rebuilt whole, so the list's scroll is carried over.
+  env = await boot(view([account('p1', quota()), account('p2', quota())]));
+  byFocus(env.root, 'account-btn').listeners.click[0]({ stopPropagation() {} });
+  const popBefore = classes(env.root, 'acct-pop')[0];
+  assert.ok(popBefore, 'the account list opens');
+  popBefore.scrollTop = 64;
+  env.interval()();
+  await settle();
+  const popAfter = classes(env.root, 'acct-pop')[0];
+  assert.ok(popAfter, 'the list is still open after a redraw');
+  assert.notEqual(popAfter, popBefore);
+  assert.equal(popAfter.scrollTop, 64);
+
   // Teardown owns the one poll timer and removes the named action listeners.
   env.windowListeners.pagehide[0]();
   assert.equal(env.intervalCleared(), true);
