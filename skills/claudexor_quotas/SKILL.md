@@ -1,7 +1,7 @@
 ---
 name: claudexor_quotas
 description: Quota widget showing fresh and last-known limits for every authorized Claudexor account, with honest foreground refresh and per-facet read state. Writes nothing but the reader's display choices, into its own state directory.
-version: 0.4.0
+version: 0.4.1
 type: extension
 runtime: python3
 entry: plugin.py

@@ -51,10 +51,10 @@
     var root = document.getElementById('root');
     var generation = 0;
     var dataTimer = null;
-    // When the repeating timer was set. Every automatic re-read happens at
-    // timerStartedAt + a whole number of REFRESH_MS, so the bar in the Refresh
-    // button can be lined up with the real schedule instead of guessing at it.
-    var timerStartedAt = 0;
+    // The open account list, held rather than looked up: the tree is thrown away
+    // and rebuilt on every redraw, and this is the one node whose scroll has to
+    // survive that.
+    var accountPop = null;
     var lastGood = null;
     var lastGoodAt = 0;
     var stopped = false;
@@ -104,10 +104,6 @@
            light top edge is what makes the button feel like glass. */
         '--accent-grad:linear-gradient(180deg, #d84152 0%, #b62c3c 100%);',
         '--accent-grad-hover:linear-gradient(180deg, #e04b5c 0%, #c53544 100%);',
-        /* What the burnt-down part of the Refresh button is left standing on:
-           the same accent, dimmed, so the bar reads as one colour losing its
-           light rather than two colours meeting. */
-        '--accent-dim:linear-gradient(180deg, rgba(216, 65, 82, 0.30) 0%, rgba(182, 44, 60, 0.30) 100%);',
         '--accent-edge:rgba(255, 255, 255, 0.14);',
         '--border-prominent:rgba(255, 255, 255, 0.20);',
         '--text-primary:#e2e8f0;',
@@ -206,13 +202,19 @@
            segment a canvas-coloured ring lit up as a pale halo. */
         'border:1px solid rgba(0, 0, 0, 0.55);pointer-events:none}',
         '.pip.ok{background:var(--status-ok)}',
+        '.pip.warn{background:var(--status-warn)}',
         '.pip.bad{background:var(--status-bad)}',
         '.pip.muted{background:rgba(255, 255, 255, 0.30)}',
-        /* Inside the button, clear of the capsule's own outline: at the corner
-           the pip crossed the pill's edge and read as a chip out of it. One
-           rule for both capsules — the marks on the left and the settings
-           button on the right sit in the same kind of pill. */
-        '.seg-pip{top:1px;right:2px}',
+        /* Inside the button and clear of the mark under it, which is a tighter
+           fit than it looks. The buttons are pills 26 high, so their right edge
+           is an arc of radius 13 — there is no corner to put a badge in, and a
+           6px pip could only be either on the mark or off the tile. Four
+           numbers had to agree: a 4px pip at 4px from both edges lands 12.7
+           from the arc's centre, and the marks shrink to 13 and 12 so their
+           right edges stop where the pip begins. One rule for both capsules —
+           the marks on the left and the settings button on the right sit in the
+           same kind of pill. */
+        '.seg-pip{top:4px;right:4px;width:4px;height:4px;border-width:0.5px}',
         '.dot-label{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--text-secondary);white-space:nowrap}',
         '.dot-label.strong{color:var(--text-primary)}',
 
@@ -221,26 +223,11 @@
            control in the row that acts on the world instead of switching what
            is shown. */
         '.action-btn:disabled{opacity:0.42;cursor:not-allowed}',
-        '.icon-spin{display:inline-flex;position:relative;z-index:1}',
+        '.icon-spin{display:inline-flex}',
         '.action-btn.is-refreshing .icon-spin{animation:spin 0.8s linear infinite}',
-        /* The widget re-reads on its own every half minute and never said so.
-           The bar burns down to the next attempt — the attempt, not the fresh
-           data: the daemon can be down and the schedule still holds. */
-        /* The dim fill is what the burning bar stands on. It lives on this
-           rule and not on a shared accent class: that class rode on one button
-           only and had to be out-weighed twice to let the bar show at all. */
-        '.action-refresh{overflow:hidden;border-color:var(--accent-edge);color:#fff;',
-        'background:var(--accent-dim)}',
+        '.action-refresh{border-color:var(--accent-edge);color:#fff;',
+        'background:var(--accent-grad)}',
         '.action-refresh:hover:not(:disabled){background:var(--accent-grad-hover);color:#fff}',
-        '.action-refresh .burn{position:absolute;inset:0;border-radius:inherit;',
-        'background:var(--accent-grad);transform-origin:left center;',
-        'animation:burn linear infinite;pointer-events:none}',
-        '@keyframes burn{from{transform:scaleX(1)}to{transform:scaleX(0)}}',
-        /* Mid-request the arrow already spins; two movements in one button is
-           not what was asked for. */
-        '.action-refresh.is-refreshing{background:var(--accent-grad)}',
-        '@media (prefers-reduced-motion:reduce){.action-refresh .burn{display:none}',
-        '.action-refresh{background:var(--accent-grad)}}',
 
         /* Control Bar (family segment + account selector) */
         /* The row stays put while the account scrolls under it — but it is not
@@ -254,9 +241,13 @@
            honest at all — trouble anywhere shows without opening anything. */
         '.harness-btn.empty{opacity:0.45}',
         '.harness-btn.loading{opacity:0.22;cursor:default}',
+        /* The last resort, for a family whose mark this widget does not carry.
+           It is sized to the marks beside it, not to itself: a ring a pixel
+           wider than its neighbours is the first thing an eye picks out of a
+           row. */
         '.harness-initial{display:inline-flex;align-items:center;justify-content:center;',
-        'width:16px;height:16px;border-radius:50%;border:1px solid currentColor;',
-        'font-size:9.5px;font-weight:700;line-height:1;letter-spacing:0}',
+        'width:13px;height:13px;border-radius:50%;border:1px solid currentColor;',
+        'font-size:8px;font-weight:700;line-height:1;letter-spacing:0}',
         '.harness-btn.active .harness-initial,.harness-btn:hover .harness-initial{',
         'background:var(--glass-fill)}',
 
@@ -553,17 +544,31 @@
            pill and against the container radius it wore before.
            The mark centres on the tile rather than being pinned to the first
            line by a hand-set margin. */
-        '.density-opt{width:100%;font:inherit;font-size:12px;display:flex;align-items:center;gap:10px;',
+        '.density-opt{width:100%;font:inherit;font-size:12px;display:flex;',
+        'flex-direction:column;align-items:stretch;gap:9px;',
         'padding:10px 13px;border:1px solid transparent;border-radius:var(--radius-lg);',
         'background:transparent;color:var(--text-secondary);cursor:pointer;text-align:left;',
         'transition:all var(--transition-fast)}',
+        /* The drawing and the chosen mark hold the top line between them, so
+           the words below start at the tile's own edge instead of being
+           indented past a dot. */
+        '.density-top{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}',
         '.density-opt:hover{background:var(--glass-fill)}',
         '.density-mark{width:11px;height:11px;border-radius:50%;flex:none;',
-        'border:1px solid var(--border-prominent)}',
+        'margin-top:1px;border:1px solid var(--border-prominent)}',
         '.density-mark.on{background:var(--accent-core);border-color:var(--accent-core)}',
         '.density-body{min-width:0}',
         '.density-name{display:block}',
         '.density-note{display:block;font-size:10.5px;color:var(--text-muted);margin-top:1px}',
+        /* The preview never shrinks: it is the one part of the choice that
+           cannot be read at half width. */
+        '.dens-pv{flex:none}',
+        '.dens-pv .pv-dot{fill:var(--text-muted)}',
+        '.dens-pv .pv-name{fill:rgba(255, 255, 255, 0.28)}',
+        '.dens-pv .pv-bar{fill:rgba(255, 255, 255, 0.20)}',
+        '.dens-pv .pv-bar.spent{fill:var(--accent-core)}',
+        '.dens-pv .pv-line{fill:rgba(255, 255, 255, 0.18)}',
+        '.dens-pv .pv-line.strong{fill:rgba(255, 255, 255, 0.32)}',
         /* One family per row: its mark and name on the left, its choice on the
            right, in the same capsule of pills the whole widget uses for a
            choice between a few things. */
@@ -620,22 +625,47 @@
     // Family marks are the vendors' own: a widget that names an account's CLI
     // and then draws a shape of its own invention makes the reader guess. These
     // are filled marks, not stroked outlines, so they take their own renderer.
-    // Cursor publishes no vector mark, so that one is a plain pointer — said
-    // out loud rather than passed off as official.
-    var BRAND_PATHS = {
-        codex: 'M8.086.457a6.105 6.105 0 0 1 3.046-.415c1.333.153 2.521.72 3.564 1.7a.117.117 0 0 0 .107.029c1.408-.346 2.762-.224 4.061.366l.063.03.154.076c1.357.703 2.33 1.77 2.918 3.198a5.62 5.62 0 0 1 .421 2.126 5.655 5.655 0 0 1-.18 1.631.167.167 0 0 0 .04.155 5.982 5.982 0 0 1 1.578 2.891c.385 1.901-.01 3.615-1.183 5.14l-.182.22a6.063 6.063 0 0 1-2.934 1.851.162.162 0 0 0-.108.102c-.255.736-.511 1.364-.987 1.992-1.199 1.582-2.962 2.462-4.948 2.451-1.583-.008-2.986-.587-4.21-1.736a.145.145 0 0 0-.14-.032c-.518.167-1.04.191-1.604.185a5.924 5.924 0 0 1-2.595-.622 6.058 6.058 0 0 1-2.146-1.781c-.203-.269-.404-.522-.551-.821a7.74 7.74 0 0 1-.495-1.283 6.11 6.11 0 0 1-.017-3.064.166.166 0 0 0 .008-.074.115.115 0 0 0-.037-.064 5.958 5.958 0 0 1-1.38-2.202 5.196 5.196 0 0 1-.333-1.589 6.915 6.915 0 0 1 .188-2.132c.45-1.484 1.309-2.648 2.577-3.493.282-.188.55-.334.802-.438.286-.12.573-.22.861-.304a.129.129 0 0 0 .087-.087A6.016 6.016 0 0 1 5.635 2.31C6.315 1.464 7.132.846 8.086.457zm-.804 7.85a.848.848 0 0 0-1.473.842l1.694 2.965-1.688 2.848a.849.849 0 0 0 1.46.864l1.94-3.272a.849.849 0 0 0 .007-.854l-1.94-3.393zm5.446 6.24a.849.849 0 0 0 0 1.695h4.848a.849.849 0 0 0 0-1.696h-4.848z',
-        claude: 'm4.709 15.955 4.72-2.647.08-.23-.08-.128H9.2l-.79-.048-2.698-.073-2.339-.097-2.266-.122-.571-.121L0 11.784l.055-.352.48-.321.686.06 1.52.103 2.278.158 1.652.097 2.449.255h.389l.055-.157-.134-.098-.103-.097-2.358-1.596-2.552-1.688-1.336-.972-.724-.491-.364-.462-.158-1.008.656-.722.881.06.225.061.893.686 1.908 1.476 2.491 1.833.365.304.145-.103.019-.073-.164-.274-1.355-2.446-1.446-2.49-.644-1.032-.17-.619a2.97 2.97 0 0 1-.104-.729L6.283.134 6.696 0l.996.134.42.364.62 1.414 1.002 2.229 1.555 3.03.456.898.243.832.091.255h.158V9.01l.128-1.706.237-2.095.23-2.695.08-.76.376-.91.747-.492.584.28.48.685-.067.444-.286 1.851-.559 2.903-.364 1.942h.212l.243-.242.985-1.306 1.652-2.064.73-.82.85-.904.547-.431h1.033l.76 1.129-.34 1.166-1.064 1.347-.881 1.142-1.264 1.7-.79 1.36.073.11.188-.02 2.856-.606 1.543-.28 1.841-.315.833.388.091.395-.328.807-1.969.486-2.309.462-3.439.813-.042.03.049.061 1.549.146.662.036h1.622l3.02.225.79.522.474.638-.079.485-1.215.62-1.64-.389-3.829-.91-1.312-.329h-.182v.11l1.093 1.068 2.006 1.81 2.509 2.33.127.578-.322.455-.34-.049-2.205-1.657-.851-.747-1.926-1.62h-.128v.17l.444.649 2.345 3.521.122 1.08-.17.353-.608.213-.668-.122-1.374-1.925-1.415-2.167-1.143-1.943-.14.08-.674 7.254-.316.37-.729.28-.607-.461-.322-.747.322-1.476.389-1.924.315-1.53.286-1.9.17-.632-.012-.042-.14.018-1.434 1.967-2.18 2.945-1.726 1.845-.414.164-.717-.37.067-.662.401-.589 2.388-3.036 1.44-1.882.93-1.086-.006-.158h-.055L4.132 18.56l-1.13.146-.487-.456.061-.746.231-.243 1.908-1.312-.006.006z',
-        cursor: 'M5 2.5l14.5 8.2-6.4 1.6-2.9 6.2z'
+    // Vendor marks, monochrome, each in the grid its owner drew it on. Codex,
+    // Claude, Cursor and OpenCode are copied byte-for-byte from the host's own
+    // list of harness marks (web/modules/harness_presentation.js), which in turn
+    // carries them from Claudexor's HarnessLogoData.swift: Claude, Cursor and
+    // OpenCode from Simple Icons, Codex from SVGL. Antigravity is the silhouette
+    // of the SVGL mark, the same source Codex came from.
+    //
+    // The paths are untouched; only the frame around each one is computed, from
+    // the shape itself rather than from the grid it was published on, because
+    // not every mark sits in the middle of the grid it was published on —
+    // Antigravity rides high in its 16-by-15 — and at this size that is most of
+    // a pixel, which is the crookedness the row was pulled up on. The frames
+    // account for the arcs, not only the points the path names: the Codex mark
+    // bulges past its own listed points at the top, and a frame drawn to those
+    // points clipped its crown. Product names and marks remain the property of
+    // their owners.
+    var BRAND_MARKS = {
+        codex: { viewBox: '-1.76 0 259.52 259.52', path: 'M239.184 106.203a64.716 64.716 0 0 0-5.576-53.103C219.452 28.459 191 15.784 163.213 21.74A65.586 65.586 0 0 0 52.096 45.22a64.716 64.716 0 0 0-43.23 31.36c-14.31 24.602-11.061 55.634 8.033 76.74a64.665 64.665 0 0 0 5.525 53.102c14.174 24.65 42.644 37.324 70.446 31.36a64.72 64.72 0 0 0 48.754 21.744c28.481.025 53.714-18.361 62.414-45.481a64.767 64.767 0 0 0 43.229-31.36c14.137-24.558 10.875-55.423-8.083-76.483Zm-97.56 136.338a48.397 48.397 0 0 1-31.105-11.255l1.535-.87 51.67-29.825a8.595 8.595 0 0 0 4.247-7.367v-72.85l21.845 12.636c.218.111.37.32.409.563v60.367c-.056 26.818-21.783 48.545-48.601 48.601Zm-104.466-44.61a48.345 48.345 0 0 1-5.781-32.589l1.534.921 51.722 29.826a8.339 8.339 0 0 0 8.441 0l63.181-36.425v25.221a.87.87 0 0 1-.358.665l-52.335 30.184c-23.257 13.398-52.97 5.431-66.404-17.803ZM23.549 85.38a48.499 48.499 0 0 1 25.58-21.333v61.39a8.288 8.288 0 0 0 4.195 7.316l62.874 36.272-21.845 12.636a.819.819 0 0 1-.767 0L41.353 151.53c-23.211-13.454-31.171-43.144-17.804-66.405v.256Zm179.466 41.695-63.08-36.63L161.73 77.86a.819.819 0 0 1 .768 0l52.233 30.184a48.6 48.6 0 0 1-7.316 87.635v-61.391a8.544 8.544 0 0 0-4.4-7.213Zm21.742-32.69-1.535-.922-51.619-30.081a8.39 8.39 0 0 0-8.492 0L99.98 99.808V74.587a.716.716 0 0 1 .307-.665l52.233-30.133a48.652 48.652 0 0 1 72.236 50.391v.205ZM88.061 139.097l-21.845-12.585a.87.87 0 0 1-.41-.614V65.685a48.652 48.652 0 0 1 79.757-37.346l-1.535.87-51.67 29.825a8.595 8.595 0 0 0-4.246 7.367l-.051 72.697Zm11.868-25.58 28.138-16.217 28.188 16.218v32.434l-28.086 16.218-28.188-16.218-.052-32.434Z' },
+        claude: { viewBox: '0 0 24 24', path: 'm4.7144 15.9555 4.7174-2.6471.079-.2307-.079-.1275h-.2307l-.7893-.0486-2.6956-.0729-2.3375-.0971-2.2646-.1214-.5707-.1215-.5343-.7042.0546-.3522.4797-.3218.686.0608 1.5179.1032 2.2767.1578 1.6514.0972 2.4468.255h.3886l.0546-.1579-.1336-.0971-.1032-.0972L6.973 9.8356l-2.55-1.6879-1.3356-.9714-.7225-.4918-.3643-.4614-.1578-1.0078.6557-.7225.8803.0607.2246.0607.8925.686 1.9064 1.4754 2.4893 1.8336.3643.3035.1457-.1032.0182-.0728-.164-.2733-1.3539-2.4467-1.445-2.4893-.6435-1.032-.17-.6194c-.0607-.255-.1032-.4674-.1032-.7285L6.287.1335 6.6997 0l.9957.1336.419.3642.6192 1.4147 1.0018 2.2282 1.5543 3.0296.4553.8985.2429.8318.091.255h.1579v-.1457l.1275-1.706.2368-2.0947.2307-2.6957.0789-.7589.3764-.9107.7468-.4918.5828.2793.4797.686-.0668.4433-.2853 1.8517-.5586 2.9021-.3643 1.9429h.2125l.2429-.2429.9835-1.3053 1.6514-2.0643.7286-.8196.85-.9046.5464-.4311h1.0321l.759 1.1293-.34 1.1657-1.0625 1.3478-.8804 1.1414-1.2628 1.7-.7893 1.36.0729.1093.1882-.0183 2.8535-.607 1.5421-.2794 1.8396-.3157.8318.3886.091.3946-.3278.8075-1.967.4857-2.3072.4614-3.4364.8136-.0425.0304.0486.0607 1.5482.1457.6618.0364h1.621l3.0175.2247.7892.522.4736.6376-.079.4857-1.2142.6193-1.6393-.3886-3.825-.9107-1.3113-.3279h-.1822v.1093l1.0929 1.0686 2.0035 1.8092 2.5075 2.3314.1275.5768-.3218.4554-.34-.0486-2.2039-1.6575-.85-.7468-1.9246-1.621h-.1275v.17l.4432.6496 2.3436 3.5214.1214 1.0807-.17.3521-.6071.2125-.6679-.1214-1.3721-1.9246L14.38 17.959l-1.1414-1.9428-.1397.079-.674 7.2552-.3156.3703-.7286.2793-.6071-.4614-.3218-.7468.3218-1.4753.3886-1.9246.3157-1.53.2853-1.9004.17-.6314-.0121-.0425-.1397.0182-1.4328 1.9672-2.1796 2.9446-1.7243 1.8456-.4128.164-.7164-.3704.0667-.6618.4008-.5889 2.386-3.0357 1.4389-1.882.929-1.0868-.0062-.1579h-.0546l-6.3385 4.1164-1.1293.1457-.4857-.4554.0608-.7467.2307-.2429 1.9064-1.3114Z' },
+        cursor: { viewBox: '0 0 24 24', path: 'M11.503.131 1.891 5.678a.84.84 0 0 0-.42.726v11.188c0 .3.162.575.42.724l9.609 5.55a1 1 0 0 0 .998 0l9.61-5.55a.84.84 0 0 0 .42-.724V6.404a.84.84 0 0 0-.42-.726L12.497.131a1.01 1.01 0 0 0-.996 0M2.657 6.338h18.55c.263 0 .43.287.297.515L12.23 22.918c-.062.107-.229.064-.229-.06V12.335a.59.59 0 0 0-.295-.51l-9.11-5.257c-.109-.063-.064-.23.061-.23' },
+        opencode: { viewBox: '0 0 24 24', path: 'M22 24H2V0h20zM17 4.8H7v14.4h10z' },
+        agy: { viewBox: '0 -0.61 15.53 15.53', path: 'M14.0777 13.984C14.945 14.6345 16.2458 14.2008 15.0533 13.0084C11.476 9.53949 12.2349 0 7.79033 0C3.34579 0 4.10461 9.53949 0.527295 13.0084C-0.773543 14.3092 0.635692 14.6345 1.50293 13.984C4.86344 11.7076 4.64663 7.69664 7.79033 7.69664C10.934 7.69664 10.7172 11.7076 14.0777 13.984Z' }
     };
 
-    function svgIcon(paths, size, filled) {
-        var ns = 'http://www.w3.org/2000/svg';
-        var svg = document.createElementNS(ns, 'svg');
-        svg.setAttribute('viewBox', '0 0 24 24');
-        svg.setAttribute('width', String(size));
-        svg.setAttribute('height', String(size));
+    var SVG_NS = 'http://www.w3.org/2000/svg';
+
+    // Every drawing here stands beside words that already say the same thing,
+    // so all of them are set up the same way and all of them are kept out of
+    // the reading order.
+    function svgCanvas(viewBox, width, height) {
+        var svg = document.createElementNS(SVG_NS, 'svg');
+        svg.setAttribute('viewBox', viewBox);
+        svg.setAttribute('width', String(width));
+        svg.setAttribute('height', String(height));
         svg.setAttribute('aria-hidden', 'true');
         svg.setAttribute('focusable', 'false');
+        return svg;
+    }
+
+    function svgIcon(paths, size, filled, viewBox) {
+        var svg = svgCanvas(viewBox || '0 0 24 24', size, size);
         if (filled) {
             svg.setAttribute('fill', 'currentColor');
         } else {
@@ -646,7 +676,7 @@
             svg.setAttribute('stroke-linejoin', 'round');
         }
         paths.forEach(function (d) {
-            var path = document.createElementNS(ns, 'path');
+            var path = document.createElementNS(SVG_NS, 'path');
             path.setAttribute('d', d);
             svg.appendChild(path);
         });
@@ -657,13 +687,57 @@
         return svgIcon(ICON_PATHS[name] || [], size || 14, false);
     }
 
-    // Vendor marks are filled shapes on the same 24-grid as the stroked icons:
-    // they take a fill and no stroke, where icon() does the opposite. Two names
-    // rather than one function with a flag — a bare "true" at the call site
-    // says nothing about what it switches.
+    // Vendor marks are filled shapes where icon() strokes: they take a fill and
+    // no stroke. Two names rather than one function with a flag — a bare "true"
+    // at the call site says nothing about what it switches. Each mark also
+    // brings its own grid, so nothing is squeezed into a square it was not
+    // drawn for.
     function brandIcon(name, size) {
-        return svgIcon([BRAND_PATHS[name]], size, true);
+        var mark = BRAND_MARKS[name];
+        return svgIcon([mark.path], size, true, mark.viewBox);
     }
+    // What the three row-detail choices differ in is one thing: how many lines
+    // of explanation open under the bars. The preview draws that and nothing
+    // else — a state dot, a stub of a name, the window bars, and beneath them
+    // as many lines as the choice unfolds. No labels: the words are already
+    // under the choice's name, and no real figures either, since a row's true
+    // length depends on the account, and promising a shape here would be a
+    // claim the settings panel cannot keep.
+    var DENSITY_PREVIEW = {
+        compact: [],
+        normal: [[8, 10, 20, 1], [8, 14.5, 14, 0]],
+        detailed: [[8, 10, 20, 1], [8, 14.5, 24, 1], [8, 19, 16, 0], [8, 23.5, 21, 0]]
+    };
+
+    function densityPreview(key) {
+        var svg = svgCanvas('0 0 44 28', 44, 28);
+        svg.setAttribute('class', 'dens-pv');
+        function box(x, y, w, h, cls, r) {
+            var node = document.createElementNS(SVG_NS, 'rect');
+            node.setAttribute('x', String(x));
+            node.setAttribute('y', String(y));
+            node.setAttribute('width', String(w));
+            node.setAttribute('height', String(h));
+            node.setAttribute('rx', String(r));
+            node.setAttribute('class', cls);
+            svg.appendChild(node);
+        }
+        var dot = document.createElementNS(SVG_NS, 'circle');
+        dot.setAttribute('cx', '4');
+        dot.setAttribute('cy', '5.2');
+        dot.setAttribute('r', '2');
+        dot.setAttribute('class', 'pv-dot');
+        svg.appendChild(dot);
+        box(8, 4, 4, 2.5, 'pv-name', 1);
+        box(14, 4, 9, 2.5, 'pv-bar spent', 1.25);
+        box(25, 4, 7, 2.5, 'pv-bar', 1.25);
+        box(34, 4, 6, 2.5, 'pv-bar', 1.25);
+        (DENSITY_PREVIEW[key] || []).forEach(function (line) {
+            box(line[0], line[1], line[2], 1.8, 'pv-line' + (line[3] ? ' strong' : ''), 0.9);
+        });
+        return svg;
+    }
+
     function withIcon(node, name, size) {
         node.insertBefore(icon(name, size), node.firstChild);
         return node;
@@ -1031,9 +1105,9 @@
         var header = el('div', 'tile-head');
         var left = el('span', 'tile-name');
         if (length) left.appendChild(el('span', 'tile-len', length));
-        // The version is the point of the chip — Ian asked to see "GPT-5.3",
-        // not a family word — so the name is never shortened here; it ellipsises
-        // when the column is narrow and keeps the whole of itself in the title.
+        // The version is the point of the chip — a reader needs "GPT-5.3", not a
+        // family word — so the name is never shortened here; it ellipsises when
+        // the column is narrow and keeps the whole of itself in the title.
         var scoped = !!(view.scoped_models && view.scoped_models.length);
         // Only a model-scoped window carries a red name chip, and only when it
         // is actually spent: red here means "this model is out", which is the
@@ -1431,8 +1505,25 @@
             || group.harness_enabled === false;
     }
 
-    function groupHasAlert(group) {
-        return groupTrouble(group) || (group.accounts || []).some(isAlertAccount);
+    // Grey outranks green on purpose: a reading that was refused is not a good
+    // one, and the mark must not say "go ahead" on its behalf.
+    var TONE_WEIGHT = { bad: 3, warn: 2, muted: 1, ok: 0 };
+
+    // One size for a family's glyph wherever it appears, and the ring with an
+    // initial is cut to it in the stylesheet.
+    var FAMILY_MARK_PX = 13;
+
+    // The family mark answers the same question its accounts do, so it answers
+    // it with the same word: the worst tone anything under it carries. Writing
+    // a second scale here would be a second opinion about one fact.
+    function groupTone(group, facets) {
+        if (groupTrouble(group)) return 'bad';
+        var worst = 'ok';
+        (group.accounts || []).forEach(function (account) {
+            var tone = accountTone(account, facets);
+            if (TONE_WEIGHT[tone] > TONE_WEIGHT[worst]) worst = tone;
+        });
+        return worst;
     }
 
     // What the reader picked by hand outlives the 30-second redraw, but never
@@ -1495,6 +1586,20 @@
         return INITIAL_TINTS[sum % INITIAL_TINTS.length];
     }
 
+    // A family looks the same wherever it is named: its own mark when the widget
+    // carries one, the ring with its initial when it does not. Written once —
+    // the choice used to be spelled out at each call site, and one of them had
+    // forgotten the ring, so a family with no vendor mark, of which a reader
+    // can easily have two, was named with nothing in front of it. The size is
+    // not a parameter: the ring is sized in the stylesheet, and a mark that
+    // could be asked for at any size while the ring could not would be a
+    // promise only half of this function keeps.
+    function familyMark(group) {
+        return BRAND_MARKS[group.harness_id]
+            ? brandIcon(group.harness_id, FAMILY_MARK_PX)
+            : harnessInitial(group);
+    }
+
     function harnessInitial(group) {
         var name = familyName(group) || '?';
         var badge = el('span', 'harness-initial', (name.charAt(0) || '?').toUpperCase());
@@ -1503,21 +1608,21 @@
         return badge;
     }
 
-    function renderHarnessSeg(parent, groups, selected, hasAnswer) {
+    function renderHarnessSeg(parent, groups, selected, hasAnswer, facets) {
         var seg = el('div', 'harness-seg');
         seg.setAttribute('role', 'group');
         seg.setAttribute('aria-label', 'Agent family');
 
         // Before the first answer the row would otherwise hold an empty 8px
         // capsule where the marks belong, and the widget looks broken while it
-        // is merely reading. These are the families this widget knows how to
-        // draw, shown faint and dead: a shape waiting to be filled, not a
-        // claim that the reader has these three.
+        // is merely reading. Three of the marks it carries, shown faint and
+        // dead: a shape waiting to be filled, not a claim that the reader has
+        // these three.
         if (!groups.length && !hasAnswer) {
             ['codex', 'claude', 'cursor'].forEach(function (name) {
                 var ghost = el('button', 'harness-btn loading');
                 ghost.disabled = true;
-                ghost.appendChild(brandIcon(name, 15));
+                ghost.appendChild(brandIcon(name, 13));
                 seg.appendChild(ghost);
             });
             seg.setAttribute('aria-label', 'Reading agent families');
@@ -1528,17 +1633,18 @@
         groups.forEach(function (group) {
             var isOn = selected && group.harness_id === selected.harness_id;
             var count = (group.accounts || []).length;
-            var alert = groupHasAlert(group);
+            var tone = groupTone(group, facets);
             var btn = el('button', 'harness-btn' + (isOn ? ' active' : '') + (count ? '' : ' empty'));
             // A family the widget has no mark for gets its own initial, never
             // somebody else's logo: a wrong mark is a wrong claim about whose
             // account this is.
-            btn.appendChild(BRAND_PATHS[group.harness_id]
-                ? brandIcon(group.harness_id, 15)
-                : harnessInitial(group));
+            btn.appendChild(familyMark(group));
             var name = familyName(group);
+            // Colour is not a word: whatever the pip says in red, amber or green
+            // has to be readable out loud as well — and in the words the rest of
+            // the widget already uses for the same four tones.
             var say = name + ' — ' + (count
-                ? (count + (count === 1 ? ' account' : ' accounts') + (alert ? ', needs attention' : ''))
+                ? (count + (count === 1 ? ' account' : ' accounts') + ', ' + TONE_WORD[tone])
                 : 'no accounts');
             btn.setAttribute('aria-label', say);
             btn.setAttribute('aria-pressed', isOn ? 'true' : 'false');
@@ -1555,7 +1661,11 @@
                 settingsOpen = false;
                 rerender();
             });
-            if (alert) btn.appendChild(el('span', 'pip bad seg-pip'));
+            // The pip answers "can I work here"; with no account under the mark
+            // there is no such question, so nothing is said rather than said grey.
+            if (count || groupTrouble(group)) {
+                btn.appendChild(el('span', 'pip ' + tone + ' seg-pip'));
+            }
             seg.appendChild(btn);
         });
         parent.appendChild(seg);
@@ -1907,6 +2017,7 @@
             // promises arrow-key navigation, and promising a contract that is
             // not implemented is worse for a screen reader than plain buttons.
             var pop = el('div', 'acct-pop');
+            accountPop = pop;
             pop.setAttribute('role', 'group');
             pop.setAttribute('aria-label', 'Accounts in ' + familyName(group));
             accounts.forEach(function (candidate) {
@@ -2000,8 +2111,12 @@
         // sitting on a row of an open list.
         var was = document.activeElement;
         var focusWas = (was && was.getAttribute) ? was.getAttribute('data-focus') : null;
+        // And without this the reader is thrown back to the first row mid-scroll:
+        // the new nodes come in at zero, however far down the old ones were.
+        var scrollWas = readScroll();
 
         root.textContent = '';
+        accountPop = null;
         // The settings panel is a place, not a drawer: while it is open the
         // page becomes a column so the panel can stand on the frame's floor.
         root.classList.toggle('settings-open', settingsOpen);
@@ -2027,7 +2142,7 @@
 
         var controlBar = el('div', 'control-bar');
 
-        renderHarnessSeg(controlBar, groups, selection.group, hasAnswer);
+        renderHarnessSeg(controlBar, groups, selection.group, hasAnswer, facets);
         renderAccountSelect(controlBar, selection.group, selection.account, hasAnswer, facets);
 
         // Settings and Refresh ride in one capsule, the way the family marks do
@@ -2038,7 +2153,7 @@
         actionSeg.setAttribute('aria-label', 'Settings and refresh');
         var settingsBtn = el('button', 'action-btn action-settings' + (settingsOpen ? ' is-open' : '')
             + (statusProblem ? ' has-problem' : ''));
-        settingsBtn.appendChild(icon('density', 13));
+        settingsBtn.appendChild(icon('density', 12));
         settingsBtn.setAttribute('aria-expanded', settingsOpen ? 'true' : 'false');
         // One button, two facts: what it opens, and whether something in there
         // needs looking at. The pip below carries the second one visually.
@@ -2059,24 +2174,10 @@
         actionSeg.appendChild(settingsBtn);
 
         var refreshBtn = el('button', 'action-btn action-refresh' + (inFlight ? ' is-refreshing' : ''));
-        // The tree is rebuilt on every tick and every click, so an animation
-        // started here would restart with it. A negative delay of however much
-        // of the round has already passed puts the bar back where it belongs —
-        // lined up with the timer, not merely near it.
-        if (!inFlight && timerStartedAt) {
-            var burn = el('span', 'burn');
-            burn.style.animationDuration = REFRESH_MS + 'ms';
-            // Clocks get set back, and a negative age would build "--15000ms",
-            // which the browser drops on the floor: the bar would then restart
-            // full on every redraw and never show the real schedule again.
-            var age = Math.max(0, Date.now() - timerStartedAt);
-            burn.style.animationDelay = '-' + (age % REFRESH_MS) + 'ms';
-            refreshBtn.appendChild(burn);
-        }
         refreshBtn.appendChild(withIcon(el('span', 'icon-spin'), 'refresh', 13));
         refreshBtn.disabled = inFlight;
-        // The bar is a schedule, not a promise: it says when the next attempt
-        // is, and an attempt against a daemon that is down brings nothing.
+        // The schedule is a promise about attempts, not about data: an attempt
+        // against a daemon that is down brings nothing.
         refreshBtn.setAttribute('aria-label', inFlight ? 'Refreshing…'
             : 'Refresh — the widget re-reads on its own every '
                 + Math.round(REFRESH_MS / 1000) + ' seconds');
@@ -2157,7 +2258,12 @@
                 DENSITY_OPTIONS.forEach(function (opt) {
                     var on = opt.key === density;
                     var b = el('button', 'density-opt' + (on ? ' active' : ''));
-                    b.appendChild(el('span', 'density-mark' + (on ? ' on' : '')));
+                    // Picture and the chosen mark share the top line, the words
+                    // have the rest of the tile to themselves.
+                    var top = el('span', 'density-top');
+                    top.appendChild(densityPreview(opt.key));
+                    top.appendChild(el('span', 'density-mark' + (on ? ' on' : '')));
+                    b.appendChild(top);
                     var inner = el('span', 'density-body');
                     inner.appendChild(el('span', 'density-name', opt.name));
                     inner.appendChild(el('span', 'density-note', opt.note));
@@ -2184,7 +2290,7 @@
                     var chosen = modelView(group.harness_id);
                     var row = el('div', 'models-row');
                     var head = el('span', 'models-family');
-                    if (BRAND_PATHS[group.harness_id]) head.appendChild(brandIcon(group.harness_id, 14));
+                    head.appendChild(familyMark(group));
                     head.appendChild(el('span', null, familyName(group)));
                     row.appendChild(head);
 
@@ -2286,6 +2392,7 @@
         } else if (focusWas) {
             restoreFocus(focusWas);
         }
+        restoreScroll(scrollWas);
     }
 
     function load() {
@@ -2414,6 +2521,40 @@
         if (key.indexOf('opt:') === 0) restoreFocus('account-btn');
     }
 
+    // Two things scroll: the page itself and the open account list. Which node
+    // carries the page scroll depends on the browser — the body here, the
+    // document element elsewhere — so both are asked, and writing to the one
+    // that does not scroll costs nothing.
+    function pageNodes() {
+        var out = [];
+        if (document.body) out.push(document.body);
+        var el = document.scrollingElement || document.documentElement;
+        if (el && el !== document.body) out.push(el);
+        return out;
+    }
+
+    function readScroll() {
+        var page = 0;
+        pageNodes().forEach(function (node) {
+            if (typeof node.scrollTop === 'number' && node.scrollTop > page) page = node.scrollTop;
+        });
+        return {
+            page: page,
+            pop: accountPop ? (accountPop.scrollTop || 0) : 0
+        };
+    }
+
+    // A shorter list after a refresh clamps the value on its own, which is the
+    // right answer: the row that was under the cursor is simply not there any
+    // more, and the list stops at its own end rather than pretending otherwise.
+    function restoreScroll(saved) {
+        if (!saved) return;
+        if (saved.page) {
+            pageNodes().forEach(function (node) { node.scrollTop = saved.page; });
+        }
+        if (saved.pop && accountPop) accountPop.scrollTop = saved.pop;
+    }
+
     function rerender() {
         render(currentView || { facets: {}, groups: [], daemon: {} }, staleMessage, actionMessage);
     }
@@ -2478,7 +2619,6 @@
         document.addEventListener('click', onDocumentClick);
         document.addEventListener('keydown', onDocumentKey);
         if (dataTimer === null) {
-            timerStartedAt = Date.now();
             dataTimer = window.setInterval(function () {
                 if (document.visibilityState === 'visible') load();
             }, REFRESH_MS);
