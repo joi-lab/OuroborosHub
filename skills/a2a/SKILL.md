@@ -1,7 +1,7 @@
 ---
 name: a2a
 description: Agent-to-Agent protocol bridge for Ouroboros. Provides a local A2A-compatible server plus client tools for discovering and messaging other A2A agents.
-version: 1.3.0
+version: 1.4.0
 type: extension
 entry: plugin.py
 plugin_api: "2.0"
@@ -92,9 +92,58 @@ default 30s — the old hardcoded 5s was a spurious-timeout source on busy
 hosts). The host response wait (`A2A_RESPONSE_TIMEOUT_SEC`, default 600s)
 may now be raised to 1740s, and when it expires the bridge does NOT fail:
 the host task keeps running, and the bridge switches to polling the
-durable chat log for the final answer until `A2A_STREAM_DEADLINE_SEC`
+host's operation view for the final answer until `A2A_STREAM_DEADLINE_SEC`
 (default 3600s) elapses. Set `A2A_PROGRESS_ENRICH=0` to disable progress
 forwarding (heartbeats only); `A2A_GATEWAY_URL` (loopback-only, default
 `http://127.0.0.1:8765`) points the read-only log polling at a non-default
-gateway port. The no-SDK fallback route (`message/send` only) shares the
+gateway port. The no-SDK fallback route shares the
 same resilient dispatch pipeline without the event stream.
+
+## Operation correlation and cancellation
+
+Every inbound message is delivered to the host with a stable identity
+(`client_message_id` is a bounded digest of the complete task/message-id pair), so the host answers with
+the correlated `operation_ref` and a repeated delivery of the same message
+(an SDK retry or a reconnect) REJOINS the accepted work instead of starting
+a second host turn. The binding (`chat_id`, `client_message_id`,
+`operation_ref`) is stored in the skill's existing durable task record
+(`tasks/<id>.json`, shared by the SDK executor and the no-SDK fallback), so
+`tasks/get` and `tasks/cancel` can find the host work after a wait expired
+or the daemon restarted. After a wait expiry the bridge reads
+`GET /chat/operations/{operation_ref}` (a late answer, a promoted task's
+terminal status, or `lost` after a host restart). Unavailable exact-operation
+state remains unknown; a named message never takes another chat answer.
+Confirmed `lost` becomes a failed Task with the host-restart explanation,
+including reconnect reads and replay of the original message.
+Legacy unnamed single-use dispatch retains its chat-log fallback.
+
+Named recovery and cancellation require a Host with
+`GET /chat/operations/{operation_ref}` and `POST /chat/cancel`. On an older
+Host, fast answers still work, an expired named wait stays `working` with an
+unknown outcome, and cancellation reports a refusal.
+
+The existing task record is replaced atomically and its current-message binding
+fences late status writes. The SDK uses that same durable record. A confirmed
+terminal replay of an already accepted SDK message returns the saved/reconciled
+Task directly after checking its original content and context. A NEW message
+on a terminal SDK taskId keeps the SDK's standard error; continue with a new
+task in the desired context. The fallback's existing same-task conversation
+path accepts a distinct message and resets only its current operation state.
+An accepted nonterminal replay creates no new SDK producer: nonblocking requests
+return the current Task, blocking/streaming requests attach through the existing
+SDK task subscription. After a daemon restart, the existing host-operation
+wait/status path reconciles the answer; wait expiry stays nonterminal/unknown.
+
+SDK `ListTasks` returns locally stored task snapshots for the current SDK
+owner, with the SDK's filtering and pagination. `tasks/get` / `GetTask`
+reconciles the requested task with the Host. A corrupt task record produces
+an explicit state error; listing does not silently omit it.
+
+`tasks/cancel` (SDK executor `cancel` and the fallback JSON-RPC method)
+calls the host's `POST /chat/cancel` for the bound operation and reports
+only what the host proved: `cancelled` becomes the A2A `canceled` state;
+`already_terminal`, `unresolved` (the host work is still live) and
+`cancel_unsupported` (nothing addressable started yet, or the message was
+steered into a pre-existing task) surface as the A2A `TaskNotCancelableError`
+carrying the host's reason. The bridge never emits `canceled` merely because
+the caller stopped waiting.

@@ -250,3 +250,115 @@ def _run_all():
 
 if __name__ == "__main__":
     _run_all()
+
+
+# --- v1.4.0: operation correlation (#667) -------------------------------------
+
+
+def test_inject_sends_the_message_identity_and_the_expiry_carries_the_ref():
+    mod = _load_daemon()
+    seen = {}
+
+    def fake_post(url, **kwargs):
+        seen["json"] = kwargs.get("json")
+        return _FakeResponse(504, {"ok": False, "error": "timed out waiting for response",
+                                   "operation_ref": "-7:a2a:t1:m1"})
+
+    mod.httpx.post = fake_post
+    try:
+        mod._inject_sync(-7, "hello", "a2a:t1:m1")
+    except mod._HostWaitExpired as exc:
+        assert exc.operation_ref == "-7:a2a:t1:m1"
+    else:
+        raise AssertionError("expected _HostWaitExpired")
+    assert seen["json"]["client_message_id"] == "a2a:t1:m1"
+
+
+def test_inject_without_an_identity_keeps_the_historical_payload():
+    mod = _load_daemon()
+    seen = {}
+
+    def fake_post(url, **kwargs):
+        seen["json"] = kwargs.get("json")
+        return _FakeResponse(200, {"ok": True, "response": "fine"})
+
+    mod.httpx.post = fake_post
+    assert mod._inject_sync(-7, "hello") == "fine"
+    assert "client_message_id" not in seen["json"]
+
+
+def test_socket_timeout_derives_the_ref_from_the_identity_it_sent():
+    mod = _load_daemon()
+    _install_http(mod, post_script=[("chat/inject", mod.httpx.ReadTimeout("timed out"))])
+    try:
+        mod._inject_sync(-7, "hello", "a2a:t1:m1")
+    except mod._HostWaitExpired as exc:
+        assert exc.operation_ref == "-7:a2a:t1:m1"
+    else:
+        raise AssertionError("expected _HostWaitExpired")
+
+
+def test_wait_expiry_recovers_the_late_answer_through_the_operation_view():
+    mod = _load_daemon()
+    running = _FakeResponse(200, {"ok": True, "status": "running", "phase": "direct_chat", "operation_ref": "-7:a2a:t1:m1"})
+    done = _FakeResponse(200, {"ok": True, "status": "completed", "text": "late but real answer", "operation_ref": "-7:a2a:t1:m1"})
+    calls = _install_http(
+        mod,
+        post_script=[("chat/inject", _FakeResponse(504, {"ok": False, "operation_ref": "-7:a2a:t1:m1"}))],
+        get_script=[("chat/operations/-7:a2a:t1:m1", running), ("chat/operations/-7:a2a:t1:m1", done)],
+    )
+    out = mod._dispatch_after_allocate_sync(-7, "hello", time.monotonic() + 60, "a2a:t1:m1")
+    assert out == "late but real answer"
+    assert not any("api/logs/chat" in url for url in calls["get"]), "the host view answers; no chat-log scan"
+
+
+def test_named_wait_expiry_does_not_take_a_chat_answer_when_the_host_has_no_view():
+    """Unknown exact-operation state cannot be replaced with an old chat answer."""
+    from types import SimpleNamespace
+
+    mod = _load_daemon()
+    ticks = iter([0, 2])
+    mod.time = SimpleNamespace(monotonic=lambda: next(ticks), sleep=lambda _: None)
+    ready = _FakeResponse(200, {"entries": [
+        {"chat_id": -7, "direction": "out", "text": "late answer", "ts": "t3"},
+    ]})
+    calls = _install_http(
+        mod,
+        post_script=[("chat/inject", _FakeResponse(504, {"ok": False}))],
+        get_script=[("chat/operations", _FakeResponse(404, {"ok": False, "error": "operation not found"})),
+                    ("api/logs/chat", ready)],
+    )
+    try:
+        mod._wait_final_after_expiry_sync(-7, 1, "-7:a2a:t1:m1")
+    except RuntimeError as exc:
+        assert "may still be running" in str(exc)
+    else:
+        raise AssertionError("unknown operation was reported completed")
+    assert not any("api/logs/chat" in url for url in calls["get"])
+
+
+def test_wait_expiry_surfaces_a_host_cancellation_and_a_lost_host():
+    mod = _load_daemon()
+    _install_http(
+        mod,
+        post_script=[("chat/inject", _FakeResponse(504, {"ok": False, "operation_ref": "-7:a2a:t1:m1"}))],
+        get_script=[("chat/operations", _FakeResponse(200, {"ok": True, "status": "cancelled", "operation_ref": "-7:a2a:t1:m1"}))],
+    )
+    try:
+        mod._dispatch_after_allocate_sync(-7, "hello", time.monotonic() + 60, "a2a:t1:m1")
+    except mod._HostWorkCancelled:
+        pass
+    else:
+        raise AssertionError("expected _HostWorkCancelled")
+    _install_http(
+        mod,
+        post_script=[("chat/inject", _FakeResponse(504, {"ok": False, "operation_ref": "-7:a2a:t1:m1"}))],
+        get_script=[("chat/operations", _FakeResponse(200, {"ok": True, "status": "lost", "operation_ref": "-7:a2a:t1:m1",
+                                                           "reason": "host_restarted_before_answer"}))],
+    )
+    try:
+        mod._dispatch_after_allocate_sync(-7, "hello", time.monotonic() + 60, "a2a:t1:m1")
+    except RuntimeError as exc:
+        assert "restarted" in str(exc)
+    else:
+        raise AssertionError("expected RuntimeError")
