@@ -42,20 +42,30 @@ try:
         Artifact,
         Part,
         Role,
-        Task,
         TaskState,
-        TaskStatus,
     )
+    from a2a.utils.errors import TaskNotCancelableError
     _A2A_SDK_AVAILABLE = True
 except Exception:
     _A2A_SDK_AVAILABLE = False
+
+    class TaskNotCancelableError(RuntimeError):  # type: ignore[no-redef]
+        """The SDK's refusal shape (same constructor), for the no-SDK fallback."""
+
+        def __init__(self, message: "str | None" = None, data: "dict | None" = None) -> None:
+            self.message = message or "Task cannot be canceled"
+            self.data = data
+            super().__init__(self.message)
 
 logger = logging.getLogger("a2a_daemon")
 
 STATE_DIR = pathlib.Path(os.environ.get("OUROBOROS_SKILL_STATE_DIR") or ".")
 
 # Card version — kept in step with the skill version (SKILL.md / catalog entry).
-A2A_CARD_VERSION = "1.3.0"
+A2A_CARD_VERSION = "1.4.0"
+
+# JSON-RPC error code the A2A spec assigns to TaskNotCancelableError.
+_JSONRPC_TASK_NOT_CANCELABLE = -32002
 
 
 def _is_loopback(host: str) -> bool:
@@ -352,8 +362,14 @@ def _task_path(task_id: str) -> pathlib.Path:
 
 
 def _save_task(task: Dict[str, Any]) -> None:
-    # The untouched original id stays inside the record; the filename is a digest.
-    _task_path(str(task["id"])).write_text(json.dumps(task, ensure_ascii=False, indent=2), encoding="utf-8")
+    """Atomically replace the existing task record; callers serialize merges."""
+    path = _task_path(str(task["id"]))
+    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        temporary.write_text(json.dumps(task, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def _load_task(task_id: str) -> Dict[str, Any] | None:
@@ -369,7 +385,361 @@ def _load_task(task_id: str) -> Dict[str, Any] | None:
         raise _TaskStateCorrupt(f"task state for {task_id!r} is unreadable: {exc}") from exc
     if not isinstance(record, dict):
         raise _TaskStateCorrupt(f"task state for {task_id!r} is not a JSON object")
+    if record.get("id") != task_id:
+        raise _TaskStateCorrupt(f"task state for {task_id!r} has a different identity")
     return record
+
+
+_TASK_RECORD_LOCK = threading.RLock()
+
+
+# --- host operation binding (#667) ----------------------------------------
+#
+# One inbound A2A message maps to ONE host operation. The message identity the
+# host is told (``client_message_id``) is deterministic in the A2A task and
+# message ids, so an SDK retry or a reconnect re-delivering the same message
+# REJOINS the accepted host work instead of starting a second turn; the host's
+# ``operation_ref`` is that same identity behind the allocated chat id. The
+# binding lives in the skill's existing durable task record (shared by the SDK
+# executor and the no-SDK fallback), which is what ``tasks/cancel`` reads.
+
+
+def _client_message_id(task_id: str, message_id: str) -> str:
+    identity = json.dumps([task_id, message_id or "message"], ensure_ascii=False, separators=(",", ":"))
+    return "a2a:" + hashlib.sha256(identity.encode("utf-8")).hexdigest()
+
+
+def _operation_ref(chat_id: int, client_message_id: str) -> str:
+    """The host's documented ref spelling: the identity the caller supplied."""
+    return f"{int(chat_id)}:{client_message_id}" if client_message_id else ""
+
+
+def _update_task_record(
+    task_id: str,
+    context_id: str = "",
+    *,
+    binding: "Dict[str, Any] | None" = None,
+    state: str = "",
+    message: str = "",
+    artifacts: "List[Dict[str, Any]] | None" = None,
+    expected_message_id: str = "",
+) -> Dict[str, Any]:
+    """Merge through one current-message fence for both disk and returned views."""
+    with _TASK_RECORD_LOCK:
+        record = _load_task(task_id) or {}
+        bound = dict(record.get("ouroboros") or {})
+        current = str(bound.get("client_message_id") or "")
+        if expected_message_id and current and expected_message_id != current:
+            return record  # Neither persistence nor its returned projection may mix messages.
+        record.setdefault("id", task_id)
+        record.setdefault("contextId", context_id or task_id)
+        record.setdefault("status", {"state": "working"})
+        if binding:
+            incoming = str(binding.get("client_message_id") or "")
+            seen = list(bound.get("message_ids") or ([current] if current else []))
+            if incoming not in seen:
+                seen.append(incoming)
+                bound.update(binding)
+                bound["message_ids"] = seen
+                record["status"] = {"state": "working"}
+                record.pop("artifacts", None)
+            record["ouroboros"] = bound
+        if state:
+            record["status"] = {"state": state}
+            if message:
+                record["status"]["message"] = {"parts": [{"kind": "text", "text": message}]}
+        if artifacts is not None:
+            record["artifacts"] = artifacts
+        _save_task(record)
+        return record
+
+
+def _bound_operation(task_id: str) -> Dict[str, Any]:
+    record = _load_task(task_id) or {}
+    bound = record.get("ouroboros")
+    return dict(bound) if isinstance(bound, dict) else {}
+
+
+class _HostWorkCancelled(RuntimeError):
+    """The host reports the bound work as cancelled (a ``tasks/cancel`` landed)."""
+
+
+class _HostMessageConflict(ValueError):
+    """A reused message id does not describe the host's accepted source."""
+
+
+class _HostCancelRefused(RuntimeError):
+    """The host answered anything but ``cancelled``: the honest reason rides along."""
+
+    def __init__(self, outcome: str, reason: str) -> None:
+        super().__init__(f"host cancel outcome {outcome!r}: {reason}")
+        self.outcome = outcome
+        self.reason = reason
+
+
+def _cancel_host_operation_sync(task_id: str) -> Dict[str, Any]:
+    """Ask the host to cancel the work bound to this A2A task; return the host's
+    typed outcome only when it is ``cancelled``, else raise ``_HostCancelRefused``.
+
+    The host's own cancellation owner decides (durable intent, custody): a
+    message with no addressable work yet, a message steered into a
+    pre-existing task, work that already finished, or custody that did not
+    settle are all refusals — never reported as a cancellation."""
+    bound = _bound_operation(task_id)
+    ref = str(bound.get("operation_ref") or "")
+    if not ref:
+        raise _HostCancelRefused("unbound", "no host operation is bound to this task")
+    try:
+        response = httpx.post(
+            f"{HOST_SERVICE_URL}/chat/cancel",
+            headers=_host_headers(),
+            json={"operation_ref": ref, "reason": f"A2A tasks/cancel for {task_id}"},
+            timeout=A2A_ALLOCATE_TIMEOUT_SEC,
+        )
+    except Exception as exc:
+        raise _HostCancelRefused("unreachable", f"host cancel call failed: {exc}") from exc
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+    outcome = str(payload.get("outcome") or "")
+    reason = str(payload.get("reason") or payload.get("error") or payload.get("status") or response.status_code)
+    if response.status_code == 200 and outcome == "cancelled":
+        payload["client_message_id"] = str(bound.get("client_message_id") or "")
+        return payload
+    raise _HostCancelRefused(outcome or f"http_{response.status_code}", reason)
+
+
+def _read_operation_sync(operation_ref: str) -> "Dict[str, Any] | None":
+    """The host's view of the bound operation, or None when it has none to give
+    (an older host without the route, an operation it does not know, a
+    transport failure). Absence never authorizes a chat-only answer."""
+    if not operation_ref:
+        return None
+    try:
+        response = httpx.get(
+            f"{HOST_SERVICE_URL}/chat/operations/{operation_ref}",
+            headers=_host_headers(),
+            timeout=_HOST_FETCH_TIMEOUT_SEC,
+        )
+        payload = response.json() if response.status_code == 200 else None
+    except Exception:
+        return None
+    return payload if (isinstance(payload, dict) and payload.get("ok")
+                       and payload.get("operation_ref") == operation_ref) else None
+
+
+def _refresh_task_record(task_id: str) -> "Dict[str, Any] | None":
+    """Reconcile a saved task with its exact host operation after reconnect."""
+    record = _load_task(task_id)
+    if not record:
+        return None
+    bound = record.get("ouroboros") or {}
+    view = _read_operation_sync(str(bound.get("operation_ref") or ""))
+    states = {"completed": "completed", "cancelled": "canceled", "failed": "failed", "rejected_duplicate": "rejected"}
+    state = states.get(str((view or {}).get("status") or ""))
+    if state:
+        text = str(view.get("text") or "")
+        return _update_task_record(task_id, state=state, message=text if state != "completed" else "",
+                                   artifacts=[{"parts": [{"kind": "text", "text": text}]}] if state == "completed" else None,
+                                   expected_message_id=str(bound.get("client_message_id") or ""))
+    return record
+
+
+def _sdk_task_store():
+    """Adapt the SDK to the SAME durable Hub task record used by the fallback."""
+    from a2a.server.owner_resolver import resolve_user_scope
+    from a2a.server.tasks.task_store import TaskStore
+    from a2a.types import Task
+    from google.protobuf.json_format import MessageToDict, ParseDict
+
+    states = {"submitted": TaskState.TASK_STATE_SUBMITTED, "working": TaskState.TASK_STATE_WORKING,
+              "completed": TaskState.TASK_STATE_COMPLETED, "failed": TaskState.TASK_STATE_FAILED,
+              "canceled": TaskState.TASK_STATE_CANCELED, "rejected": TaskState.TASK_STATE_REJECTED}
+
+    class DurableTaskStore(TaskStore):
+        async def save(self, task, context):
+            with _TASK_RECORD_LOCK:
+                record = _load_task(task.id) or {"id": task.id, "contextId": task.context_id}
+                owner = resolve_user_scope(context)
+                if record.get("sdk_owner", owner) != owner:
+                    raise _TaskStateCorrupt("SDK task belongs to another caller")
+                current = str((record.get("ouroboros") or {}).get("client_message_id") or "")
+                inbound = next((m for m in reversed(task.history) if m.role == Role.ROLE_USER), None)
+                if current and inbound and _client_message_id(task.id, inbound.message_id) != current:
+                    return
+                record["sdk_owner"] = owner
+                record["sdk_task"] = MessageToDict(task)
+                state = next((key for key, value in states.items() if value == task.status.state), "working")
+                if str((record.get("status") or {}).get("state") or "") not in _TERMINAL_RECORD_STATES:
+                    record["status"] = {"state": state}
+                _save_task(record)
+
+        async def get(self, task_id, context):
+            record = await asyncio.to_thread(_refresh_task_record, task_id)
+            if not record or record.get("sdk_owner", resolve_user_scope(context)) != resolve_user_scope(context):
+                return None
+            task = ParseDict(record["sdk_task"], Task()) if record.get("sdk_task") else Task(id=task_id, context_id=record.get("contextId") or task_id)
+            task.status.state = states.get(str((record.get("status") or {}).get("state") or ""), TaskState.TASK_STATE_WORKING)
+            current = str((record.get("ouroboros") or {}).get("client_message_id") or "")
+            source = next((m for m in reversed(task.history) if m.role == Role.ROLE_USER), None)
+            if current and source and _client_message_id(task_id, source.message_id) != current:
+                task.ClearField("artifacts")
+            if not task.artifacts and record.get("artifacts"):
+                for item in record["artifacts"]:
+                    task.artifacts.append(Artifact(artifact_id=uuid.uuid4().hex, parts=[Part(text=str(p.get("text") or "")) for p in item.get("parts", [])]))
+            return task
+
+        async def list(self, params, context):
+            # Reuse the SDK's filtering/pagination over a request-local view;
+            # this is not a second persistent task owner.
+            view = InMemoryTaskStore()
+            for path in _tasks_dir().glob("*.json"):
+                record = json.loads(path.read_text(encoding="utf-8"))
+                task = await self.get(str(record["id"]), context)
+                if task is not None:
+                    await view.save(task, context)
+            return await view.list(params, context)
+
+        async def delete(self, task_id, context):
+            with _TASK_RECORD_LOCK:
+                record = _load_task(task_id)
+                if record and record.get("sdk_owner", resolve_user_scope(context)) == resolve_user_scope(context):
+                    _task_path(task_id).unlink(missing_ok=True)
+
+    return DurableTaskStore()
+
+
+def _sdk_request_handler(card):
+    from google.protobuf.json_format import MessageToDict
+    from a2a.server.request_handlers.request_handler import validate, validate_request_params
+    from a2a.utils.task import apply_history_length, validate_history_length
+    from a2a.utils.errors import InvalidParamsError, TaskNotFoundError, UnsupportedOperationError
+    from a2a.types import Message, SubscribeToTaskRequest, Task, TaskStatus
+    terminal_states = {TaskState.TASK_STATE_COMPLETED, TaskState.TASK_STATE_CANCELED,
+                       TaskState.TASK_STATE_FAILED, TaskState.TASK_STATE_REJECTED}
+
+    class OperationRequestHandler(LegacyRequestHandler):
+        async def _run_event_stream(self, request, queue):
+            # A superseded producer does not own the current task's queue.
+            await self.agent_executor.execute(request, queue)
+            if self._running_agents.get(request.task_id) is asyncio.current_task():
+                await queue.close()
+
+        async def _cleanup_producer(self, producer_task, task_id):
+            try:
+                await producer_task
+            except asyncio.CancelledError:
+                logger.debug("Producer task %s was cancelled during cleanup", task_id)
+            # The SDK closes by task id; keep its existing owner lock across
+            # identity validation, queue close and retirement.
+            async with self._running_agents_lock:
+                if self._running_agents.get(task_id) is not producer_task:
+                    return
+                await self._queue_manager.close(task_id)
+                self._running_agents.pop(task_id, None)
+
+        async def _same_message_replay(self, params, context):
+            task_id = params.message.task_id
+            task = await self.task_store.get(task_id, context) if task_id else None
+            if task is None:
+                return None
+            original = next((m for m in reversed(task.history)
+                             if m.message_id == params.message.message_id and m.role == Role.ROLE_USER), None)
+            if original is None:
+                return None  # NEW message retains the SDK's terminal-task guard.
+            before, after = MessageToDict(original), MessageToDict(params.message)
+            for body in (before, after):
+                body.pop("taskId", None)
+                body.pop("contextId", None)
+            if before != after or (params.message.context_id and params.message.context_id != task.context_id):
+                raise InvalidParamsError(message="messageId was already accepted with different content or context")
+            expected = _client_message_id(task_id, params.message.message_id)
+            bound = _bound_operation(task_id)
+            if not bound or bound.get("client_message_id") == expected:
+                return task
+            # An old message must never receive current M2's terminal answer.
+            # Reconcile M1 through the same host operation; do not write M2.
+            view = await asyncio.to_thread(_read_operation_sync, _operation_ref(bound["chat_id"], expected))
+            state = {"completed": TaskState.TASK_STATE_COMPLETED, "cancelled": TaskState.TASK_STATE_CANCELED,
+                     "failed": TaskState.TASK_STATE_FAILED, "rejected_duplicate": TaskState.TASK_STATE_REJECTED}.get((view or {}).get("status"))
+            if state is None:
+                raise InvalidParamsError(message="previous message outcome is not confirmed; current task is unchanged")
+            return Task(id=task_id, context_id=task.context_id, status=TaskStatus(state=state), history=[original],
+                        artifacts=[Artifact(artifact_id=uuid.uuid4().hex, parts=[Part(text=str(view.get("text") or ""))])]
+                        if state == TaskState.TASK_STATE_COMPLETED else [])
+
+        async def _replay_events(self, params, context, task):
+            if task.status.state in terminal_states:
+                yield task
+                return
+            # Reuse the SDK subscription/aggregator owner without creating an
+            # executor or replacing its running-agent entry/context identity.
+            if await self._queue_manager.get(task.id) is not None:
+                try:
+                    async for event in super().on_subscribe_to_task(SubscribeToTaskRequest(id=task.id), context):
+                        yield event
+                    yield await self._same_message_replay(params, context)
+                    return
+                except (TaskNotFoundError, UnsupportedOperationError):
+                    pass  # Queue completion raced the tap; reconcile below.
+            yield task
+            bound = _bound_operation(task.id)
+            expected = _client_message_id(task.id, params.message.message_id)
+            if not bound.get("chat_id"):
+                task.status.message.CopyFrom(Message(role=Role.ROLE_AGENT, message_id=uuid.uuid4().hex,
+                                                     parts=[Part(text="The host operation binding is unavailable; delivery outcome is unknown.")]))
+                yield task
+                return
+            ref = _operation_ref(int(bound["chat_id"]), expected)
+            try:
+                answer = await asyncio.to_thread(_wait_final_after_expiry_sync, int(bound["chat_id"]),
+                                                time.monotonic() + A2A_STREAM_DEADLINE_SEC, ref)
+                _update_task_record(task.id, state="completed", expected_message_id=expected,
+                                    artifacts=[{"parts": [{"kind": "text", "text": answer}]}])
+            except _HostWaitExpired as exc:
+                # The reconnect wait ended, not the host operation. Return its
+                # nonterminal Task and explicit uncertainty without writing a
+                # false failed/completed state or starting another producer.
+                task.status.message.CopyFrom(Message(role=Role.ROLE_AGENT, message_id=uuid.uuid4().hex,
+                                                     parts=[Part(text=str(exc))]))
+                yield task
+                return
+            except _HostWorkCancelled as exc:
+                _update_task_record(task.id, state="canceled", message=str(exc), expected_message_id=expected)
+            except RuntimeError as exc:
+                _update_task_record(task.id, state="failed", message=str(exc), expected_message_id=expected)
+            yield await self._same_message_replay(params, context)
+
+        @validate_request_params
+        async def on_message_send(self, params, context):
+            validate_history_length(params.configuration)
+            replay = await self._same_message_replay(params, context)
+            if replay is None:
+                return await super().on_message_send(params, context)
+            if params.configuration.return_immediately or replay.status.state in terminal_states:
+                return apply_history_length(replay, params.configuration)
+            async for event in self._replay_events(params, context, replay):
+                if isinstance(event, Task):
+                    replay = event
+            return apply_history_length(replay, params.configuration)
+
+        @validate_request_params
+        @validate(lambda self: self._agent_card.capabilities.streaming, "Streaming is not supported by the agent")
+        async def on_message_send_stream(self, params, context):
+            replay = await self._same_message_replay(params, context)
+            if replay is not None:
+                async with contextlib.aclosing(self._replay_events(params, context, replay)) as stream:
+                    async for event in stream:
+                        yield event
+                return
+            async with contextlib.aclosing(super().on_message_send_stream(params, context)) as stream:
+                async for event in stream:
+                    yield event
+
+    return OperationRequestHandler(agent_executor=OuroborosExecutor(), task_store=_sdk_task_store(), agent_card=card)
 
 
 def _fetch_identity() -> Dict[str, str]:
@@ -643,7 +1013,7 @@ async def jsonrpc(request: Request) -> JSONResponse:
         return _jsonrpc_error(request_id, -32600, "invalid request: params.message must be a JSON object")
     if method == "tasks/get":
         try:
-            task = _load_task(str(params.get("id") or ""))
+            task = await asyncio.to_thread(_refresh_task_record, str(params.get("id") or ""))
         except _TaskStateCorrupt as exc:
             # Distinct from "task not found": the record exists but cannot be read,
             # so the caller gets an actionable internal error, not a bare traceback.
@@ -651,24 +1021,64 @@ async def jsonrpc(request: Request) -> JSONResponse:
         if not task:
             return JSONResponse({"jsonrpc": "2.0", "id": request_id, "error": {"code": -32004, "message": "task not found"}})
         return JSONResponse({"jsonrpc": "2.0", "id": request_id, "result": task})
+    if method == "tasks/cancel":
+        return await _jsonrpc_cancel(request_id, str(params.get("id") or ""))
     if method != "message/send":
         return JSONResponse({"jsonrpc": "2.0", "id": request_id, "error": {"code": -32601, "message": "method not found"}})
     text = _extract_text(params)
-    task_id = str((params.get("message") or {}).get("taskId") or uuid.uuid4().hex)
+    message = params.get("message") or {}
+    task_id = str(message.get("taskId") or uuid.uuid4().hex)
+    context_id = str(message.get("contextId") or task_id)
+    message_id = str(message.get("messageId") or "")
+    expected_message_id = _client_message_id(task_id, message_id)
     try:
-        response_text = await _dispatch_to_host(text)
-        task = {
-            "id": task_id,
-            "contextId": (params.get("message") or {}).get("contextId") or task_id,
-            "status": {"state": "completed"},
-            "artifacts": [{"parts": [{"kind": "text", "text": response_text}]}],
-        }
+        response_text = await _dispatch_to_host(
+            text, task_id=task_id, context_id=context_id, message_id=message_id,
+        )
+        task = _update_task_record(
+            task_id, context_id, state="completed",
+            artifacts=[{"parts": [{"kind": "text", "text": response_text}]}],
+            expected_message_id=expected_message_id,
+        )
+    except _HostWaitExpired as exc:
+        task = _update_task_record(task_id, context_id, state="working", message=str(exc), expected_message_id=expected_message_id)
+    except _HostMessageConflict as exc:
+        return _jsonrpc_error(request_id, -32602, str(exc))
+    except _HostWorkCancelled as exc:
+        task = _update_task_record(task_id, context_id, state="canceled", message=str(exc), expected_message_id=expected_message_id)
     except Exception as exc:
-        task = {
-            "id": task_id,
-            "status": {"state": "failed", "message": {"parts": [{"kind": "text", "text": str(exc)}]}},
-        }
-    _save_task(task)
+        task = _update_task_record(task_id, context_id, state="failed", message=str(exc), expected_message_id=expected_message_id)
+    return JSONResponse({"jsonrpc": "2.0", "id": request_id, "result": task})
+
+
+_TERMINAL_RECORD_STATES = frozenset({"completed", "failed", "canceled", "rejected"})
+
+
+async def _jsonrpc_cancel(request_id: Any, task_id: str) -> JSONResponse:
+    """No-SDK ``tasks/cancel``: the host's cancellation owner decides; the
+    record turns ``canceled`` ONLY on the host's ``cancelled`` outcome."""
+    try:
+        record = _load_task(task_id)
+    except _TaskStateCorrupt as exc:
+        return _jsonrpc_error(request_id, -32603, str(exc))
+    if not record:
+        return _jsonrpc_error(request_id, -32001, "task not found")
+    state = str((record.get("status") or {}).get("state") or "")
+    if state in _TERMINAL_RECORD_STATES:
+        return _jsonrpc_error(
+            request_id, _JSONRPC_TASK_NOT_CANCELABLE, f"Task cannot be canceled - current state: {state}",
+        )
+    try:
+        outcome = await asyncio.to_thread(_cancel_host_operation_sync, task_id)
+    except _HostCancelRefused as exc:
+        return _jsonrpc_error(
+            request_id, _JSONRPC_TASK_NOT_CANCELABLE, f"Task cannot be canceled: {exc.reason} ({exc.outcome})",
+        )
+    task = _update_task_record(
+        task_id, str(record.get("contextId") or task_id), state="canceled",
+        message=f"host work cancelled ({outcome.get('task_id') or 'direct turn'})",
+        expected_message_id=outcome["client_message_id"],
+    )
     return JSONResponse({"jsonrpc": "2.0", "id": request_id, "result": task})
 
 
@@ -687,12 +1097,15 @@ class OuroborosExecutor(AgentExecutor if _A2A_SDK_AVAILABLE else object):
     with a human-readable message instead of a JSON-RPC -32603 stream error."""
 
     async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
-        parts = getattr(getattr(context, "message", None), "parts", []) or []
+        message = getattr(context, "message", None)
+        parts = getattr(message, "parts", []) or []
         text = "\n".join(str(getattr(part, "text", "") or "") for part in parts if getattr(part, "text", ""))
         # Reuse the SDK-provided ids: the request handler rejects events whose
         # task_id differs from RequestContext.task_id when the client named one.
         task_id = getattr(context, "task_id", "") or uuid.uuid4().hex
         context_id = getattr(context, "context_id", "") or task_id
+        message_id = str(getattr(message, "message_id", "") or "")
+        expected_message_id = _client_message_id(task_id, message_id)
         updater = TaskUpdater(event_queue, task_id, context_id)
 
         async def emit_working(note: str) -> None:
@@ -706,23 +1119,44 @@ class OuroborosExecutor(AgentExecutor if _A2A_SDK_AVAILABLE else object):
         if not getattr(context, "current_task", None):
             await _maybe_await(updater.submit())
         await _maybe_await(updater.start_work())
+        state, note, artifacts = "completed", "", None
         try:
-            response_text = await self._run_dispatch(text, emit_working)
-        except Exception as exc:
-            # Terminal failed status keeps the stream spec-shaped; -32603 is now
-            # reserved for genuinely unexpected crashes above this handler.
-            logger.warning("a2a executor task %s failed: %s", task_id, exc)
-            await _maybe_await(
-                updater.failed(message=updater.new_agent_message([Part(text=f"dispatch failed: {exc}")]))
+            response_text = await self._run_dispatch(
+                text, emit_working, task_id=task_id, context_id=context_id, message_id=message_id,
             )
+            artifacts = [{"parts": [{"kind": "text", "text": response_text}]}]
+        except _HostWaitExpired as exc:
+            state, note = "working", str(exc)
+        except _HostWorkCancelled as exc:
+            state, note = "canceled", str(exc)
+            logger.info("a2a executor task %s cancelled at the host: %s", task_id, exc)
+        except Exception as exc:
+            state, note = "failed", f"dispatch failed: {exc}"
+            logger.warning("a2a executor task %s failed: %s", task_id, exc)
+        record = _update_task_record(task_id, context_id, state=state, message=note,
+                                    artifacts=artifacts, expected_message_id=expected_message_id)
+        current = str((record.get("ouroboros") or {}).get("client_message_id") or "")
+        if current and current != expected_message_id:
             return
-        await _maybe_await(
-            updater.add_artifact([Part(text=response_text)], last_chunk=True)
-        )
-        await _maybe_await(updater.complete())
-        logger.info("a2a executor finalized task %s (state=completed)", task_id)
+        if state == "working":
+            await emit_working(note)
+        elif state == "canceled":
+            # The cancel caller may already have published the terminal event.
+            try:
+                await _maybe_await(updater.cancel(message=updater.new_agent_message([Part(text=note)])))
+            except Exception:
+                pass
+        elif state == "failed":
+            # Dispatch failures remain a typed terminal status on the stream.
+            await _maybe_await(updater.failed(message=updater.new_agent_message([Part(text=note)])))
+        else:
+            await _maybe_await(updater.add_artifact([Part(text=response_text)], last_chunk=True))
+            await _maybe_await(updater.complete())
+            logger.info("a2a executor finalized task %s (state=completed)", task_id)
 
-    async def _run_dispatch(self, text: str, emit_working) -> str:
+    async def _run_dispatch(
+        self, text: str, emit_working, *, task_id: str = "", context_id: str = "", message_id: str = "",
+    ) -> str:
         _guard_inbound_text(text)
         try:
             semaphore = _get_semaphore()
@@ -730,12 +1164,14 @@ class OuroborosExecutor(AgentExecutor if _A2A_SDK_AVAILABLE else object):
         except asyncio.TimeoutError as exc:
             raise RuntimeError("A2A server is busy; retry later") from exc
         try:
-            chat_id = await asyncio.to_thread(_allocate_chat_id_sync)
+            chat_id, client_message_id = await asyncio.to_thread(
+                _bind_inbound_message_sync, task_id, context_id, message_id,
+            )
             started = time.monotonic()
             deadline = started + A2A_STREAM_DEADLINE_SEC
             await emit_working("Message accepted; dispatching to the host agent")
             dispatch = asyncio.ensure_future(
-                asyncio.to_thread(_dispatch_after_allocate_sync, chat_id, text, deadline)
+                asyncio.to_thread(_dispatch_after_allocate_sync, chat_id, text, deadline, client_message_id)
             )
             seen_progress: set = set()
             last_emit = time.monotonic()
@@ -757,19 +1193,46 @@ class OuroborosExecutor(AgentExecutor if _A2A_SDK_AVAILABLE else object):
             semaphore.release()
 
     async def cancel(self, context: RequestContext, event_queue: EventQueue) -> None:
-        task = Task(
-            id=getattr(context, "task_id", "") or uuid.uuid4().hex,
-            status=TaskStatus(state=TaskState.TASK_STATE_CANCELED),
-        )
-        result = event_queue.enqueue_event(task)
-        if inspect.isawaitable(result):
-            await result
+        """``tasks/cancel``: the host's cancellation owner decides.
+
+        Only the host's ``cancelled`` outcome publishes the canceled state;
+        every other answer (nothing addressable yet, work steered into a
+        pre-existing task, already terminal, custody unresolved, host
+        unreachable) is the SDK's ``TaskNotCancelableError`` carrying the
+        host's reason — never a canceled task over work that keeps running.
+        """
+        task_id = getattr(context, "task_id", "") or ""
+        context_id = getattr(context, "context_id", "") or task_id
+        try:
+            outcome = await asyncio.to_thread(_cancel_host_operation_sync, task_id)
+        except _HostCancelRefused as exc:
+            logger.info("a2a cancel for task %s refused by the host: %s", task_id, exc)
+            raise TaskNotCancelableError(
+                message=f"Task cannot be canceled: {exc.reason} ({exc.outcome})"
+            ) from exc
+        record = _update_task_record(task_id, context_id, state="canceled", expected_message_id=outcome["client_message_id"])
+        if str((record.get("ouroboros") or {}).get("client_message_id") or "") != outcome["client_message_id"]:
+            # The SDK cancels its current producer after this method returns.
+            raise TaskNotCancelableError(message=(
+                "The previous host operation was cancelled, but the task now belongs to another message; "
+                "the current operation was not cancelled."
+            ))
+        updater = TaskUpdater(event_queue, task_id, context_id)
+        await _maybe_await(updater.cancel(
+            message=updater.new_agent_message(
+                [Part(text=f"host work cancelled ({outcome.get('task_id') or 'direct turn'})")]
+            ),
+        ))
 
 
 class _HostWaitExpired(RuntimeError):
     """The host accepted the message but the response wait closed before the
     agent answered. The underlying task keeps running host-side; the durable
     completion fallback below can still deliver its answer."""
+
+    def __init__(self, message: str, operation_ref: str = "") -> None:
+        super().__init__(message)
+        self.operation_ref = operation_ref
 
 
 def _guard_inbound_text(text: str) -> None:
@@ -796,10 +1259,36 @@ def _allocate_chat_id_sync() -> int:
     raise RuntimeError(f"host chat-id allocation failed: {last_exc}") from last_exc
 
 
-def _inject_sync(chat_id: int, text: str) -> str:
-    """One /chat/inject with wait_for_response. Raises _HostWaitExpired when the
-    wait window closed while the task is still running (host 504, or a socket
-    timeout on our side); other HTTP failures propagate as hard errors."""
+def _bind_inbound_message_sync(task_id: str, context_id: str, message_id: str) -> "tuple[int, str]":
+    """Resolve the host chat and message identity for one inbound A2A message.
+
+    A task already bound to a host chat keeps it (a re-delivered message
+    rejoins at the host; a NEW message in the same task continues the same
+    conversation), otherwise a fresh single-conversation chat is allocated. The
+    binding is written before the inject so ``tasks/cancel`` can find it while
+    the wait is still open."""
+    if not task_id:
+        return _allocate_chat_id_sync(), ""
+    bound = _bound_operation(task_id)
+    allocated = int(bound.get("chat_id") or 0) or _allocate_chat_id_sync()
+    client_message_id = _client_message_id(task_id, message_id)
+    with _TASK_RECORD_LOCK:
+        # Allocation has no work side effect. A racing allocation may be unused,
+        # but every delivery reads the winner's binding before injecting work.
+        chat_id = int(_bound_operation(task_id).get("chat_id") or 0) or allocated
+        _update_task_record(task_id, context_id, binding={
+            "chat_id": chat_id,
+            "client_message_id": client_message_id,
+            "operation_ref": _operation_ref(chat_id, client_message_id),
+        })
+    return chat_id, client_message_id
+
+
+def _inject_sync(chat_id: int, text: str, client_message_id: str = "") -> str:
+    """One /chat/inject with wait_for_response. Raises _HostWaitExpired (carrying
+    the operation_ref) when the wait window closed while the task is still
+    running (host 504, or a socket timeout on our side); other HTTP failures
+    propagate as hard errors."""
     try:
         injected = httpx.post(
             f"{HOST_SERVICE_URL}/chat/inject",
@@ -816,15 +1305,30 @@ def _inject_sync(chat_id: int, text: str) -> str:
                     "conversation_id": str(chat_id),
                     "sender_label": "A2A",
                 },
+                **({"client_message_id": client_message_id} if client_message_id else {}),
             },
             timeout=A2A_RESPONSE_TIMEOUT_SEC + 15,
         )
     except httpx.TimeoutException as exc:
         raise _HostWaitExpired(
-            f"host response socket timed out after ~{A2A_RESPONSE_TIMEOUT_SEC}s ({exc})"
+            f"host response socket timed out after ~{A2A_RESPONSE_TIMEOUT_SEC}s ({exc})",
+            operation_ref=_operation_ref(chat_id, client_message_id),
         ) from exc
     if injected.status_code == 504:
-        raise _HostWaitExpired(f"host response wait expired after {A2A_RESPONSE_TIMEOUT_SEC}s")
+        # The host names the operation on the expiry too; prefer its spelling.
+        try:
+            ref = str((injected.json() or {}).get("operation_ref") or "")
+        except ValueError:
+            ref = ""
+        expected = _operation_ref(chat_id, client_message_id)
+        if ref and expected and ref != expected:
+            raise RuntimeError("host returned an operation_ref for a different message")
+        raise _HostWaitExpired(
+            f"host response wait expired after {A2A_RESPONSE_TIMEOUT_SEC}s",
+            operation_ref=ref or _operation_ref(chat_id, client_message_id),
+        )
+    if injected.status_code == 409 and client_message_id:
+        raise _HostMessageConflict("messageId conflicts with the host's already accepted message")
     injected.raise_for_status()
     try:
         payload = injected.json()
@@ -832,11 +1336,18 @@ def _inject_sync(chat_id: int, text: str) -> str:
         raise RuntimeError(f"host chat injection returned a non-JSON body: {exc}") from exc
     if not isinstance(payload, dict):
         raise RuntimeError("host chat injection returned a non-object body")
+    if client_message_id and payload.get("operation_ref") not in (None, "", _operation_ref(chat_id, client_message_id)):
+        raise RuntimeError("host returned an operation_ref for a different message")
     # HTTP 200 is not by itself success: the host reports a refusal in the body as
     # {"ok": false, "error": ...}. Reading only "response" turned that into an
     # EMPTY completed answer, hiding the real host-side error from the A2A caller.
     if not payload.get("ok", True):
         raise RuntimeError(str(payload.get("error") or "host rejected chat injection"))
+    status = str(payload.get("status") or "")
+    if status == "cancelled":
+        raise _HostWorkCancelled("host work was cancelled")
+    if status and status != "completed":
+        raise RuntimeError(f"host operation ended {status}: {payload.get('response') or payload.get('reason') or ''}")
     return str(payload.get("response") or "")
 
 
@@ -888,32 +1399,51 @@ def _fetch_progress_notes_sync(chat_id: int, seen: set) -> List[str]:
     return notes
 
 
-def _wait_final_after_expiry_sync(chat_id: int, deadline_monotonic: float) -> str:
+def _wait_final_after_expiry_sync(chat_id: int, deadline_monotonic: float, operation_ref: str = "") -> str:
+    """After the response wait expired: read the host's operation view (the late
+    answer, a promoted task's terminal status, ``lost`` after a host restart);
+    use legacy chat-log polling only for unnamed, single-use chat dispatch."""
     while time.monotonic() < deadline_monotonic:
-        answer = _fetch_final_answer_sync(chat_id)
-        if answer is not None:
-            return answer
+        view = _read_operation_sync(operation_ref)
+        if view is not None:
+            status = str(view.get("status") or "")
+            if status == "completed":
+                return str(view.get("text") or "")
+            if status == "cancelled":
+                raise _HostWorkCancelled("host work was cancelled")
+            if status in ("failed", "rejected_duplicate"):
+                raise RuntimeError(f"host work ended {status}: {view.get('text') or ''}".rstrip(": "))
+            if status == "lost":
+                raise RuntimeError("the host restarted before answering; the message was not carried over")
+        elif not operation_ref:
+            answer = _fetch_final_answer_sync(chat_id)
+            if answer is not None:
+                return answer
         time.sleep(max(1.0, float(A2A_PROGRESS_POLL_SEC)))
-    raise RuntimeError(
+    raise _HostWaitExpired(
         f"no response within A2A_STREAM_DEADLINE_SEC={A2A_STREAM_DEADLINE_SEC}s; "
-        "the host task may still be running"
+        "the host task may still be running", operation_ref=operation_ref,
     )
 
 
-def _dispatch_after_allocate_sync(chat_id: int, text: str, deadline_monotonic: float) -> str:
+def _dispatch_after_allocate_sync(
+    chat_id: int, text: str, deadline_monotonic: float, client_message_id: str = "",
+) -> str:
     try:
-        return _inject_sync(chat_id, text)
+        return _inject_sync(chat_id, text, client_message_id)
     except _HostWaitExpired as exc:
-        logger.warning("a2a dispatch: %s; falling back to durable chat-log polling", exc)
-        return _wait_final_after_expiry_sync(chat_id, deadline_monotonic)
+        logger.warning("a2a dispatch: %s; recovering the answer after the wait", exc)
+        return _wait_final_after_expiry_sync(chat_id, deadline_monotonic, exc.operation_ref)
 
 
-def _dispatch_to_host_sync(text: str) -> str:
-    chat_id = _allocate_chat_id_sync()
-    return _dispatch_after_allocate_sync(chat_id, text, time.monotonic() + A2A_STREAM_DEADLINE_SEC)
+def _dispatch_to_host_sync(text: str, *, task_id: str = "", context_id: str = "", message_id: str = "") -> str:
+    chat_id, client_message_id = _bind_inbound_message_sync(task_id, context_id, message_id)
+    return _dispatch_after_allocate_sync(
+        chat_id, text, time.monotonic() + A2A_STREAM_DEADLINE_SEC, client_message_id,
+    )
 
 
-async def _dispatch_to_host(text: str) -> str:
+async def _dispatch_to_host(text: str, *, task_id: str = "", context_id: str = "", message_id: str = "") -> str:
     """Non-streaming dispatch used by the no-SDK fallback message/send route."""
     _guard_inbound_text(text)
     try:
@@ -922,7 +1452,9 @@ async def _dispatch_to_host(text: str) -> str:
     except asyncio.TimeoutError as exc:
         raise RuntimeError("A2A server is busy; retry later") from exc
     try:
-        return await asyncio.to_thread(_dispatch_to_host_sync, text)
+        return await asyncio.to_thread(
+            _dispatch_to_host_sync, text, task_id=task_id, context_id=context_id, message_id=message_id,
+        )
     finally:
         semaphore.release()
 
@@ -1016,11 +1548,7 @@ def _build_app() -> Starlette:
     _start_tools_refresher()
     if _A2A_SDK_AVAILABLE:
         card = _sdk_agent_card()
-        handler = LegacyRequestHandler(
-            agent_executor=OuroborosExecutor(),
-            task_store=InMemoryTaskStore(),
-            agent_card=card,
-        )
+        handler = _sdk_request_handler(card)
         logger.info("a2a daemon using SDK agent-card routes")
         # A2: serve the v0.3-complete DICT card at BOTH well-known paths, registered BEFORE
         # the SDK helper so Starlette first-match makes it authoritative. The SDK AgentCard
