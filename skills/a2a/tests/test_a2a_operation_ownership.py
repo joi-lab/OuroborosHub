@@ -259,8 +259,10 @@ def test_late_host_outcome_returns_the_current_message_record(tmp_path, monkeypa
     monkeypatch.setattr(daemon, "_allocate_chat_id_sync", lambda: -51)
     _, first = daemon._bind_inbound_message_sync("task", "ctx", "m1")
     started, release = threading.Event(), threading.Event()
+    host_calls = []
 
     def host_reply(url, **kwargs):
+        host_calls.append(url)
         if method == "tasks/get":
             assert url.endswith(first)
         elif method == "message/send":
@@ -285,13 +287,37 @@ def test_late_host_outcome_returns_the_current_message_record(tmp_path, monkeypa
             assert started.wait(5)
             _, second = daemon._bind_inbound_message_sync("task", "ctx", "m2")
             current = daemon._load_task("task")
+            current_bytes = daemon._task_path("task").read_bytes()
         finally:
             release.set()
-        result = pending.result(timeout=5).json()["result"]
-    assert result == current == daemon._load_task("task")
-    assert result["ouroboros"]["client_message_id"] == second
-    assert result["status"]["state"] == "working"
-    assert "artifacts" not in result
+        response = pending.result(timeout=5).json()
+        if method == "tasks/cancel":
+            assert response["error"]["code"] == -32002 and "result" not in response
+            assert response["error"]["message"] == (
+                "The previous host operation was cancelled, but the task now belongs to another message; "
+                "the current operation was not cancelled."
+            )
+        else:
+            assert response["result"] == current
+        assert current == daemon._load_task("task")
+        assert daemon._task_path("task").read_bytes() == current_bytes
+        assert current["ouroboros"]["client_message_id"] == second
+        assert current["status"]["state"] == "working" and "artifacts" not in current
+        assert len(host_calls) == 1
+        if method == "tasks/cancel":
+            # Refusing the stale cancellation leaves M2 able to finish normally.
+            def complete_current(url, **kwargs):
+                assert url.endswith("/chat/inject")
+                assert kwargs["json"]["client_message_id"] == second
+                return httpx.Response(200, json={"ok": True, "status": "completed",
+                    "operation_ref": f"-51:{second}", "response": "answer to M2"}, request=httpx.Request("POST", url))
+            monkeypatch.setattr(daemon.httpx, "post", complete_current)
+            completed = client.post("/", json={"jsonrpc": "2.0", "id": "current", "method": "message/send", "params": {
+                "message": {"taskId": "task", "contextId": "ctx", "messageId": "m2",
+                            "parts": [{"kind": "text", "text": "request M2"}]},
+            }}).json()["result"]
+            assert completed["status"]["state"] == "completed"
+            assert completed["artifacts"][0]["parts"][0]["text"] == "answer to M2"
 
 
 @pytest.mark.parametrize("cancel_race", [False, True])
@@ -391,3 +417,105 @@ def test_real_sdk_late_producer_preserves_current_message_completion(tmp_path, m
     assert not [row.getMessage() for row in caplog.records
                 if "will not be enqueued" in row.getMessage() or "Event dropped" in row.getMessage()
                 or "NoTaskQueue" in row.getMessage()]
+
+
+def _stored_sdk_tasks(tmp_path, monkeypatch):
+    pytest.importorskip("a2a", reason="actual SDK controls use the isolated acceptance environment")
+    from a2a.server.context import ServerCallContext
+    from a2a.types import Message, Part, Role, Task, TaskState, TaskStatus
+
+    daemon = load_daemon(tmp_path, monkeypatch)
+    assert daemon._A2A_SDK_AVAILABLE
+    store, context, refs = daemon._sdk_task_store(), ServerCallContext(), {}
+    for index in range(2):
+        task_id = f"stored-{index}"
+        client_id = daemon._client_message_id(task_id, "m")
+        refs[task_id] = daemon._operation_ref(-61 - index, client_id)
+        daemon._update_task_record(task_id, "ctx", binding={
+            "chat_id": -61 - index, "client_message_id": client_id, "operation_ref": refs[task_id],
+        })
+        asyncio.run(store.save(Task(id=task_id, context_id="ctx", status=TaskStatus(state=TaskState.TASK_STATE_WORKING),
+            history=[Message(message_id="m", role=Role.ROLE_USER, parts=[Part(text="request")])]), context))
+    return daemon, store, context, refs
+
+
+def test_sdk_list_reads_local_snapshots_off_loop_and_get_refreshes_one_task(tmp_path, monkeypatch):
+    daemon, store, context, refs = _stored_sdk_tasks(tmp_path, monkeypatch)
+    from a2a.types import ListTasksRequest, TaskState
+
+    paths = list(daemon._tasks_dir().glob("*.json"))
+    before = {path: (path.read_bytes(), path.stat().st_mtime_ns) for path in paths}
+    requests, read_threads = [], []
+    read_text = Path.read_text
+
+    def observe_read(path, *args, **kwargs):
+        if path in before:
+            read_threads.append(threading.get_ident())
+        return read_text(path, *args, **kwargs)
+
+    def host_get(url, **kwargs):
+        requests.append(url)
+        assert url.endswith(refs["stored-0"])
+        return httpx.Response(200, json={"ok": True, "operation_ref": refs["stored-0"],
+            "status": "completed", "text": "one refreshed answer"}, request=httpx.Request("GET", url))
+
+    monkeypatch.setattr(Path, "read_text", observe_read)
+    monkeypatch.setattr(daemon.httpx, "get", host_get)
+
+    async def exercise():
+        loop_thread = threading.get_ident()
+        first = await store.list(ListTasksRequest(page_size=1), context)
+        assert first.total_size == 2 and len(first.tasks) == 1 and first.next_page_token
+        assert len(read_threads) == 2 and all(t != loop_thread for t in read_threads)
+        second = await store.list(ListTasksRequest(page_size=1, page_token=first.next_page_token), context)
+        assert {first.tasks[0].id, second.tasks[0].id} == set(refs)
+        assert all(task.status.state == TaskState.TASK_STATE_WORKING for task in [*first.tasks, *second.tasks])
+        assert requests == []
+        assert {path: (path.read_bytes(), path.stat().st_mtime_ns) for path in paths} == before
+        refreshed = await store.get("stored-0", context)
+        assert refreshed.status.state == TaskState.TASK_STATE_COMPLETED
+        assert refreshed.artifacts[0].parts[0].text == "one refreshed answer"
+        assert requests == [daemon.HOST_SERVICE_URL + "/chat/operations/" + refs["stored-0"]]
+
+    asyncio.run(exercise())
+    assert daemon._load_task("stored-0")["status"]["state"] == "completed"
+    assert daemon._task_path("stored-1").read_bytes() == before[daemon._task_path("stored-1")][0]
+
+
+def test_sdk_local_list_keeps_owner_filter_without_remote_reads(tmp_path, monkeypatch):
+    daemon, store, context, _ = _stored_sdk_tasks(tmp_path, monkeypatch)
+    from a2a.types import ListTasksRequest
+
+    foreign = daemon._load_task("stored-1")
+    foreign["sdk_owner"] = "another-owner"
+    daemon._save_task(foreign)
+    requests = []
+    monkeypatch.setattr(daemon.httpx, "get", lambda *a, **kw: requests.append(a) or None)
+    listed = asyncio.run(store.list(ListTasksRequest(), context))
+    assert [task.id for task in listed.tasks] == ["stored-0"] and listed.total_size == 1
+    assert requests == []
+    assert daemon._load_task("stored-1") == foreign
+
+
+@pytest.mark.parametrize("raw", ["{broken json", "[]", '{"id":"other"}'])
+def test_sdk_list_and_get_report_corrupt_state_without_dropping_records(tmp_path, monkeypatch, raw):
+    daemon, store, context, _ = _stored_sdk_tasks(tmp_path, monkeypatch)
+    from a2a.types import ListTasksRequest
+
+    path = daemon._task_path("bad")
+    path.write_text(raw, encoding="utf-8")
+    before = {p: p.read_bytes() for p in daemon._tasks_dir().glob("*.json")}
+    assert daemon._load_task("missing") is None
+    for call in [lambda: daemon._load_task("bad"), lambda: asyncio.run(store.get("bad", context)),
+                 lambda: asyncio.run(store.list(ListTasksRequest(), context))]:
+        with pytest.raises(daemon._TaskStateCorrupt):
+            call()
+    requests = []
+    monkeypatch.setattr(daemon.httpx, "get", lambda *a, **kw: requests.append(a) or None)
+    with TestClient(daemon.app, headers={"A2A-Version": "1.0"}) as client:
+        for method, params in [("ListTasks", {}), ("GetTask", {"id": "bad"})]:
+            response = client.post("/", json={"jsonrpc": "2.0", "id": method, "method": method, "params": params}).json()
+            assert response["id"] == method and response["error"]["code"] == -32603
+            assert "task state" in response["error"]["message"] and "result" not in response
+    assert requests == []
+    assert {p: p.read_bytes() for p in daemon._tasks_dir().glob("*.json")} == before

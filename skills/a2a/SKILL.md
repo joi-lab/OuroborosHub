@@ -96,7 +96,7 @@ host's operation view for the final answer until `A2A_STREAM_DEADLINE_SEC`
 (default 3600s) elapses. Set `A2A_PROGRESS_ENRICH=0` to disable progress
 forwarding (heartbeats only); `A2A_GATEWAY_URL` (loopback-only, default
 `http://127.0.0.1:8765`) points the read-only log polling at a non-default
-gateway port. The no-SDK fallback route (`message/send` only) shares the
+gateway port. The no-SDK fallback route shares the
 same resilient dispatch pipeline without the event stream.
 
 ## Operation correlation and cancellation
@@ -115,6 +115,11 @@ terminal status, or `lost` after a host restart). Unavailable exact-operation
 state remains unknown; a named message never takes another chat answer.
 Legacy unnamed single-use dispatch retains its chat-log fallback.
 
+Named recovery and cancellation require a Host with
+`GET /chat/operations/{operation_ref}` and `POST /chat/cancel`. On an older
+Host, fast answers still work, an expired named wait stays `working` with an
+unknown outcome, and cancellation reports a refusal.
+
 The existing task record is replaced atomically and its current-message binding
 fences late status writes. The SDK uses that same durable record. A confirmed
 terminal replay of an already accepted SDK message returns the saved/reconciled
@@ -126,6 +131,11 @@ An accepted nonterminal replay creates no new SDK producer: nonblocking requests
 return the current Task, blocking/streaming requests attach through the existing
 SDK task subscription. After a daemon restart, the existing host-operation
 wait/status path reconciles the answer; wait expiry stays nonterminal/unknown.
+
+SDK `ListTasks` returns locally stored task snapshots for the current SDK
+owner, with the SDK's filtering and pagination. `tasks/get` / `GetTask`
+reconciles the requested task with the Host. A corrupt task record produces
+an explicit state error; listing does not silently omit it.
 
 `tasks/cancel` (SDK executor `cancel` and the fallback JSON-RPC method)
 calls the host's `POST /chat/cancel` for the bound operation and reports

@@ -66,6 +66,10 @@ A2A_CARD_VERSION = "1.4.0"
 
 # JSON-RPC error code the A2A spec assigns to TaskNotCancelableError.
 _JSONRPC_TASK_NOT_CANCELABLE = -32002
+_SUPERSEDED_CANCEL_MESSAGE = (
+    "The previous host operation was cancelled, but the task now belongs to another message; "
+    "the current operation was not cancelled."
+)
 
 
 def _is_loopback(host: str) -> bool:
@@ -376,17 +380,25 @@ def _load_task(task_id: str) -> Dict[str, Any] | None:
     path = _task_path(task_id)
     if not path.exists():
         return None
+    return _read_task_record(path, task_id)
+
+
+def _read_task_record(path: pathlib.Path, expected_task_id: str | None = None) -> Dict[str, Any]:
+    """Read one task file with the same typed failure for lookup and listing."""
+    label = expected_task_id if expected_task_id is not None else path.name
     try:
         record = json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError, UnicodeDecodeError) as exc:
         # A present-but-unreadable record is NOT "task not found": report it as an
         # actionable task-state failure instead of letting a bare decode error
         # escape as an opaque server error.
-        raise _TaskStateCorrupt(f"task state for {task_id!r} is unreadable: {exc}") from exc
+        raise _TaskStateCorrupt(f"task state for {label!r} is unreadable: {exc}") from exc
     if not isinstance(record, dict):
-        raise _TaskStateCorrupt(f"task state for {task_id!r} is not a JSON object")
-    if record.get("id") != task_id:
-        raise _TaskStateCorrupt(f"task state for {task_id!r} has a different identity")
+        raise _TaskStateCorrupt(f"task state for {label!r} is not a JSON object")
+    task_id = record.get("id")
+    if (not isinstance(task_id, str) or (expected_task_id is not None and task_id != expected_task_id)
+            or _task_path(task_id) != path):
+        raise _TaskStateCorrupt(f"task state for {label!r} has a different identity")
     return record
 
 
@@ -559,6 +571,22 @@ def _sdk_task_store():
               "completed": TaskState.TASK_STATE_COMPLETED, "failed": TaskState.TASK_STATE_FAILED,
               "canceled": TaskState.TASK_STATE_CANCELED, "rejected": TaskState.TASK_STATE_REJECTED}
 
+    def project_record(record, context):
+        """Project a local snapshot without refreshing or changing its source."""
+        if not record or record.get("sdk_owner", resolve_user_scope(context)) != resolve_user_scope(context):
+            return None
+        task_id = record["id"]
+        task = ParseDict(record["sdk_task"], Task()) if record.get("sdk_task") else Task(id=task_id, context_id=record.get("contextId") or task_id)
+        task.status.state = states.get(str((record.get("status") or {}).get("state") or ""), TaskState.TASK_STATE_WORKING)
+        current = str((record.get("ouroboros") or {}).get("client_message_id") or "")
+        source = next((m for m in reversed(task.history) if m.role == Role.ROLE_USER), None)
+        if current and source and _client_message_id(task_id, source.message_id) != current:
+            task.ClearField("artifacts")
+        if not task.artifacts and record.get("artifacts"):
+            for item in record["artifacts"]:
+                task.artifacts.append(Artifact(artifact_id=uuid.uuid4().hex, parts=[Part(text=str(p.get("text") or "")) for p in item.get("parts", [])]))
+        return task
+
     class DurableTaskStore(TaskStore):
         async def save(self, task, context):
             with _TASK_RECORD_LOCK:
@@ -579,26 +607,17 @@ def _sdk_task_store():
 
         async def get(self, task_id, context):
             record = await asyncio.to_thread(_refresh_task_record, task_id)
-            if not record or record.get("sdk_owner", resolve_user_scope(context)) != resolve_user_scope(context):
-                return None
-            task = ParseDict(record["sdk_task"], Task()) if record.get("sdk_task") else Task(id=task_id, context_id=record.get("contextId") or task_id)
-            task.status.state = states.get(str((record.get("status") or {}).get("state") or ""), TaskState.TASK_STATE_WORKING)
-            current = str((record.get("ouroboros") or {}).get("client_message_id") or "")
-            source = next((m for m in reversed(task.history) if m.role == Role.ROLE_USER), None)
-            if current and source and _client_message_id(task_id, source.message_id) != current:
-                task.ClearField("artifacts")
-            if not task.artifacts and record.get("artifacts"):
-                for item in record["artifacts"]:
-                    task.artifacts.append(Artifact(artifact_id=uuid.uuid4().hex, parts=[Part(text=str(p.get("text") or "")) for p in item.get("parts", [])]))
-            return task
+            return project_record(record, context)
 
         async def list(self, params, context):
             # Reuse the SDK's filtering/pagination over a request-local view;
-            # this is not a second persistent task owner.
+            # list reads stored snapshots; only get reconciles with the Host.
+            records = await asyncio.to_thread(
+                lambda: [_read_task_record(path) for path in _tasks_dir().glob("*.json")]
+            )
             view = InMemoryTaskStore()
-            for path in _tasks_dir().glob("*.json"):
-                record = json.loads(path.read_text(encoding="utf-8"))
-                task = await self.get(str(record["id"]), context)
+            for record in records:
+                task = project_record(record, context)
                 if task is not None:
                     await view.save(task, context)
             return await view.list(params, context)
@@ -1079,6 +1098,8 @@ async def _jsonrpc_cancel(request_id: Any, task_id: str) -> JSONResponse:
         message=f"host work cancelled ({outcome.get('task_id') or 'direct turn'})",
         expected_message_id=outcome["client_message_id"],
     )
+    if str((task.get("ouroboros") or {}).get("client_message_id") or "") != outcome["client_message_id"]:
+        return _jsonrpc_error(request_id, _JSONRPC_TASK_NOT_CANCELABLE, _SUPERSEDED_CANCEL_MESSAGE)
     return JSONResponse({"jsonrpc": "2.0", "id": request_id, "result": task})
 
 
@@ -1213,10 +1234,7 @@ class OuroborosExecutor(AgentExecutor if _A2A_SDK_AVAILABLE else object):
         record = _update_task_record(task_id, context_id, state="canceled", expected_message_id=outcome["client_message_id"])
         if str((record.get("ouroboros") or {}).get("client_message_id") or "") != outcome["client_message_id"]:
             # The SDK cancels its current producer after this method returns.
-            raise TaskNotCancelableError(message=(
-                "The previous host operation was cancelled, but the task now belongs to another message; "
-                "the current operation was not cancelled."
-            ))
+            raise TaskNotCancelableError(message=_SUPERSEDED_CANCEL_MESSAGE)
         updater = TaskUpdater(event_queue, task_id, context_id)
         await _maybe_await(updater.cancel(
             message=updater.new_agent_message(
