@@ -251,8 +251,9 @@ def test_initial_wait_expiry_keeps_host_work_nonterminal_and_cancelable(tmp_path
         assert canceled["result"]["status"]["state"] == "canceled", canceled
 
 
-@pytest.mark.parametrize("method", ["tasks/get", "message/send", "tasks/cancel"])
-def test_late_host_outcome_returns_the_current_message_record(tmp_path, monkeypatch, method):
+@pytest.mark.parametrize("method,status", [("tasks/get", "completed"), ("tasks/get", "lost"),
+                                         ("message/send", "completed"), ("tasks/cancel", "completed")])
+def test_late_host_outcome_returns_the_current_message_record(tmp_path, monkeypatch, method, status):
     """A late M1 read/completion/cancel cannot attach its outcome to current M2."""
     daemon = load_daemon(tmp_path, monkeypatch)
     daemon._A2A_SDK_AVAILABLE = False
@@ -272,7 +273,7 @@ def test_late_host_outcome_returns_the_current_message_record(tmp_path, monkeypa
         started.set()
         assert release.wait(5)
         return httpx.Response(200, json={
-            "ok": True, "operation_ref": f"-51:{first}", "status": "completed",
+            "ok": True, "operation_ref": f"-51:{first}", "status": status,
             "text": "answer to M1", "response": "answer to M1", "outcome": "cancelled",
         }, request=httpx.Request("GET" if method == "tasks/get" else "POST", url))
 
@@ -304,8 +305,8 @@ def test_late_host_outcome_returns_the_current_message_record(tmp_path, monkeypa
         assert current["ouroboros"]["client_message_id"] == second
         assert current["status"]["state"] == "working" and "artifacts" not in current
         assert len(host_calls) == 1
-        if method == "tasks/cancel":
-            # Refusing the stale cancellation leaves M2 able to finish normally.
+        if method == "tasks/cancel" or status == "lost":
+            # The stale cancellation or lost outcome leaves M2 able to finish.
             def complete_current(url, **kwargs):
                 assert url.endswith("/chat/inject")
                 assert kwargs["json"]["client_message_id"] == second
@@ -437,6 +438,108 @@ def _stored_sdk_tasks(tmp_path, monkeypatch):
         asyncio.run(store.save(Task(id=task_id, context_id="ctx", status=TaskStatus(state=TaskState.TASK_STATE_WORKING),
             history=[Message(message_id="m", role=Role.ROLE_USER, parts=[Part(text="request")])]), context))
     return daemon, store, context, refs
+
+
+@pytest.mark.parametrize("sdk", [False, True])
+def test_lost_host_operation_reconciles_to_failed_with_its_reason(tmp_path, monkeypatch, sdk):
+    reason = "the host restarted before answering; the message was not carried over"
+    if sdk:
+        daemon, _, _, refs = _stored_sdk_tasks(tmp_path, monkeypatch)
+        task_id, ref = "stored-0", refs["stored-0"]
+        record = daemon._load_task(task_id)
+        record["sdk_task"]["status"]["message"] = {
+            "role": "ROLE_AGENT", "messageId": "old-note", "parts": [{"text": "still waiting"}],
+        }
+        daemon._save_task(record)
+    else:
+        daemon = load_daemon(tmp_path, monkeypatch)
+        daemon._A2A_SDK_AVAILABLE = False
+        monkeypatch.setattr(daemon, "_allocate_chat_id_sync", lambda: -61)
+        _, message_id = daemon._bind_inbound_message_sync("stored-0", "ctx", "m")
+        task_id, ref = "stored-0", daemon._operation_ref(-61, message_id)
+    app = daemon.app if sdk else daemon._build_app()
+    requests, dispatched = [], []
+
+    def host_get(url, **kwargs):
+        requests.append(url)
+        assert url.endswith(ref)
+        return httpx.Response(200, json={"ok": True, "operation_ref": ref, "status": "lost",
+            "reason": "host_restarted_before_answer"}, request=httpx.Request("GET", url))
+
+    monkeypatch.setattr(daemon.httpx, "get", host_get)
+    monkeypatch.setattr(daemon, "_dispatch_after_allocate_sync", lambda *a: dispatched.append(a) or "unexpected")
+    with TestClient(app) as client:
+        response = client.post("/", json={"jsonrpc": "2.0", "id": "get-lost", "method": "tasks/get",
+                                         "params": {"id": task_id}}).json()
+        assert response["id"] == "get-lost"
+        task = response["result"]
+        assert task["status"]["state"] == "failed"
+        assert task["status"]["message"]["parts"][0]["text"] == reason
+        assert not task.get("artifacts") and len(requests) == 1
+        saved = daemon._task_path(task_id).read_bytes()
+        if sdk:
+            listed = client.post("/", headers={"A2A-Version": "1.0"}, json={
+                "jsonrpc": "2.0", "id": "list-lost", "method": "ListTasks", "params": {},
+            }).json()
+            lost = next(item for item in listed["result"]["tasks"] if item["id"] == task_id)
+            assert lost["status"]["state"] == "TASK_STATE_FAILED"
+            assert lost["status"]["message"]["parts"][0]["text"] == reason
+            assert len(requests) == 1 and daemon._task_path(task_id).read_bytes() == saved
+            replay = client.post("/", json={"jsonrpc": "2.0", "id": "replay-lost", "method": "message/send", "params": {
+                "message": {"role": "user", "taskId": task_id, "messageId": "m",
+                            "parts": [{"kind": "text", "text": "request"}]},
+            }}).json()["result"]
+            assert replay["status"]["state"] == "failed" and not replay.get("artifacts")
+            assert replay["status"]["message"]["parts"][0]["text"] == reason
+        assert dispatched == []
+    with pytest.raises(RuntimeError, match=reason):
+        daemon._wait_final_after_expiry_sync(-61, daemon.time.monotonic() + 1, ref)
+
+
+def test_real_sdk_lost_old_message_replay_does_not_change_current_message(tmp_path, monkeypatch):
+    daemon, store, context, refs = _stored_sdk_tasks(tmp_path, monkeypatch)
+    from a2a.types import Message, Part, Role, Task, TaskState, TaskStatus
+
+    task_id, old_ref = "stored-0", refs["stored-0"]
+    _, current_id = daemon._bind_inbound_message_sync(task_id, "ctx", "m2")
+    asyncio.run(store.save(Task(id=task_id, context_id="ctx", status=TaskStatus(state=TaskState.TASK_STATE_WORKING),
+        history=[Message(message_id="m", role=Role.ROLE_USER, parts=[Part(text="request")]),
+                 Message(message_id="m2", role=Role.ROLE_USER, parts=[Part(text="next request")])]), context))
+    before = daemon._task_path(task_id).read_bytes()
+    requests, dispatched, complete = [], [], False
+
+    def host_get(url, **kwargs):
+        requests.append(url)
+        ref = url.rsplit("/", 1)[-1]
+        if ref == old_ref:
+            view = {"status": "lost", "reason": "host_restarted_before_answer"}
+        else:
+            assert ref == daemon._operation_ref(-61, current_id)
+            view = {"status": "completed", "text": "answer to M2"} if complete else {"status": "pending"}
+        return httpx.Response(200, json={"ok": True, "operation_ref": ref, **view}, request=httpx.Request("GET", url))
+
+    monkeypatch.setattr(daemon.httpx, "get", host_get)
+    monkeypatch.setattr(daemon, "_dispatch_after_allocate_sync", lambda *a: dispatched.append(a) or "unexpected")
+    with TestClient(daemon.app) as client:
+        old = client.post("/", json={"jsonrpc": "2.0", "id": "old", "method": "message/send", "params": {
+            "message": {"role": "user", "taskId": task_id, "messageId": "m",
+                        "parts": [{"kind": "text", "text": "request"}]},
+        }}).json()["result"]
+        assert old["status"]["state"] == "failed" and not old.get("artifacts")
+        assert old["status"]["message"]["parts"][0]["text"] == (
+            "the host restarted before answering; the message was not carried over"
+        )
+        assert [message["messageId"] for message in old["history"]] == ["m"]
+        assert daemon._task_path(task_id).read_bytes() == before
+        assert len(requests) == 2 and dispatched == []
+        complete = True
+        current = client.post("/", json={"jsonrpc": "2.0", "id": "current", "method": "tasks/get",
+                                        "params": {"id": task_id}}).json()["result"]
+        assert current["status"]["state"] == "completed"
+        assert current["artifacts"][0]["parts"][0]["text"] == "answer to M2"
+        record = daemon._load_task(task_id)
+        assert record["ouroboros"]["client_message_id"] == current_id
+        assert record["status"]["state"] == "completed" and dispatched == []
 
 
 def test_sdk_list_reads_local_snapshots_off_loop_and_get_refreshes_one_task(tmp_path, monkeypatch):

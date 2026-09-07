@@ -70,6 +70,7 @@ _SUPERSEDED_CANCEL_MESSAGE = (
     "The previous host operation was cancelled, but the task now belongs to another message; "
     "the current operation was not cancelled."
 )
+_HOST_LOST_MESSAGE = "the host restarted before answering; the message was not carried over"
 
 
 def _is_loopback(host: str) -> bool:
@@ -550,10 +551,11 @@ def _refresh_task_record(task_id: str) -> "Dict[str, Any] | None":
         return None
     bound = record.get("ouroboros") or {}
     view = _read_operation_sync(str(bound.get("operation_ref") or ""))
-    states = {"completed": "completed", "cancelled": "canceled", "failed": "failed", "rejected_duplicate": "rejected"}
+    states = {"completed": "completed", "cancelled": "canceled", "failed": "failed",
+              "rejected_duplicate": "rejected", "lost": "failed"}
     state = states.get(str((view or {}).get("status") or ""))
     if state:
-        text = str(view.get("text") or "")
+        text = _HOST_LOST_MESSAGE if view.get("status") == "lost" else str(view.get("text") or "")
         return _update_task_record(task_id, state=state, message=text if state != "completed" else "",
                                    artifacts=[{"parts": [{"kind": "text", "text": text}]}] if state == "completed" else None,
                                    expected_message_id=str(bound.get("client_message_id") or ""))
@@ -564,7 +566,7 @@ def _sdk_task_store():
     """Adapt the SDK to the SAME durable Hub task record used by the fallback."""
     from a2a.server.owner_resolver import resolve_user_scope
     from a2a.server.tasks.task_store import TaskStore
-    from a2a.types import Task
+    from a2a.types import Message, Task
     from google.protobuf.json_format import MessageToDict, ParseDict
 
     states = {"submitted": TaskState.TASK_STATE_SUBMITTED, "working": TaskState.TASK_STATE_WORKING,
@@ -578,6 +580,10 @@ def _sdk_task_store():
         task_id = record["id"]
         task = ParseDict(record["sdk_task"], Task()) if record.get("sdk_task") else Task(id=task_id, context_id=record.get("contextId") or task_id)
         task.status.state = states.get(str((record.get("status") or {}).get("state") or ""), TaskState.TASK_STATE_WORKING)
+        message = (record.get("status") or {}).get("message")
+        if message:
+            task.status.message.CopyFrom(Message(role=Role.ROLE_AGENT, message_id=uuid.uuid4().hex,
+                parts=[Part(text=str(part.get("text") or "")) for part in message.get("parts", [])]))
         current = str((record.get("ouroboros") or {}).get("client_message_id") or "")
         source = next((m for m in reversed(task.history) if m.role == Role.ROLE_USER), None)
         if current and source and _client_message_id(task_id, source.message_id) != current:
@@ -683,10 +689,15 @@ def _sdk_request_handler(card):
             # Reconcile M1 through the same host operation; do not write M2.
             view = await asyncio.to_thread(_read_operation_sync, _operation_ref(bound["chat_id"], expected))
             state = {"completed": TaskState.TASK_STATE_COMPLETED, "cancelled": TaskState.TASK_STATE_CANCELED,
-                     "failed": TaskState.TASK_STATE_FAILED, "rejected_duplicate": TaskState.TASK_STATE_REJECTED}.get((view or {}).get("status"))
+                     "failed": TaskState.TASK_STATE_FAILED, "rejected_duplicate": TaskState.TASK_STATE_REJECTED,
+                     "lost": TaskState.TASK_STATE_FAILED}.get((view or {}).get("status"))
             if state is None:
                 raise InvalidParamsError(message="previous message outcome is not confirmed; current task is unchanged")
-            return Task(id=task_id, context_id=task.context_id, status=TaskStatus(state=state), history=[original],
+            status = TaskStatus(state=state)
+            if view.get("status") == "lost":
+                status.message.CopyFrom(Message(role=Role.ROLE_AGENT, message_id=uuid.uuid4().hex,
+                                                parts=[Part(text=_HOST_LOST_MESSAGE)]))
+            return Task(id=task_id, context_id=task.context_id, status=status, history=[original],
                         artifacts=[Artifact(artifact_id=uuid.uuid4().hex, parts=[Part(text=str(view.get("text") or ""))])]
                         if state == TaskState.TASK_STATE_COMPLETED else [])
 
@@ -1432,7 +1443,7 @@ def _wait_final_after_expiry_sync(chat_id: int, deadline_monotonic: float, opera
             if status in ("failed", "rejected_duplicate"):
                 raise RuntimeError(f"host work ended {status}: {view.get('text') or ''}".rstrip(": "))
             if status == "lost":
-                raise RuntimeError("the host restarted before answering; the message was not carried over")
+                raise RuntimeError(_HOST_LOST_MESSAGE)
         elif not operation_ref:
             answer = _fetch_final_answer_sync(chat_id)
             if answer is not None:

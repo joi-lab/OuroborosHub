@@ -113,6 +113,8 @@ or the daemon restarted. After a wait expiry the bridge reads
 `GET /chat/operations/{operation_ref}` (a late answer, a promoted task's
 terminal status, or `lost` after a host restart). Unavailable exact-operation
 state remains unknown; a named message never takes another chat answer.
+Confirmed `lost` becomes a failed Task with the host-restart explanation,
+including reconnect reads and replay of the original message.
 Legacy unnamed single-use dispatch retains its chat-log fallback.
 
 Named recovery and cancellation require a Host with

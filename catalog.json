@@ -9,8 +9,8 @@
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "607876ee565d999c03accfe96e77b78121d346751f95f7b44df53c626037e1b9",
-          "size": 8016
+          "sha256": "fbb16e5c4486429950a0bf1b4157f236846cb757bb44e891793d061f1cd50d44",
+          "size": 8152
         },
         {
           "path": "lib/client.py",
@@ -24,8 +24,8 @@
         },
         {
           "path": "scripts/a2a_daemon.py",
-          "sha256": "2b6b7ae05716410a0997c328fe7ee6fef80b46a304aed96e87c73c59eafe705f",
-          "size": 75616
+          "sha256": "797ddf111123bd60c19d8df9e9f8e226c238b29a3f232629bcfa83930274c37c",
+          "size": 76355
         },
         {
           "path": "tests/test_a2a_agent_card.py",
@@ -44,8 +44,8 @@
         },
         {
           "path": "tests/test_a2a_operation_ownership.py",
-          "sha256": "25184e3b96d1b82390674b05bead2c19ea65c21edd2da477c41e225f4b463c72",
-          "size": 28820
+          "sha256": "aef9914129f0b2f3ee1d011a67c1c9c17e362a65a9eedf665e8e3b0b291ae7d0",
+          "size": 34919
         },
         {
           "path": "tests/test_a2a_sdk_card_shape.py",
