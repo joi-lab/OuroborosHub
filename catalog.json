@@ -1045,6 +1045,28 @@
           "package": "python-docx"
         }
       ]
+    },
+    {
+      "author": "kuznetsoffandrey",
+      "description": "Health data from Sber Smart Ring (Life Balance): HR, HRV, SpO2, sleep, steps, stress, temperature.",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "sha256": "ec2d106c14f201e47244184fa70411d3c74159d7da2bbe984dae0d06c78601e7"
+        },
+        {
+          "path": "client.py",
+          "sha256": "8947d974fbf8593112a8756b3621133ff2609b16f3450f39476b227816218feb"
+        },
+        {
+          "path": "plugin.py",
+          "sha256": "d024df9638941702758d37ae95c45579ed4b444c44cfc2694ac5161b2824a56c"
+        }
+      ],
+      "name": "sber-ring",
+      "type": "extension",
+      "version": "1.0.0",
+      "slug": "sber-ring"
     }
   ]
 }
