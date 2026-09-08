@@ -9,33 +9,53 @@
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "336a65411a101cec8267927897d01ba66788e5f48d965234764cbd058713126b",
-          "size": 2005
+          "sha256": "fbb16e5c4486429950a0bf1b4157f236846cb757bb44e891793d061f1cd50d44",
+          "size": 8152
         },
         {
           "path": "lib/client.py",
-          "sha256": "9d56903e05213b7d44aa65e8f992a80f4b9b82646eaa7de967770eac8406f46d",
-          "size": 3164
+          "sha256": "46c8a399d5f1353a381fb63c6db12266d4a5b61fb080377e3e927e5e87e6aa1c",
+          "size": 4399
         },
         {
           "path": "plugin.py",
-          "sha256": "2266580933c4b303e9124e8d5f195f16f09e4904e187b9a6cd47dbebb1f5b878",
-          "size": 4149
+          "sha256": "69f25d60971b39b93955ea23bd75f3e3aa5ec278b2c0062d9bb33caa0212b3d1",
+          "size": 4990
         },
         {
           "path": "scripts/a2a_daemon.py",
-          "sha256": "4efb38ee17dfc887e96ea52183a357ab240ac1800d4956a64c47994e34f83035",
-          "size": 20237
+          "sha256": "797ddf111123bd60c19d8df9e9f8e226c238b29a3f232629bcfa83930274c37c",
+          "size": 76355
         },
         {
           "path": "tests/test_a2a_agent_card.py",
-          "sha256": "f455410e3173608b2c9ceb8c392fcf9d8a7576554ba7a06ef5e6d416c9fcf26a",
-          "size": 8982
+          "sha256": "0e89a8e5c2e3df8e3a13fd165f1898e2fde8b24df47e9e13a6fda50c8987f703",
+          "size": 10068
+        },
+        {
+          "path": "tests/test_a2a_client_auth.py",
+          "sha256": "e40dd52eebabcc8afdc377435d73b4467730eeb5cc4821b199431db4596545aa",
+          "size": 2081
         },
         {
           "path": "tests/test_a2a_daemon_safety.py",
-          "sha256": "98fbb7c4b4fa535df7f4c6928925198fefc961c107723f9412f24ff80b87e2a5",
-          "size": 3411
+          "sha256": "a32e9fa5d067f2b098b736b72b21858d1a37a4ef7aaedca518e24fe48fc0b23e",
+          "size": 16171
+        },
+        {
+          "path": "tests/test_a2a_operation_ownership.py",
+          "sha256": "aef9914129f0b2f3ee1d011a67c1c9c17e362a65a9eedf665e8e3b0b291ae7d0",
+          "size": 34919
+        },
+        {
+          "path": "tests/test_a2a_sdk_card_shape.py",
+          "sha256": "02f99f4c1e970f1e993983e71bda2d24abd839f6ec0ff26dbf079a1fd1883a7f",
+          "size": 3551
+        },
+        {
+          "path": "tests/test_a2a_stream_dispatch.py",
+          "sha256": "dd06f713984dffd9e0a91fc59596485be5842fb188d17ffcab5284b781b1c021",
+          "size": 13579
         }
       ],
       "install_specs": [
@@ -51,7 +71,7 @@
       "name": "a2a",
       "slug": "a2a",
       "type": "extension",
-      "version": "1.1.1",
+      "version": "1.4.0",
       "when_to_use": "User asks to communicate with another A2A-compatible agent, discover an agent card, send an A2A message, check A2A task status, or expose this Ouroboros instance as an A2A peer."
     },
     {
@@ -59,8 +79,8 @@
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "6f14a56b4739a0eac1282916254118f3a73897d2d400ca93fe6bead7dc2476ab",
-          "size": 3240
+          "sha256": "d6bb32085b74866ccb8ce17e8163a46de52254d8ad880c0224122330fdc56246",
+          "size": 3258
         },
         {
           "path": "listener.py",
@@ -73,7 +93,7 @@
           "size": 16606
         }
       ],
-      "name": "AgentRQ Bridge",
+      "name": "agentrq-bridge",
       "slug": "agentrq-bridge",
       "type": "extension",
       "version": "0.1.0",
@@ -84,8 +104,8 @@
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "2fa4fcdd002383529cad26f6f4e40135f91c295c8fcecd1ab5a4490392f4c0fe",
-          "size": 9580
+          "sha256": "3ac40cf8c96f0eb720104c8c7869adffda23cd4faabb92f14b2937378d2df176",
+          "size": 32033
         },
         {
           "path": "__init__.py",
@@ -94,23 +114,43 @@
         },
         {
           "path": "api_client.py",
-          "sha256": "49b8ba023b52cc99d5a065e10e809cc21c9e70b75ba37f6c0468a8935f51f5fc",
-          "size": 34549
+          "sha256": "7f9c3b9239f811db979f7399afbc9843017d6a2f2e377c36e64d31b126e114b3",
+          "size": 44178
+        },
+        {
+          "path": "budget.py",
+          "sha256": "252d8e3560f56dde9049b778d1eabf1a52298dad760536c3b2f08d3df052e0fd",
+          "size": 8087
         },
         {
           "path": "ffmpeg_bootstrap.py",
-          "sha256": "7834ff3bb3af3dc2bc0420efde131a428a4f1c5ced10d02a61d9dd1dd62ed7b7",
-          "size": 9737
+          "sha256": "33d0c864f2ac1eed18df9770e79f72c7956f4f62677d08ff92adf89003f9838a",
+          "size": 3053
+        },
+        {
+          "path": "host_bridge.py",
+          "sha256": "f9f8fc66304f8091e06ab48617cc53339a5e4de9fc831f69cf7556e4170cdf54",
+          "size": 6526
+        },
+        {
+          "path": "judges.py",
+          "sha256": "6f660b6ea0bdcc79f52ce93e56719a6e08543b10bde6fad887563188631cc2ee",
+          "size": 18882
         },
         {
           "path": "models.py",
-          "sha256": "4c252f008f41b7cce41802eb9eaf3d58f175184bd4d398db370c5098bb6ff387",
-          "size": 6565
+          "sha256": "17a25a6510b4e5924e6fc4a5691a0203de0b69d829bc454e9d51a26c99e21990",
+          "size": 7517
+        },
+        {
+          "path": "modes.py",
+          "sha256": "bd8e691838066c3cd71456dc05beac769793a13424bf33a5c4054ac578555b91",
+          "size": 2357
         },
         {
           "path": "pipeline.py",
-          "sha256": "355e782e66999a3f8fb3185ea8af2e7217fc21e3f8a57cd1f0be9c6d366d19a9",
-          "size": 64009
+          "sha256": "e63dbca11197257ebfa04416b2984b0d8ef9a8a08f116339ebd06a049557ea47",
+          "size": 146684
         },
         {
           "path": "pipeline_test.txt",
@@ -119,23 +159,23 @@
         },
         {
           "path": "plugin.py",
-          "sha256": "8ab6a5f0b43cfc2ed0bf40e1f74a8170955ef8045f57ce0021e101d035e9faca",
-          "size": 16777
+          "sha256": "e42f7afb825f4ec53dcd51fea0a3f9e223fa1193fc6afddf88aa5dd670333189",
+          "size": 24518
         },
         {
           "path": "prompts.py",
-          "sha256": "2e4330bef6f4527d1492b106a97b76fee891134a50aff020def236608aeccae1",
-          "size": 15149
+          "sha256": "eeacb5ead77aff1e8265ba1b0a994b0372be47abb23efa4e3cebcb4f01533b27",
+          "size": 19256
         },
         {
           "path": "scripts/anime_worker.py",
-          "sha256": "6d81d3dab03051ad69680fa93d4337bf95f60498cbd3a09d5f9e8fbc12b60281",
-          "size": 7998
+          "sha256": "b2ac92acaf769a82f8353bea19689738031131b24a971c2c48acdc16a864e1ef",
+          "size": 18358
         },
         {
           "path": "tests/test_api_client_vlm_helpers.py",
-          "sha256": "05664cbe3999ab66af4b3732d575376ae0c2387d3b8201ab3d3b5c3033915b03",
-          "size": 1139
+          "sha256": "6fed5827bb42cad919a301789785ae0a831daf67029555358004a6841d78fb25",
+          "size": 1616
         }
       ],
       "install_specs": [
@@ -144,7 +184,7 @@
       "name": "anime_studio",
       "slug": "anime_studio",
       "type": "extension",
-      "version": "2.12.0",
+      "version": "3.2.0",
       "when_to_use": "User wants to generate a short animated 2D anime cartoon, music video, or animated scene with consistent characters, VLM verification, and narrative continuity."
     },
     {
@@ -152,8 +192,8 @@
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "88f0c573974f53b84347d3060561de4d8e87822a57467b08242a2024c907ece8",
-          "size": 4197
+          "sha256": "d65adfeefe5700553d717fb003635709ada3c322bffbb70f01f54d807ff0f0c1",
+          "size": 4215
         },
         {
           "path": "plugin.py",
@@ -182,31 +222,96 @@
       "version": "0.5.0"
     },
     {
-      "description": "Honest bounded-suffix cache-read analysis with token-weighted charts.",
+      "description": "Interactive dark-glassmorphic cache observability dashboard with multi-timeframe analytics, token-weighted hit rates, cost savings, and Canvas 2D charts.",
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "315d70db95d352b9eaf0e5c5ca35cac289dd9f55b63b896bf8dc7914c11013f5",
-          "size": 2393
+          "sha256": "044ee2d34f57bfb139ebe443a35258dd00b9460b28ad747eb7e7afa9fde6f1d8",
+          "size": 2221
         },
         {
           "path": "plugin.py",
-          "sha256": "d4e122d299ec80cb85d4084f2e5f1e87270eb473f74d0e23b1d60549ecebe803",
-          "size": 18389
+          "sha256": "8bba998dc4503b67d7e8fe1cf900882bccc55e1a20f8927edc093bb6734ec809",
+          "size": 20946
+        },
+        {
+          "path": "test_cache_efficiency.py",
+          "sha256": "fd1813a5589d3c3b9e2c3f0abc078d41294bf62f485f39797cab3ea1704144e7",
+          "size": 8170
+        },
+        {
+          "path": "widget.js",
+          "sha256": "f3b1acad8689e0c25b92002e68edd67381355e65f88e22bf239f1003f81e95ea",
+          "size": 32579
         }
       ],
       "name": "cache_efficiency_snapshot",
       "slug": "cache_efficiency_snapshot",
       "type": "extension",
-      "version": "0.2.0"
+      "version": "0.3.0"
+    },
+    {
+      "description": "Fully playable Classic Doom (1993) standalone 2.5D FPS raycaster extension widget with textured walls, procedural sprite enemies, authentic weapons, levels, HUD, Web Audio sound and heavy metal music synthesizer.",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "sha256": "96ccc5085d6f80c15ac87a9c214756a37900dde0ac0126cb206af731cbecfdcd",
+          "size": 2608
+        },
+        {
+          "path": "plugin.py",
+          "sha256": "f3c1d4e84270dd407a737e335c610ac78575197088cf293f7abddf94aee13a6f",
+          "size": 1224
+        },
+        {
+          "path": "widget.js",
+          "sha256": "5c8914a7931cf2712e10b4ee73a0b49f2659befdd8bc474bc90ce1eeb56eb147",
+          "size": 257233
+        }
+      ],
+      "name": "classic-doom",
+      "slug": "classic-doom",
+      "type": "extension",
+      "version": "1.0.0",
+      "when_to_use": "When the user wants to play an authentic Classic Doom (1993) 2.5D FPS raycaster game directly in an Ouroboros extension widget with monsters, weapons, sound effects, and heavy metal synth."
+    },
+    {
+      "description": "Quota widget showing fresh and last-known limits for every authorized Claudexor account, with honest foreground refresh and per-facet read state. Writes nothing but the reader's display choices, into its own state directory.",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "sha256": "40bc30bfd7c5d3e175495f9307b2b03661ee2fb1e1498105ad587752b54698e2",
+          "size": 8590
+        },
+        {
+          "path": "plugin.py",
+          "sha256": "ccb735a3af1a1d8c096a977a17249a4f9ccf70270b5cbd1f55a177dea344681b",
+          "size": 30178
+        },
+        {
+          "path": "test_quotas.py",
+          "sha256": "ac283b45d048415da0150fba9e52e4d3f97834fab383002044b3ee89fb9583a7",
+          "size": 52027
+        },
+        {
+          "path": "widget.js",
+          "sha256": "5d3b81808dab254923cf98b924c8d00f95a771aaee03134c1dd542dba5bae574",
+          "size": 143332
+        }
+      ],
+      "name": "claudexor_quotas",
+      "slug": "claudexor_quotas",
+      "type": "extension",
+      "version": "0.4.1",
+      "when_to_use": "The owner wants to see, at a glance, the quota windows, limits and reset times of every authorized Claudexor account, including which facets could not be read."
     },
     {
       "description": "Web search via DuckDuckGo — free, no API key required. Returns titles, URLs, and snippets.",
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "350a4e9a15a4135ddab6bfa376e1b3094bca9974e34f8fa5db8c31d7e066846a",
-          "size": 1733
+          "sha256": "027b309de85882eec195df66da676533489a87fe3db86a36efc370fb0a626666",
+          "size": 1751
         },
         {
           "path": "plugin.py",
@@ -224,12 +329,167 @@
       "when_to_use": "User asks to search the web, find information, look up facts, or research a topic — and no OpenAI key is available for web_search."
     },
     {
+      "description": "GDELT Cloud geopolitical intelligence: conflict events, news stories, entity graph, energy infrastructure, macro-finance, prediction markets, and web research via MCP Progressive Discovery.",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "sha256": "a5558927c2bb863dd36d4d761d722611e9369e8578e687faf5f48d8b978701a8",
+          "size": 3656
+        },
+        {
+          "path": "plugin.py",
+          "sha256": "b4eab5b86be3188f443da1c8837994c35ef20f3639e5108e8c237ae8653ddf59",
+          "size": 20160
+        }
+      ],
+      "name": "gdelt-mcp",
+      "slug": "gdelt-mcp",
+      "type": "extension",
+      "version": "0.1.0",
+      "when_to_use": "User asks about geopolitical events, conflict data, news stories, entities, energy infrastructure, macro-finance indicators, prediction markets, or needs real-time structured intelligence. Covers: armed clashes, protests, disasters, political events, CAMEO+ coded events, clustered news stories with article evidence, entity profiles, GEM energy assets, macro-finance quotes/series, Kalshi prediction market probabilities, and web research with source extraction."
+    },
+    {
+      "description": "Comprehensive, charming, and fully playable Happy Farm game widget with crops, livestock, economy, orders, day-night/weather cycles, and audio.",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "sha256": "e78cc4cfc909da67fb55d39a3d5d7622cc5ae47900467b44a6bde42f121b97f6",
+          "size": 1671
+        },
+        {
+          "path": "plugin.py",
+          "sha256": "51eeaa83235a877f484336149c79149ca1e3aeeb42cea0b39c6bc2a27d52f4e0",
+          "size": 7849
+        },
+        {
+          "path": "test_happy_farm.py",
+          "sha256": "2633d86d31766082c242b041d8dee6b6e6a7d49efe677e561bfb79052bfa10b1",
+          "size": 4357
+        },
+        {
+          "path": "widget.js",
+          "sha256": "c330441a76b578c3b774fd58bfa78d32c77dbc39c660b556e9a5d91d3da4a4fa",
+          "size": 86895
+        }
+      ],
+      "name": "happy_farm",
+      "slug": "happy_farm",
+      "type": "extension",
+      "version": "0.1.0",
+      "when_to_use": "When the user wants to play a cozy farming simulation game in an Ouroboros widget with crops, livestock, crafting, progression, and rich audiovisuals."
+    },
+    {
+      "description": "Генерирует и редактирует медиа через Kandinsky: рисует изображения по описанию, перерисовывает и правит существующие картинки, повышает разрешение и качество, создаёт короткие видео по тексту или из фотографии, оживляет изображения и делает говорящие аватары из фото и аудио. Используй всякий раз, когда пользователь хочет создать или изменить визуальный контент — «нарисуй», «сгенерируй картинку», «сделай логотип, иллюстрацию, обои, постер, открытку, иконку, стикер, мем или аватарку», «перерисуй, поправь или отфотошопь фото», «дорисуй», «убери или замени фон», «замени лицо», «улучши качество, увеличь, апскейл», «сделай видео», «оживи картинку», «заставь фото говорить», «липсинк», «озвучь аватар» — даже если слово «Kandinsky» не прозвучало. Различай: «аватарка» как картинка профиля — это обычная генерация изображения (kandinsky_image), а «говорящий аватар» из фото и аудио — это kandinsky_avatar. Не для поиска готовых картинок в интернете, распознавания и описания фото, построения графиков по данным.",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "sha256": "2b426222a5ce27528bcf21f3d2e5a2be8779531d144944c48ea24f22243e800c",
+          "size": 13610
+        },
+        {
+          "path": "core/__init__.py",
+          "sha256": "5066a7b850a71988ce2131b3d3a54e13df20d08cf8f13328215f6f1684ea1545",
+          "size": 2216
+        },
+        {
+          "path": "core/config.py",
+          "sha256": "be16015da8fc06f8d0e304c700a50e9a48d7ceff827fd968ecad790a3ffdf701",
+          "size": 10467
+        },
+        {
+          "path": "core/delivery.py",
+          "sha256": "3a3fff08db355acfe594f56edc71bade17f75e4d7c1082f4f088a29ce0f8d134",
+          "size": 7131
+        },
+        {
+          "path": "core/endpoints.py",
+          "sha256": "165abf7e47fa047d2a3609c3e24457a3f8fc8ba8f3f656679d3a6214bfdf5738",
+          "size": 21005
+        },
+        {
+          "path": "core/security.py",
+          "sha256": "ddd38345614c3263afb1e8393cf76eefb246ab13782f4e913595b9dbf81a7b16",
+          "size": 15394
+        },
+        {
+          "path": "core/util.py",
+          "sha256": "5728ddf8d46ff6848d19eed5e2e7c1dd582526d95137ffed7ace2111694b654c",
+          "size": 2831
+        },
+        {
+          "path": "lib/__init__.py",
+          "sha256": "78df6d3221718e5ec1ecc4edc13889f48821b27acd5e9e00cd7fa0e9b49762f9",
+          "size": 207
+        },
+        {
+          "path": "lib/kandinsky.py",
+          "sha256": "d60b89a599f18606947af811ccabf665d51dfa0fb7b867687a854cfbd7449c8b",
+          "size": 23048
+        },
+        {
+          "path": "plugin.py",
+          "sha256": "5504b580d9a32d4f9d356995082c50188d1c4527d251c2c3ed4548758ba4f316",
+          "size": 2423
+        },
+        {
+          "path": "references/api-cheatsheet.md",
+          "sha256": "1e21c52a76f60ef85bda642ee264f0a2ec59f28247c1a6a034bbca59ed825cfa",
+          "size": 3486
+        },
+        {
+          "path": "references/prompting.md",
+          "sha256": "ff4f427167e5869e6e103d840ab80db0c876760a7eb48190b17d2fd861019ade",
+          "size": 4040
+        }
+      ],
+      "name": "kandinsky-skill",
+      "slug": "kandinsky-skill",
+      "type": "extension",
+      "version": "1.0.2",
+      "when_to_use": "Пользователь просит создать или изменить изображение либо видео (генерация, не поиск). Граница и пограничные случаи: если просят НАЙТИ готовое изображение в интернете, ОПИСАТЬ или распознать содержимое присланного фото, либо построить график по числам — это НЕ сюда. «Аватарка/аватар как картинка профиля» — обычная генерация изображения (kandinsky_image), а не kandinsky_avatar. Маршрут по глаголу: «отфотошопь, поправь, дорисуй, замени фон, замени лицо» существующее фото → kandinsky_edit_image; «улучши качество, увеличь, апскейл» → kandinsky_upscale; «оживи картинку, добавь движение» (без звука) → kandinsky_animate; «заставь фото говорить, липсинк, озвучь по аудио» (нужны фото и аудиофайл) → kandinsky_avatar."
+    },
+    {
+      "description": "Keenable web search and page fetch over the vendor's keyless MCP endpoint.",
+      "files": [
+        {
+          "path": "OPERATOR_NOTES.md",
+          "sha256": "2320e4c2a5aadc41cc5f6c3aaaef9ea805ebe23bf2175e21175751e44e055dd1",
+          "size": 19377
+        },
+        {
+          "path": "SKILL.md",
+          "sha256": "f9cb49332f6bd54b3733a021be2512c2176d442900ff9ef9ef48eeb329657cf8",
+          "size": 23605
+        },
+        {
+          "path": "keenable_client.py",
+          "sha256": "40cac213d4dd30c80ba2c4ab52402829bc5c19c951e143a6a2a3b37a7e7c8b70",
+          "size": 63845
+        },
+        {
+          "path": "plugin.py",
+          "sha256": "a16c96abf1f5ee0cac4353c2097a542f35500c4e0460ad1a8b281d893d1a979c",
+          "size": 46756
+        },
+        {
+          "path": "verify_envelope_bounds.py",
+          "sha256": "ba2b15943115a088d01e035246f0f81f86a9b3fa23ac968ece4a30310190ee9d",
+          "size": 17569
+        }
+      ],
+      "name": "keenable",
+      "slug": "keenable",
+      "type": "extension",
+      "version": "0.3.1",
+      "when_to_use": "The user wants web search or page extraction through Keenable, especially for fresh pages, site-scoped or date-filtered retrieval, or an LLM-extracted summary of one page."
+    },
+    {
       "description": "Generate a music clip from a text prompt via OpenRouter's Google Lyria model and play it directly inside the widget. Files are persisted to the skill's private state directory and streamed through an extension route for both inline playback and download.",
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "2aa533db76e5b2688f699162bef835afb2b5a6ef55386d5b9d392538e425e9b6",
-          "size": 3716
+          "sha256": "3e2ad8e11b8cdbe84c5426f40465b24de03134e2c9ccb162f74584e3efc3eb60",
+          "size": 3734
         },
         {
           "path": "plugin.py",
@@ -247,8 +507,8 @@
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "fce5d7117e7c9802ff2feddd0d5e40487120a0cfae8e7f2e1ce430f2922b76c1",
-          "size": 4616
+          "sha256": "c39455f61fe0949439d90b04388b3a342dd1bebc0eccc5c006a6b6c5e5843bbc",
+          "size": 4634
         },
         {
           "path": "plugin.py",
@@ -267,8 +527,8 @@
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "5ff32096a17097ec7d7cffa50d88997d14f78cb936957b526d3d6f6c4b892f74",
-          "size": 2125
+          "sha256": "cea1db68e9606a6ccc8225928e091b12c9dd5aff3fa85164852e203058bc82a1",
+          "size": 2143
         },
         {
           "path": "plugin.py",
@@ -286,8 +546,8 @@
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "8a8d76e88d4c452a0ff4541dcf89d519b431c91efa93ad901d8eda43a9de9df3",
-          "size": 7301
+          "sha256": "f452f334dc68e0aac47c0b24245dc5745eb8322ff14d41aa79570da2d2e0c88d",
+          "size": 7319
         },
         {
           "path": "plugin.py",
@@ -305,8 +565,8 @@
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "ec97affdfef2e785d74019433e807fc83d6914d8c2cab7b8130368942f3ee738",
-          "size": 4763
+          "sha256": "4ee8dff9eed0d506e263e9960846f61d24f1fea83383dd0ca66dcb47053cfd6a",
+          "size": 4781
         },
         {
           "path": "core.py",
@@ -325,12 +585,60 @@
       "version": "2.2.0"
     },
     {
+      "description": "Generate 3D scenes from satellite imagery using Sat3DGen (ICLR 2026). Sends a satellite image to the HuggingFace Space API and returns a textured 3D mesh (.obj) plus an interactive Three.js viewer.",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "sha256": "68984be7894d2240d66a9d061a1e0bf9f21708d3ce3b7533ff9969bf84345ce0",
+          "size": 1705
+        },
+        {
+          "path": "scripts/generate.py",
+          "sha256": "5f5a1ccfac035d1c6f433ccc927b84ad06608b855e25eade5c6fea6bba402495",
+          "size": 10291
+        }
+      ],
+      "install_specs": [
+        "gradio_client>=1.0"
+      ],
+      "name": "sat3dgen",
+      "slug": "sat3dgen",
+      "type": "script",
+      "version": "1.0.0"
+    },
+    {
+      "description": "Local second-opinion layer over the owner's own medical data — genome (VCF), laboratory history, prescriptions, wearables. 30 tools; answers carry provenance and say what the data cannot support. Not a medical device.",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "sha256": "394f3ad418bb617e9c69dc0efc68d2a98d9abc2519b75022357b14cc17fd8455",
+          "size": 5946
+        },
+        {
+          "path": "plugin.py",
+          "sha256": "63aea4c97b1f11f5ef925eb173ca42ff44a3eff13dc8fea0698706f7d8dcc594",
+          "size": 15212
+        }
+      ],
+      "install_specs": [
+        {
+          "kind": "pip",
+          "package": "scholion"
+        }
+      ],
+      "name": "scholion",
+      "slug": "scholion",
+      "type": "extension",
+      "version": "0.4.7",
+      "when_to_use": "The owner asks about their own medical data — check a new prescription as a second opinion (pharmacogenetics, interactions with the current regimen, monitoring labs), review laboratory results and trends, look up a locus or clinically significant ClinVar findings in their VCF, polygenic scores, longevity findings, sleep and lifestyle metrics, movement toward a health goal, which tests to take next, or a pre-visit summary."
+    },
+    {
       "description": "Bidirectional Telegram bot bridge for Ouroboros with configurable command modes, inline keyboard control panel, file/document delivery, and optional silent (edit-in-place) mirror.",
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "24d7b7e609ce6ef5c26f33a572411f69b333a1757b275b36d01ba0a1f841bf8a",
-          "size": 6672
+          "sha256": "d9c9a1a8adcc29895796f64b21209499dad597be652e87e99a4ed5888b6a3e31",
+          "size": 6690
         },
         {
           "path": "lib/telegram_api.py",
@@ -395,6 +703,116 @@
       "when_to_use": "User wants to communicate with Ouroboros through Telegram."
     },
     {
+      "description": "Automatic owner-only Telegram Mini App gateway for the unchanged Ouroboros SPA, using a temporary Cloudflare Quick Tunnel that terminates at a skill-owned Telegram-auth sidecar.",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "sha256": "6e9edffd202c257f8a60c48a3cfcb3dd88eff3cd7d1ae66f44300716ab201397",
+          "size": 6909
+        },
+        {
+          "path": "plugin.py",
+          "sha256": "e38bce12fb5db1ac41c1c84bc612d853e15ff478f2618dfcf68b27b213c2157f",
+          "size": 12070
+        },
+        {
+          "path": "scripts/cloudflare_tunnel.py",
+          "sha256": "841fcee437383edf0d97d9051de6e94f85dfec18913706142247828b8b7f02ed",
+          "size": 32446
+        },
+        {
+          "path": "scripts/companion.py",
+          "sha256": "ab0d97af77f3e52ed0de5084d3ebb162fc9f40363f2c5dd7416b12e85d54751e",
+          "size": 67225
+        },
+        {
+          "path": "scripts/platform_support.py",
+          "sha256": "62fcdc7ee305d9c74c61d63c4373c9771ea52b7e831ef8f14ec1ec7ea956546b",
+          "size": 12563
+        },
+        {
+          "path": "scripts/runtime_status.py",
+          "sha256": "6f18c538425efff6fb5ffe3376931c4f03803b5718101201b6590d5b7858826e",
+          "size": 5878
+        },
+        {
+          "path": "scripts/sidecar.py",
+          "sha256": "c17a2ca90a70865ffe30495281afed3ff61c6bd2258d6d882c42d0cf6eaa1e33",
+          "size": 39369
+        },
+        {
+          "path": "scripts/telegram_bridge_mode.py",
+          "sha256": "c1374cd1796732552072bf2232a2a6bff275854771ad3ab46e76f368f00d6e01",
+          "size": 14832
+        },
+        {
+          "path": "scripts/telegram_menu.py",
+          "sha256": "fc869b5cb137e30c83e01a7097aa3b021e2365c40244061ab0565bb32c5ba4ff",
+          "size": 17143
+        },
+        {
+          "path": "scripts/tunnel_watchdog.py",
+          "sha256": "3cdcdf4438fcb433d6c7bf6f1fcd2bfbf0cbec825a30ed9e2fdf32f2952afa49",
+          "size": 1882
+        },
+        {
+          "path": "tests/test_cloudflare_tunnel.py",
+          "sha256": "952eabeb6abce3cf7a02d4baad80db585ea0276d714e4d5362791dab716a15ed",
+          "size": 22380
+        },
+        {
+          "path": "tests/test_companion.py",
+          "sha256": "eb99ccd50eaf14f7f76c6208088a693ed87f38f519eeb32220bdff835b992e22",
+          "size": 23070
+        },
+        {
+          "path": "tests/test_lifecycle.py",
+          "sha256": "0d9d22b703da947c1801236509b60d9f244eedf9e717af0f7a05cb67c84655b5",
+          "size": 33899
+        },
+        {
+          "path": "tests/test_platform_support.py",
+          "sha256": "4778637a2aa9e50873d60a458ca70d09d46cee29c77f520042ad2f098c74633f",
+          "size": 3064
+        },
+        {
+          "path": "tests/test_plugin.py",
+          "sha256": "e4abc4516313843a6cfcb448247910275e032ff74dd117ac0bc2ff6eb0e5f94d",
+          "size": 7973
+        },
+        {
+          "path": "tests/test_runtime_status.py",
+          "sha256": "2aa0e6b66f479f57da725b81abfafb1658c40683da3043af7cd290e7989ff5fe",
+          "size": 2397
+        },
+        {
+          "path": "tests/test_sidecar.py",
+          "sha256": "2d54ff8d1fd3b1889e0c41f3ff0c40160d0f63d9d9a53128eef08736dab32a72",
+          "size": 23859
+        },
+        {
+          "path": "tests/test_telegram_bridge_mode.py",
+          "sha256": "95940b84cbd7dd23412e032b6cd97c7441a7611f3a0324c953041133d9cfce9e",
+          "size": 5106
+        },
+        {
+          "path": "tests/test_telegram_menu.py",
+          "sha256": "891909b56b340e6bd98384e1086cfb51a77209914392a6d54ba1cdab04d299df",
+          "size": 6724
+        },
+        {
+          "path": "tests/test_tunnel_watchdog.py",
+          "sha256": "8f6c2503a275ea45c533e4d24749301b689903ddae18b3174864971b5ec3716f",
+          "size": 3954
+        }
+      ],
+      "name": "telegram-miniapp-poc",
+      "slug": "telegram-miniapp-poc",
+      "type": "extension",
+      "version": "0.3.0",
+      "when_to_use": "The owner wants to open and fully control the current Ouroboros web interface inside the existing private Telegram bot without a domain, Cloudflare account, app-store installation, or manually copied URL."
+    },
+    {
       "description": "Generate a short video clip via OpenRouter's video generation API using Seedance 2.0 (bytedance/seedance-2.0). Output is saved to the skill state directory.",
       "files": [
         {
@@ -418,8 +836,8 @@
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "e495d6af20d51ac48a0fccb06c1d57fc5933d6a941bda5430dc13144db5d3b49",
-          "size": 5972
+          "sha256": "3dc58cc277f947c023e8a1cdfeb7cdc33a9addd74aa087c5e44cf7354e0a6157",
+          "size": 5990
         },
         {
           "path": "__init__.py",
@@ -486,8 +904,8 @@
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "199e7406eba3cc9f63f8af6a03f61b4a37e2dd90ceee35205984e370ec24f97c",
-          "size": 3971
+          "sha256": "87dee6ed78f7719503bcb9acce6383d9bb8313d195651af52da6b9da35018e9a",
+          "size": 3989
         },
         {
           "path": "plugin.py",
@@ -500,6 +918,154 @@
       "type": "extension",
       "version": "0.3.2",
       "when_to_use": "User asks about weather, temperature, forecast, current conditions, wind, humidity, sunrise/sunset, or a weather dashboard for a city."
+    },
+    {
+      "description": "Read PDF documents page by page and build new PDF files from text or structured answers with Unicode-capable fonts.",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "sha256": "87420096cade4caf0646c117c79898b78e3b745b4a580839134e4135363871c1",
+          "size": 3098
+        },
+        {
+          "path": "scripts/make_pdf.py",
+          "sha256": "83c88d221ba828788ad0779e01daf06112f613c1a8c6fa923611a5a997e9200a",
+          "size": 7328
+        },
+        {
+          "path": "scripts/pdf_common.py",
+          "sha256": "fdf8ff8d47dfff8a8806e86d9bd07ed7b51c9f7a0bd143eb66f47ca9c6900c59",
+          "size": 7911
+        },
+        {
+          "path": "scripts/read_pdf.py",
+          "sha256": "aed4ed8000b35dc01b45926f1afe7411982e429fa3e73ef039d1c22d6bd77d9a",
+          "size": 5354
+        },
+        {
+          "path": "tests/test_pdf_tools.py",
+          "sha256": "d512988795de553e22114403eb312bea0e294e8d815926ce372074acd1604683",
+          "size": 4427
+        }
+      ],
+      "install_specs": [
+        {
+          "kind": "pip",
+          "package": "pypdf"
+        },
+        {
+          "kind": "pip",
+          "package": "reportlab"
+        }
+      ],
+      "name": "pdf_tools",
+      "slug": "pdf_tools",
+      "type": "script",
+      "version": "0.1.0",
+      "when_to_use": "The user attached a PDF and asks to read, summarize, search, or compare it, or asks to produce or export a PDF."
+    },
+    {
+      "description": "Inspect, filter, sort, group, and aggregate CSV and XLSX tables while reporting truncation and non-numeric values honestly.",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "sha256": "1a867118e28e4ef91b47bcbe5dab49d9cc2f7f413f5e0119d5e146d9eb9f64e3",
+          "size": 3386
+        },
+        {
+          "path": "scripts/query_table.py",
+          "sha256": "c964908cf9441eb0e218bc54ba7a2589db268eea5e925ddf7812ac5c43e66d59",
+          "size": 10827
+        },
+        {
+          "path": "scripts/read_table.py",
+          "sha256": "25e4b80ed21b34b7bd22156206ac1834d4e1d03b26c12e95a0eb2b0804dddf8c",
+          "size": 3695
+        },
+        {
+          "path": "scripts/table_common.py",
+          "sha256": "7e3f612f0271d17b1d6a2f5ed7fd36828f04f51f73439fef860acc4e0c7f9b1e",
+          "size": 16809
+        },
+        {
+          "path": "tests/test_table_tools.py",
+          "sha256": "128389ea22227f24098ee7e279bfcf1bb0b3aca5ad8b41a3fe2db2816639c6d3",
+          "size": 4622
+        }
+      ],
+      "install_specs": [
+        {
+          "kind": "pip",
+          "package": "openpyxl"
+        }
+      ],
+      "name": "table_tools",
+      "slug": "table_tools",
+      "type": "script",
+      "version": "0.1.0",
+      "when_to_use": "The user attached a CSV or XLSX file and asks to inspect, summarize, filter, compare, group, sort, or calculate from its data."
+    },
+    {
+      "description": "Read structured DOCX documents and build new Word documents from lightly structured text.",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "sha256": "3ec503185b9eb21c6d619164ee70557db67fe79be562a36c562504ef5bcc55e0",
+          "size": 2963
+        },
+        {
+          "path": "scripts/docx_common.py",
+          "sha256": "e83503fad86fd9806afd51caebe416f7878c35d63c2bded91f613c3b4d72aab5",
+          "size": 7456
+        },
+        {
+          "path": "scripts/make_docx.py",
+          "sha256": "271943206bb7a7891e0f2e606e4e01cb1f0c14ba6a3648c9c411d1b00a0224fb",
+          "size": 8801
+        },
+        {
+          "path": "scripts/read_docx.py",
+          "sha256": "547ba082404ba45e89a4571a5e5f98cd2ba48b6c683ad024372ef0efc29c8aa3",
+          "size": 10624
+        },
+        {
+          "path": "tests/test_word_tools.py",
+          "sha256": "23cf2e1c5c258c976367a1694b0249e419cf2fe8c30d3f99eb6c6f2337be7418",
+          "size": 4326
+        }
+      ],
+      "install_specs": [
+        {
+          "kind": "pip",
+          "package": "python-docx"
+        }
+      ],
+      "name": "word_tools",
+      "slug": "word_tools",
+      "type": "script",
+      "version": "0.1.0",
+      "when_to_use": "The user attached a Word document and asks to read, summarize, search, compare, or revise its contents, or asks to create a Word or DOCX file."
+    },
+    {
+      "author": "kuznetsoffandrey",
+      "description": "Health data from Sber Smart Ring (Life Balance): HR, HRV, SpO2, sleep, steps, stress, temperature.",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "sha256": "bb7d46445e49391fe9916f41d8822def0d3b58aacc6a730e8fccf1b066621099"
+        },
+        {
+          "path": "client.py",
+          "sha256": "8947d974fbf8593112a8756b3621133ff2609b16f3450f39476b227816218feb"
+        },
+        {
+          "path": "plugin.py",
+          "sha256": "0f35b3c4c1804e436f44c0b79d902a1980f5530209f0e381d5729ba8872fa49e"
+        }
+      ],
+      "name": "sber-ring",
+      "type": "extension",
+      "version": "1.0.0"
     }
   ]
 }
