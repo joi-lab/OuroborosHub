@@ -5,6 +5,7 @@ version: 0.1.2
 type: extension
 runtime: python3
 entry: plugin.py
+plugin_api: "2.0"
 permissions: [net, tool, route, widget]
 env_from_settings: []
 dependencies:

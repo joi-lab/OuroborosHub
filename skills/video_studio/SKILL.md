@@ -4,6 +4,7 @@ description: Hollywood-grade photorealistic video production with Gemini multimo
 version: 1.3.0
 type: extension
 entry: plugin.py
+plugin_api: "2.0"
 runtime: python3
 permissions: [net, route, widget, ws_handler, tool, read_settings, subprocess, fs]
 env_from_settings: [OPENROUTER_API_KEY]

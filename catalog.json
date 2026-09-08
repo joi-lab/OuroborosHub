@@ -1,8 +1,8 @@
 {
-  "description": "Official Ouroboros skills catalog.",
-  "name": "OuroborosHub",
-  "raw_base_url": "https://raw.githubusercontent.com/razzant/OuroborosHub/main",
   "schema_version": 1,
+  "name": "OuroborosHub",
+  "description": "Official Ouroboros skills catalog.",
+  "raw_base_url": "https://raw.githubusercontent.com/razzant/OuroborosHub/main",
   "skills": [
     {
       "description": "Agent-to-Agent protocol bridge for Ouroboros. Provides a local A2A-compatible server plus client tools for discovering and messaging other A2A agents.",
@@ -920,7 +920,10 @@
       "when_to_use": "User asks about weather, temperature, forecast, current conditions, wind, humidity, sunrise/sunset, or a weather dashboard for a city."
     },
     {
-      "description": "Read PDF documents page by page and build new PDF files from text or structured answers with Unicode-capable fonts.",
+      "slug": "pdf_tools",
+      "name": "pdf_tools",
+      "version": "0.1.0",
+      "type": "script",
       "files": [
         {
           "path": "SKILL.md",
@@ -948,6 +951,8 @@
           "size": 4427
         }
       ],
+      "description": "Read PDF documents page by page and build new PDF files from text or structured answers with Unicode-capable fonts.",
+      "when_to_use": "The user attached a PDF and asks to read, summarize, search, or compare it, or asks to produce or export a PDF.",
       "install_specs": [
         {
           "kind": "pip",
@@ -957,15 +962,13 @@
           "kind": "pip",
           "package": "reportlab"
         }
-      ],
-      "name": "pdf_tools",
-      "slug": "pdf_tools",
-      "type": "script",
-      "version": "0.1.0",
-      "when_to_use": "The user attached a PDF and asks to read, summarize, search, or compare it, or asks to produce or export a PDF."
+      ]
     },
     {
-      "description": "Inspect, filter, sort, group, and aggregate CSV and XLSX tables while reporting truncation and non-numeric values honestly.",
+      "slug": "table_tools",
+      "name": "table_tools",
+      "version": "0.1.0",
+      "type": "script",
       "files": [
         {
           "path": "SKILL.md",
@@ -993,20 +996,20 @@
           "size": 4622
         }
       ],
+      "description": "Inspect, filter, sort, group, and aggregate CSV and XLSX tables while reporting truncation and non-numeric values honestly.",
+      "when_to_use": "The user attached a CSV or XLSX file and asks to inspect, summarize, filter, compare, group, sort, or calculate from its data.",
       "install_specs": [
         {
           "kind": "pip",
           "package": "openpyxl"
         }
-      ],
-      "name": "table_tools",
-      "slug": "table_tools",
-      "type": "script",
-      "version": "0.1.0",
-      "when_to_use": "The user attached a CSV or XLSX file and asks to inspect, summarize, filter, compare, group, sort, or calculate from its data."
+      ]
     },
     {
-      "description": "Read structured DOCX documents and build new Word documents from lightly structured text.",
+      "slug": "word_tools",
+      "name": "word_tools",
+      "version": "0.1.0",
+      "type": "script",
       "files": [
         {
           "path": "SKILL.md",
@@ -1034,17 +1037,14 @@
           "size": 4326
         }
       ],
+      "description": "Read structured DOCX documents and build new Word documents from lightly structured text.",
+      "when_to_use": "The user attached a Word document and asks to read, summarize, search, compare, or revise its contents, or asks to create a Word or DOCX file.",
       "install_specs": [
         {
           "kind": "pip",
           "package": "python-docx"
         }
-      ],
-      "name": "word_tools",
-      "slug": "word_tools",
-      "type": "script",
-      "version": "0.1.0",
-      "when_to_use": "The user attached a Word document and asks to read, summarize, search, compare, or revise its contents, or asks to create a Word or DOCX file."
+      ]
     },
     {
       "author": "kuznetsoffandrey",

@@ -4,6 +4,7 @@ description: Bidirectional Telegram bot bridge for Ouroboros with configurable c
 version: 2.6.0
 type: extension
 entry: plugin.py
+plugin_api: "2.0"
 runtime: python3
 permissions: [net, read_settings, widget, route, supervised_task, subscribe_event, inject_chat]
 env_from_settings: [TELEGRAM_BOT_TOKEN, OPENAI_API_KEY]
