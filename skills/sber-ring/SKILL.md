@@ -3,6 +3,7 @@ name: sber-ring
 description: "Сбор данных с умного кольца Сбера (Life Balance): пульс, HRV, SpO2, сон, шаги, стресс, температура."
 version: 1.0.0
 type: extension
+plugin_api: "2.0"
 runtime: python3
 entry: plugin.py
 permissions: [net, tool, read_settings]
@@ -35,14 +36,17 @@ Extension-навык для получения данных с умного ко
 - `page_size` — размер страницы (по умолчанию 100)
 
 ### `sber_ring_summary`
-Сводка здоровья за последние 24 часа: забирает все 7 типов данных и
-формирует компактный структурированный отчёт.
+Выборка данных за последние 24 часа: запрашивает первую страницу
+(до 20 записей) каждого из 7 типов и показывает первые 5 записей.
+Это не полный суточный отчёт; для следующих страниц используйте
+`sber_ring_fetch` с `days_back=1`, `page_size=20` и параметром `page`.
 
 ## Настройка
 
 1. Получите Bearer-токен в приложении Life Balance или на сайте app.life-balance.tech
-2. В Ouroboros: Settings → Skills → sber-ring → Grant → вставьте токен в поле `SBER_RING_TOKEN`
-3. Включите навык (Enable)
+2. В Ouroboros: Settings → Secrets → добавьте `SBER_RING_TOKEN` и сохраните токен
+3. В Skills → sber-ring разрешите доступ к ключу через Grant access, если навык его запрашивает
+4. Включите навык (Enable)
 
 ## API
 

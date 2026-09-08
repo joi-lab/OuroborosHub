@@ -1052,7 +1052,7 @@
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "bb7d46445e49391fe9916f41d8822def0d3b58aacc6a730e8fccf1b066621099"
+          "sha256": "ec2d106c14f201e47244184fa70411d3c74159d7da2bbe984dae0d06c78601e7"
         },
         {
           "path": "client.py",
@@ -1060,12 +1060,13 @@
         },
         {
           "path": "plugin.py",
-          "sha256": "0f35b3c4c1804e436f44c0b79d902a1980f5530209f0e381d5729ba8872fa49e"
+          "sha256": "d024df9638941702758d37ae95c45579ed4b444c44cfc2694ac5161b2824a56c"
         }
       ],
       "name": "sber-ring",
       "type": "extension",
-      "version": "1.0.0"
+      "version": "1.0.0",
+      "slug": "sber-ring"
     }
   ]
 }
