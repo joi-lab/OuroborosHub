@@ -657,15 +657,18 @@
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "ec2d106c14f201e47244184fa70411d3c74159d7da2bbe984dae0d06c78601e7"
+          "sha256": "bb7d46445e49391fe9916f41d8822def0d3b58aacc6a730e8fccf1b066621099",
+          "size": 2525
         },
         {
           "path": "client.py",
-          "sha256": "8947d974fbf8593112a8756b3621133ff2609b16f3450f39476b227816218feb"
+          "sha256": "8947d974fbf8593112a8756b3621133ff2609b16f3450f39476b227816218feb",
+          "size": 2278
         },
         {
           "path": "plugin.py",
-          "sha256": "d024df9638941702758d37ae95c45579ed4b444c44cfc2694ac5161b2824a56c"
+          "sha256": "0f35b3c4c1804e436f44c0b79d902a1980f5530209f0e381d5729ba8872fa49e",
+          "size": 7360
         }
       ],
       "name": "sber-ring",
@@ -1091,6 +1094,89 @@
       "type": "script",
       "version": "0.1.0",
       "when_to_use": "The user attached a Word document and asks to read, summarize, search, compare, or revise its contents, or asks to create a Word or DOCX file."
+    },
+    {
+      "slug": "doctor-booking-v4",
+      "name": "doctor-booking-v4",
+      "version": "2.2.1",
+      "type": "extension",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "sha256": "92b9acf032ef83dd8ea7627d321a33e0096bd81125bc65d77a6e0a8f6e20da71",
+          "size": 4160
+        },
+        {
+          "path": "plugin.py",
+          "sha256": "f0396b4445a3345429c24be01f23d40b8070983b6d2860c4652394f1835916eb",
+          "size": 18211
+        }
+      ],
+      "description": "Помогает выбрать клинику и врача, посмотреть свободные слоты и оформить очную запись через DocDoc API 1.0.13."
+    },
+    {
+      "slug": "medical-lab-analyzer",
+      "name": "medical-lab-analyzer",
+      "version": "0.2.1",
+      "type": "extension",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "sha256": "488e2fdcb41bf6cf24017c2dae02bada7ceaf9228b5f9485b4a3f7fbc50091e4",
+          "size": 3405
+        },
+        {
+          "path": "analyzer.py",
+          "sha256": "4fcc72c52a58f09eca94fed6410a62136961ac809f0563149a6b195fe8d3613c",
+          "size": 13093
+        },
+        {
+          "path": "models.py",
+          "sha256": "291a1cd09d30872914f10b83b3f1fc8d4adbd4440263b6592deafaa9ca14d9de",
+          "size": 2435
+        },
+        {
+          "path": "plugin.py",
+          "sha256": "1630d28d4372d830443149b4fca6b585859c09afd89ab590709a40a5cb4b95dd",
+          "size": 9098
+        },
+        {
+          "path": "prompts/extract_sex_age.jinja2",
+          "sha256": "cb94ba314ecd76dfeab5450b8fccbc193800904a0ff37dc1e4ff8badef4699fb",
+          "size": 1984
+        },
+        {
+          "path": "prompts/lab_test_single_interpretation.jinja2",
+          "sha256": "fb0d0169a462a00d607bde53d3c75edf300622112f2ab0cb52c8675839ded4e9",
+          "size": 5333
+        },
+        {
+          "path": "prompts/lab_tests_batch_interpretation.jinja2",
+          "sha256": "10df51e119f1469172524e88c0efdf04577df8f11a22cd9ffab2d85bd06ee9cd",
+          "size": 2173
+        },
+        {
+          "path": "prompts/lab_tests_name_extraction.jinja2",
+          "sha256": "ae8b6e1de4cd779e69a6c98630fbe47f4e7bc559cad2651adab90a03d2180eb1",
+          "size": 1752
+        },
+        {
+          "path": "prompts/lab_tests_values_batch.jinja2",
+          "sha256": "44e796f3e2054af1e11b483576a6868137c2457acc6f898559ae89434c092e49",
+          "size": 1898
+        },
+        {
+          "path": "prompts/lab_tests_values_extraction.jinja2",
+          "sha256": "48378a2ed74e3fb189a6b88bfc954ec8214bfe70d6c03c74ce2aa490e4c696f9",
+          "size": 7845
+        },
+        {
+          "path": "prompts/text_classification.jinja2",
+          "sha256": "540b2fec3750008da317669aa498f492519d65f1859e0f1a01765d6f0933592c",
+          "size": 2176
+        }
+      ],
+      "description": "Структурирует OCR-текст лабораторных анализов и объясняет отклонения; не заменяет врача или экстренную помощь."
     }
   ]
 }
