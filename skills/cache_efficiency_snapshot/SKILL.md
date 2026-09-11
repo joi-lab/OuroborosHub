@@ -1,8 +1,8 @@
 ---
 name: cache_efficiency_snapshot
-version: 0.3.0
+version: 0.4.0
 title: Cache Efficiency Snapshot
-description: Interactive dark-glassmorphic cache observability dashboard with multi-timeframe analytics, token-weighted hit rates, cost savings, and Canvas 2D charts.
+description: Interactive cache observability dashboard with token-weighted read rates, separate request and session counts, measurement coverage, and Canvas charts.
 type: extension
 runtime: python3
 entry: plugin.py
@@ -16,29 +16,59 @@ env_from_settings: []
 
 # Cache Efficiency Snapshot
 
-A high-performance observability extension for Ouroboros that tracks prompt caching performance, token-weighted efficiency, and monetary cost savings across all models and execution lanes.
+A read-only dashboard over Ouroboros's retained `state/usage_attempts.jsonl`.
+It reports input tokens and cache reads with explicit measurement coverage.
+It makes no model calls and changes no runtime state or task-card accounting.
 
-## Key Features
+## Measurements
 
-1. **Multi-Timeframe Analytics**:
-   - `1H`: Trailing 1 hour (5-minute resolution buckets) for live inspection.
-   - `6H`: Trailing 6 hours (30-minute resolution buckets).
-   - `24H` (Default): Trailing 24 hours (1-hour resolution buckets).
-   - `7D`: Trailing 7 days (6-hour resolution buckets).
-   - `ALL`: Entire ledger history with adaptive daily/half-day resolution.
+The cache-read rate is the sum of cache-read tokens divided by the sum of input
+tokens from the **same measured records**. Both counts must be known, input
+must be positive, and reads cannot exceed input. Missing cache-write data does
+not invalidate an independently measured input total and cache-read count.
 
-2. **Accurate Mathematical Model**:
-   - **Token-Weighted Cache Read Rate**: Calculated as sum(cached_tokens) / sum(canonical_prompt_tokens) * 100%, avoiding per-call sample skew.
-   - **Call-Level Hit Rate**: Percentage of requests with cached_tokens > 0.
-   - **Provider-Aware Normalization**: Handles both cache-inclusive (OpenAI, OpenRouter) and fresh-only input reporters (Anthropic raw) without double-counting.
-   - **Net Monetary Cost Savings ($)**: Tiered price matrix per model measuring gross cache read savings minus cache creation/write surcharges.
+New session records use `input_token_usage` with nullable `total_tokens`,
+`cache_read_tokens`, and `cache_write_tokens`. Null fields are never filled
+from older fields. Existing physical-request rows already carry inclusive input
+and cache reads. Legacy Codex session rows retain their proven inclusive input
+and read-only counters when the recorded route is Codex. Other legacy sessions
+remain unknown because their old counters do not establish these semantics.
+There is no guess based on model names or on which count is larger.
 
-3. **High-Performance In-Memory Caching**:
-   - Incremental stat/inode-based parser for `state/usage_attempts.jsonl` that only reads newly appended bytes, enabling sub-millisecond route response times on multi-megabyte ledgers.
+Known-token totals exclude unknown records, whose counts remain visible. The
+coverage card counts records with both valid measurements, including measured
+zero-volume records. Zero input has no rate; positive input with zero cache
+reads is **0%**. Idle and unavailable periods are gaps in the trend chart.
+No monetary savings or estimated prices are calculated.
 
-4. **Zero-CDN Dark Glassmorphic Dashboard (`widget.js`)**:
-   - Standalone Module Widget rendered in a sandboxed iframe.
-   - Hardware-accelerated Canvas 2D spline curves with interactive hover crosshairs and tooltips.
-   - Top KPI cards with dynamic trend badges and circular rate indicators.
-   - Per-model efficiency breakdown table with visual gradient progress bars.
-   - Collapsible data quality & diagnostics drawer.
+Requests and whole sessions remain different units. Rows group by exact
+provider, model and record kind. A session aggregate may span attempts and
+models; its displayed model is only the final reported model, not per-model
+attribution of every token in that session.
+
+## Timeframes and retained history
+
+- `1H`: trailing hour in five-minute bins.
+- `6H`: trailing six hours in thirty-minute bins.
+- `24H` (default): trailing day in hourly bins.
+- `7D`: trailing week in six-hour bins.
+- `ALL`: all retained records, with adaptive hourly, six-hour, half-day or daily bins.
+
+Intervals are half-open and have no artificial empty endpoint. The existing
+incremental reader preserves incomplete trailing lines for the next read and
+reloads after file replacement/truncation. Its in-memory retention may discard
+records older than thirty days once more than 20,000 records are loaded.
+`ALL` does not replay archived history or turn compacted summary rows into
+new requests. Diagnostics disclose skipped summaries and display limits
+(25 model/route rows and 120 latest time bins); headline totals still cover the
+selected retained window.
+
+## Widget lifecycle
+
+The standalone module uses the owning extension fetch bridge, with no external
+CDN. Refresh is explicit and also runs every thirty seconds while mounted.
+Trend and token-volume views support pointer, touch and arrow-key inspection;
+coverage and unit explanations remain visible outside tooltips. Read failures
+show a warning while retaining the last successfully loaded measurements.
+The host disposal registrar stops polling and removes the resize listener.
+The existing host/owner launch policy is unchanged.
