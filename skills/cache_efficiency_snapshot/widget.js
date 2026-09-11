@@ -18,10 +18,10 @@
       width: 100%;
       min-height: 100%;
       overflow-x: hidden;
-      padding: 16px 18px;
       -webkit-font-smoothing: antialiased;
     }
     
+    #root { padding: 16px 18px; }
     /* Layout */
     .ces-container {
       display: flex;
@@ -230,7 +230,7 @@
     }
     .ces-kpi-sub {
       font-size: 0.74rem;
-      color: #64748b;
+      color: #94a3b8;
       display: flex;
       align-items: center;
       gap: 5px;
@@ -309,6 +309,7 @@
     }
 
     /* Model Table */
+    .ces-table td:first-child { min-width: 170px; max-width: 290px; overflow-wrap: anywhere; }
     .ces-table-wrap {
       overflow-x: auto;
       margin-top: 6px;
@@ -388,6 +389,18 @@
       border: 1px solid rgba(255, 255, 255, 0.03);
     }
     .ces-diag-item b { color: #f8fafc; }
+    .ces-note { color: #94a3b8; font-size: 12px; line-height: 1.5; }
+    .ces-route { display: block; color: #94a3b8; font-size: 12px; font-weight: 400; overflow-wrap: anywhere; margin-top: 4px; }
+    .ces-kpi-sub { flex-wrap: wrap; line-height: 1.4; }
+    .ces-tooltip { max-width: calc(100% - 16px); white-space: normal; transform: none; }
+    @media (max-width: 540px) {
+      #root { padding: 10px; }
+      .ces-card { padding: 12px; }
+      .ces-kpi-grid { grid-template-columns: 1fr; }
+      .ces-controls { width: 100%; }
+      .ces-tf-btn { padding: 7px 9px; }
+      .ces-table { min-width: 650px; }
+    }
   `;
   document.head.appendChild(style);
 
@@ -403,20 +416,40 @@
     reqSequence: 0,
     sortCol: 'prompt_tokens',
     sortAsc: false,
+    disposed: false,
   };
 
   // Helpers
   function formatTokens(val) {
-    if (val === null || val === undefined || isNaN(val)) return '0';
+    if (val === null || val === undefined || !Number.isFinite(val)) return '—';
     if (val >= 1e9) return (val / 1e9).toFixed(2) + ' B';
     if (val >= 1e6) return (val / 1e6).toFixed(2) + ' M';
     if (val >= 1e3) return (val / 1e3).toFixed(1) + ' K';
     return Number(val).toLocaleString();
   }
 
-  function formatUsd(val) {
-    if (val === null || val === undefined || isNaN(val)) return '$0.00';
-    return '$' + Number(val).toFixed(2);
+  function formatRate(value) {
+    return Number.isFinite(value) ? `${value.toFixed(2)}%` : 'Unavailable';
+  }
+
+  function escapeHtml(value) {
+    const node = document.createElement('span');
+    node.textContent = String(value);
+    return node.innerHTML;
+  }
+
+  function counted(value, unit) {
+    return `${value.toLocaleString()} ${unit}${value === 1 ? '' : 's'}`;
+  }
+
+  function recordUnits(value) {
+    const units = [counted(value.request_count, 'request'), counted(value.session_count, 'session')];
+    if (value.other_count) units.push(counted(value.other_count, 'other record'));
+    return units.join(' · ');
+  }
+
+  function coverageText(value) {
+    return `${value.measured_records.toLocaleString()} / ${counted(value.total_records, 'record')} measured`;
   }
 
   // Render Skeleton Layout
@@ -432,7 +465,7 @@
           <div class="ces-pulse" id="livePulse"></div>
           <div>
             <div class="ces-title">Cache Efficiency Snapshot</div>
-            <div class="ces-subtitle" id="timeRangeSub">Observed prompt caching metrics & monetary savings</div>
+            <div class="ces-subtitle" id="timeRangeSub">Measured input tokens, cache reads and coverage</div>
           </div>
         </div>
         <div class="ces-controls">
@@ -456,35 +489,35 @@
             <span class="ces-kpi-label">Cache Read Rate</span>
             <span class="ces-kpi-badge" id="rateBadge">Token-Weighted</span>
           </div>
-          <div class="ces-kpi-val"><span id="kpiRate">--</span><span class="ces-kpi-unit">%</span></div>
-          <div class="ces-kpi-sub" id="kpiHitRateSub">Call Hit Rate: --%</div>
+          <div class="ces-kpi-val"><span id="kpiRate">—</span></div>
+          <div class="ces-kpi-sub" id="kpiRateSub">Measured input only</div>
         </div>
 
         <div class="ces-card ces-kpi-card cyan">
           <div class="ces-kpi-header">
-            <span class="ces-kpi-label">Tokens Saved</span>
-            <span class="ces-kpi-badge" id="tokensRatioBadge">--%</span>
+            <span class="ces-kpi-label">Known Cache Reads</span>
+            <span class="ces-kpi-badge" id="tokensRatioBadge">Tokens</span>
           </div>
-          <div class="ces-kpi-val"><span id="kpiSavedTokens">--</span></div>
-          <div class="ces-kpi-sub" id="kpiCachedSub">Cached: -- | Total: --</div>
+          <div class="ces-kpi-val"><span id="kpiCacheReads">--</span></div>
+          <div class="ces-kpi-sub" id="kpiCachedSub">Cache-read measurements</div>
         </div>
 
         <div class="ces-card ces-kpi-card emerald">
           <div class="ces-kpi-header">
-            <span class="ces-kpi-label">Est. Cost Saved</span>
-            <span class="ces-kpi-badge" style="color:#34d399">Net Savings</span>
+            <span class="ces-kpi-label">Measurement Coverage</span>
+            <span class="ces-kpi-badge" style="color:#34d399">Records</span>
           </div>
-          <div class="ces-kpi-val"><span id="kpiSavedCost">--</span></div>
-          <div class="ces-kpi-sub" id="kpiCostSub">Net Spend: -- | Gross: --</div>
+          <div class="ces-kpi-val"><span id="kpiCoverage">--</span></div>
+          <div class="ces-kpi-sub" id="kpiCoverageSub">Unknown measurements stay unknown</div>
         </div>
 
         <div class="ces-card ces-kpi-card violet">
           <div class="ces-kpi-header">
-            <span class="ces-kpi-label">Prompt Volume</span>
-            <span class="ces-kpi-badge" id="callsBadge">-- calls</span>
+            <span class="ces-kpi-label">Known Input Volume</span>
+            <span class="ces-kpi-badge" id="recordsBadge">— records</span>
           </div>
           <div class="ces-kpi-val"><span id="kpiVolume">--</span></div>
-          <div class="ces-kpi-sub" id="kpiUncachedSub">Uncached: --</div>
+          <div class="ces-kpi-sub" id="kpiVolumeSub">Requests and sessions counted separately</div>
         </div>
       </div>
 
@@ -497,23 +530,26 @@
           </div>
         </div>
         <div class="ces-canvas-wrap" id="canvasWrap">
-          <canvas id="chartCanvas"></canvas>
+          <canvas id="chartCanvas" tabindex="0" role="img" aria-label="Cache measurements by time. Use arrow keys or select a point to inspect."></canvas>
           <div class="ces-tooltip" id="chartTooltip"></div>
         </div>
+        <div class="ces-note" id="chartLegend">Gaps mean no comparable measurement. A measured zero is 0%.</div>
+        <div class="ces-note" id="chartReading" aria-live="polite">Select a point to inspect its measurements.</div>
       </div>
 
       <div class="ces-card">
-        <div class="ces-chart-title" style="margin-bottom:10px;">Model Efficiency Breakdown</div>
+        <div class="ces-chart-title" style="margin-bottom:10px;">Model and Route Measurements</div>
+        <div class="ces-note">Session totals may span attempts and models; their label names the final reported model. Rates use only records with both input and cache-read measurements.</div>
         <div class="ces-table-wrap">
           <table class="ces-table" id="modelsTable">
             <thead>
               <tr>
                 <th data-sort="display_name">Model</th>
-                <th data-sort="calls">Settled Calls</th>
-                <th data-sort="prompt_tokens">Prompt Tokens</th>
-                <th data-sort="cached_tokens">Cached Tokens</th>
-                <th data-sort="rate">Hit Rate (%)</th>
-                <th data-sort="savings_usd">Net Savings ($)</th>
+                <th data-sort="total_records">Recorded Units</th>
+                <th data-sort="prompt_tokens">Known Input</th>
+                <th data-sort="cached_tokens">Known Cache Reads</th>
+                <th data-sort="rate">Read Rate</th>
+                <th data-sort="measured_records">Coverage</th>
               </tr>
             </thead>
             <tbody id="modelsTbody">
@@ -529,10 +565,11 @@
           </summary>
           <div class="ces-drawer-content" id="diagnosticsContent">
             <div class="ces-diag-item">Window Samples: <b id="diagWindow">--</b></div>
-            <div class="ces-diag-item">Total Ledger Settled: <b id="diagTotal">--</b></div>
+            <div class="ces-diag-item">Retained Settled Records: <b id="diagTotal">--</b></div>
             <div class="ces-diag-item">Window Span: <b id="diagSpan">--</b></div>
-            <div class="ces-diag-item">Cache Hit Samples: <b id="diagHits">--</b></div>
+            <div class="ces-diag-item">Omitted Rows / Buckets: <b id="diagOmitted">--</b></div>
           </div>
+          <div class="ces-note" id="retainedCoverage" style="margin-top:8px;"></div>
         </details>
       </div>
     </div>
@@ -563,17 +600,37 @@
 
   window.addEventListener('resize', resizeCanvas);
 
-  canvasWrap.addEventListener('mousemove', (e) => {
+  function inspectPointer(e) {
     const rect = canvasWrap.getBoundingClientRect();
     mouseX = e.clientX - rect.left;
     isHovering = true;
     renderChart();
+  }
+  canvasWrap.addEventListener('mousemove', inspectPointer);
+  canvasWrap.addEventListener('click', inspectPointer);
+  canvas.addEventListener('keydown', (event) => {
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+    event.preventDefault();
+    const count = state.data?.buckets?.length || 0;
+    if (!count) return;
+    // Step by whole bins on the same centres both charts draw (see renderTrendChart).
+    const chartW = canvasWrap.getBoundingClientRect().width - 65;
+    const current = mouseX < 0 ? -1 : Math.round((mouseX - 45) / chartW * count - 0.5);
+    const next = Math.max(0, Math.min(count - 1, current + (event.key === 'ArrowRight' ? 1 : -1)));
+    mouseX = 45 + (next + 0.5) * chartW / count;
+    isHovering = true;
+    renderChart();
   });
 
-  canvasWrap.addEventListener('mouseleave', () => {
+  function clearInspection() {
     isHovering = false;
     mouseX = -1;
     tooltip.style.display = 'none';
+    document.getElementById('chartReading').textContent = 'Select a point to inspect its measurements.';
+  }
+
+  canvasWrap.addEventListener('mouseleave', () => {
+    clearInspection();
     renderChart();
   });
 
@@ -584,6 +641,8 @@
     ctx.clearRect(0, 0, w, h);
 
     if (!state.data || !state.data.buckets || state.data.buckets.length === 0) {
+      // Nothing left to inspect: a stale reading would describe a vanished bin.
+      clearInspection();
       ctx.fillStyle = '#64748b';
       ctx.font = '12px system-ui';
       ctx.textAlign = 'center';
@@ -603,222 +662,107 @@
     }
   }
 
-  function renderTrendChart(buckets, pad, cw, ch, w, h) {
-    const maxRate = 100;
-    const n = buckets.length;
-    const stepX = n > 1 ? cw / (n - 1) : cw;
-
-    // Grid lines
+  function drawAxes(buckets, points, pad, cw, ch, w, h, maximum, percentage) {
     ctx.strokeStyle = 'rgba(255, 255, 255, 0.06)';
     ctx.lineWidth = 1;
-    ctx.fillStyle = '#64748b';
+    ctx.fillStyle = '#94a3b8';
     ctx.font = '10px monospace';
     ctx.textAlign = 'right';
-
-    for (let r = 0; r <= 100; r += 25) {
-      const y = pad.top + ch - (r / maxRate) * ch;
+    for (let index = 0; index <= 4; index++) {
+      const y = pad.top + ch - index / 4 * ch;
       ctx.beginPath();
       ctx.moveTo(pad.left, y);
       ctx.lineTo(pad.left + cw, y);
       ctx.stroke();
-      ctx.fillText(r + '%', pad.left - 6, y + 3);
+      ctx.fillText(percentage ? `${index * 25}%` : formatTokens(maximum * index / 4), pad.left - 6, y + 3);
     }
-
-    // Spline Points
-    const points = buckets.map((b, i) => {
-      const x = pad.left + (n > 1 ? i * stepX : cw / 2);
-      const y = pad.top + ch - (Math.min(100, Math.max(0, b.rate)) / maxRate) * ch;
-      return { x, y, data: b };
-    });
-
-    if (points.length > 0) {
-      // Draw Gradient Fill
-      const grad = ctx.createLinearGradient(0, pad.top, 0, pad.top + ch);
-      grad.addColorStop(0, 'rgba(232, 93, 111, 0.35)');
-      grad.addColorStop(0.7, 'rgba(56, 189, 248, 0.12)');
-      grad.addColorStop(1, 'rgba(13, 11, 15, 0.0)');
-
-      ctx.beginPath();
-      ctx.moveTo(points[0].x, pad.top + ch);
-      for (let i = 0; i < points.length; i++) {
-        if (i === 0) {
-          ctx.lineTo(points[i].x, points[i].y);
-        } else {
-          const xc = (points[i].x + points[i - 1].x) / 2;
-          const yc = (points[i].y + points[i - 1].y) / 2;
-          ctx.quadraticCurveTo(points[i - 1].x, points[i - 1].y, xc, yc);
-        }
-      }
-      ctx.lineTo(points[points.length - 1].x, points[points.length - 1].y);
-      ctx.lineTo(points[points.length - 1].x, pad.top + ch);
-      ctx.closePath();
-      ctx.fillStyle = grad;
-      ctx.fill();
-
-      // Draw Stroke Line
-      ctx.beginPath();
-      for (let i = 0; i < points.length; i++) {
-        if (i === 0) {
-          ctx.moveTo(points[i].x, points[i].y);
-        } else {
-          const xc = (points[i].x + points[i - 1].x) / 2;
-          const yc = (points[i].y + points[i - 1].y) / 2;
-          ctx.quadraticCurveTo(points[i - 1].x, points[i - 1].y, xc, yc);
-        }
-      }
-      ctx.lineTo(points[points.length - 1].x, points[points.length - 1].y);
-      ctx.strokeStyle = '#e85d6f';
-      ctx.lineWidth = 2.5;
-      ctx.stroke();
-
-      // Draw Dots
-      for (let p of points) {
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, 3, 0, Math.PI * 2);
-        ctx.fillStyle = '#0d0b0f';
-        ctx.fill();
-        ctx.strokeStyle = '#38bdf8';
-        ctx.lineWidth = 1.5;
-        ctx.stroke();
-      }
-    }
-
-    // X-Axis Labels
-    ctx.fillStyle = '#94a3b8';
     ctx.textAlign = 'center';
-    const labelStep = Math.max(1, Math.floor(n / 6));
-    for (let i = 0; i < n; i += labelStep) {
-      ctx.fillText(buckets[i].label, points[i].x, h - 8);
-    }
-
-    // Hover Crosshair
-    if (isHovering && points.length > 0) {
-      let closest = points[0];
-      let minDist = Math.abs(mouseX - points[0].x);
-      for (let p of points) {
-        const d = Math.abs(mouseX - p.x);
-        if (d < minDist) {
-          minDist = d;
-          closest = p;
-        }
-      }
-
-      ctx.strokeStyle = 'rgba(240, 122, 134, 0.45)';
-      ctx.setLineDash([3, 3]);
-      ctx.beginPath();
-      ctx.moveTo(closest.x, pad.top);
-      ctx.lineTo(closest.x, pad.top + ch);
-      ctx.stroke();
-      ctx.setLineDash([]);
-
-      ctx.beginPath();
-      ctx.arc(closest.x, closest.y, 5, 0, Math.PI * 2);
-      ctx.fillStyle = '#e85d6f';
-      ctx.fill();
-      ctx.strokeStyle = '#ffffff';
-      ctx.lineWidth = 2;
-      ctx.stroke();
-
-      // Tooltip content
-      const d = closest.data;
-      tooltip.innerHTML = `
-        <div style="font-weight:700; color:#f8fafc; margin-bottom:4px;">${d.label}</div>
-        <div style="color:#e85d6f">Cache Rate: <b>${d.rate}%</b></div>
-        <div style="color:#38bdf8">Cached: <b>${formatTokens(d.cached)}</b></div>
-        <div style="color:#94a3b8">Uncached: <b>${formatTokens(d.uncached)}</b></div>
-        <div style="color:#34d399">Saved: <b>${formatUsd(d.savings_usd)}</b></div>
-      `;
-      tooltip.style.left = closest.x + 'px';
-      tooltip.style.top = Math.max(pad.top + 20, closest.y - 10) + 'px';
-      tooltip.style.display = 'block';
+    const labelStep = Math.max(1, Math.ceil(buckets.length / Math.max(1, Math.floor(cw / 120))));
+    for (let index = 0; index < buckets.length; index += labelStep) {
+      const x = Math.max(75, Math.min(w - 65, points[index].x));
+      ctx.fillText(buckets[index].label, x, h - 8);
     }
   }
 
-  function renderVolumeChart(buckets, pad, cw, ch, w, h) {
-    const maxVol = Math.max(...buckets.map(b => b.prompt), 1);
-    const n = buckets.length;
-    const barWidth = Math.max(3, (cw / n) * 0.65);
-    const stepX = cw / n;
+  function inspectChart(points, pad, cw, ch) {
+    if (!isHovering || !points.length) return;
+    const closest = points.reduce((best, point) => Math.abs(mouseX - point.x) < Math.abs(mouseX - best.x) ? point : best);
+    const data = closest.data;
+    ctx.strokeStyle = 'rgba(240, 122, 134, 0.45)';
+    ctx.setLineDash([3, 3]);
+    ctx.beginPath();
+    ctx.moveTo(closest.x, pad.top);
+    ctx.lineTo(closest.x, pad.top + ch);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    const measured = Number.isFinite(data.rate) ? ` (${formatTokens(data.eligible_cached_tokens)} / ${formatTokens(data.eligible_prompt_tokens)} measured)` : '';
+    const detail = data.total_records === 0 ? 'No activity' : `${formatRate(data.rate)}${measured} · ${coverageText(data)} · ${recordUnits(data)}`;
+    const unknown = `${counted(data.unknown_total_records, 'record')} with unknown input; ${data.unknown_read_records} with unknown cache reads`;
+    document.getElementById('chartReading').textContent = `${data.label}: ${detail}. ${unknown}.`;
+    tooltip.innerHTML = `<b>${escapeHtml(data.label)}</b><br>${escapeHtml(detail)}<br>Known input: ${formatTokens(data.prompt_tokens)}<br>Known cache reads: ${formatTokens(data.cached_tokens)}<br>${escapeHtml(unknown)}`;
+    tooltip.style.display = 'block';
+    const width = tooltip.offsetWidth;
+    tooltip.style.left = `${Math.max(8, Math.min(closest.x - width / 2, canvasWrap.clientWidth - width - 8))}px`;
+    tooltip.style.top = '8px';
+  }
 
-    // Grid lines
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.06)';
-    ctx.lineWidth = 1;
-    ctx.fillStyle = '#64748b';
-    ctx.font = '10px monospace';
-    ctx.textAlign = 'right';
-
-    for (let r = 0; r <= 4; r++) {
-      const v = (maxVol / 4) * r;
-      const y = pad.top + ch - (r / 4) * ch;
+  function renderTrendChart(buckets, pad, cw, ch, w, h) {
+    const points = buckets.map((data, index) => ({
+      x: pad.left + (index + 0.5) * cw / buckets.length,
+      y: Number.isFinite(data.rate) ? pad.top + ch - data.rate / 100 * ch : null,
+      data,
+    }));
+    drawAxes(buckets, points, pad, cw, ch, w, h, 100, true);
+    // Connect only adjacent measured bins; unavailable bins break the path.
+    ctx.beginPath();
+    let previous = null;
+    for (const point of points) {
+      if (point.y === null) { previous = null; continue; }
+      if (previous) ctx.lineTo(point.x, point.y);
+      else ctx.moveTo(point.x, point.y);
+      previous = point;
+    }
+    ctx.strokeStyle = '#e85d6f';
+    ctx.lineWidth = 2.5;
+    ctx.stroke();
+    for (const point of points) {
+      if (point.y === null) continue;
       ctx.beginPath();
-      ctx.moveTo(pad.left, y);
-      ctx.lineTo(pad.left + cw, y);
+      ctx.arc(point.x, point.y, 3, 0, Math.PI * 2);
+      ctx.fillStyle = '#0d0b0f';
+      ctx.fill();
+      ctx.strokeStyle = '#38bdf8';
+      ctx.lineWidth = 1.5;
       ctx.stroke();
-      ctx.fillText(formatTokens(v), pad.left - 6, y + 3);
     }
+    if (!points.some(point => point.y !== null)) {
+      ctx.fillStyle = '#94a3b8';
+      ctx.textAlign = 'center';
+      ctx.fillText('No comparable cache measurements', pad.left + cw / 2, pad.top + ch / 2);
+    }
+    inspectChart(points, pad, cw, ch);
+  }
 
-    // Stacked Bars
-    const points = [];
-    buckets.forEach((b, i) => {
-      const x = pad.left + (i * stepX) + (stepX - barWidth) / 2;
-      const totalH = (b.prompt / maxVol) * ch;
-      const cachedH = (b.cached / maxVol) * ch;
-      const uncachedH = Math.max(0, totalH - cachedH);
-
-      const yBase = pad.top + ch;
-      const yCached = yBase - cachedH;
-      const yUncached = yCached - uncachedH;
-
-      // Cached portion (Emerald)
-      if (cachedH > 0) {
-        ctx.fillStyle = '#34d399';
-        ctx.fillRect(x, yCached, barWidth, cachedH);
+  function renderVolumeChart(buckets, pad, cw, ch, w, h) {
+    const maximum = Math.max(...buckets.map(bucket => bucket.prompt || 0), 1);
+    const step = cw / buckets.length;
+    const points = buckets.map((data, index) => ({x: pad.left + (index + 0.5) * step, data}));
+    drawAxes(buckets, points, pad, cw, ch, w, h, maximum, false);
+    buckets.forEach((bucket, index) => {
+      let y = pad.top + ch;
+      for (const [value, color] of [[bucket.cached, '#34d399'], [bucket.uncached, '#64748b'], [bucket.unknown, '#c69245']]) {
+        const height = value / maximum * ch;
+        y -= height;
+        ctx.fillStyle = color;
+        ctx.fillRect(points[index].x - step * 0.32, y, step * 0.64, height);
       }
-      // Uncached portion (Slate)
-      if (uncachedH > 0) {
-        ctx.fillStyle = '#64748b';
-        ctx.fillRect(x, yUncached, barWidth, uncachedH);
-      }
-
-      points.push({ x: x + barWidth / 2, y: yUncached, data: b });
     });
-
-    // X-Axis Labels
-    ctx.fillStyle = '#94a3b8';
-    ctx.textAlign = 'center';
-    const labelStep = Math.max(1, Math.floor(n / 6));
-    for (let i = 0; i < n; i += labelStep) {
-      ctx.fillText(buckets[i].label, points[i].x, h - 8);
-    }
-
-    // Hover Tooltip
-    if (isHovering && points.length > 0) {
-      let closest = points[0];
-      let minDist = Math.abs(mouseX - points[0].x);
-      for (let p of points) {
-        const d = Math.abs(mouseX - p.x);
-        if (d < minDist) {
-          minDist = d;
-          closest = p;
-        }
-      }
-
-      const d = closest.data;
-      tooltip.innerHTML = `
-        <div style="font-weight:700; color:#f8fafc; margin-bottom:4px;">${d.label}</div>
-        <div style="color:#34d399">Cached: <b>${formatTokens(d.cached)}</b> (${d.rate}%)</div>
-        <div style="color:#94a3b8">Uncached: <b>${formatTokens(d.uncached)}</b></div>
-        <div style="color:#f8fafc">Total: <b>${formatTokens(d.prompt)}</b></div>
-        <div style="color:#38bdf8">Saved: <b>${formatUsd(d.savings_usd)}</b></div>
-      `;
-      tooltip.style.left = closest.x + 'px';
-      tooltip.style.top = Math.max(pad.top + 20, closest.y - 10) + 'px';
-      tooltip.style.display = 'block';
-    }
+    inspectChart(points, pad, cw, ch);
   }
 
   // Data Fetching
   async function fetchData() {
+    if (state.disposed) return;
     const seq = ++state.reqSequence;
     state.loading = true;
     const btn = document.getElementById('refreshBtn');
@@ -876,31 +820,27 @@
       if (pulse) pulse.classList.add('error');
     }
 
-    // KPIs
-    document.getElementById('kpiRate').textContent = s.cache_read_rate.toFixed(1);
-    document.getElementById('kpiHitRateSub').textContent = `Call Hit Rate: ${s.call_hit_rate.toFixed(1)}%`;
-
-    const tokenRatio = s.prompt_tokens > 0 ? ((s.cached_tokens / s.prompt_tokens) * 100).toFixed(1) : '0';
-    document.getElementById('kpiSavedTokens').textContent = formatTokens(s.cached_tokens);
-    document.getElementById('tokensRatioBadge').textContent = `${tokenRatio}% of prompt`;
-    document.getElementById('kpiCachedSub').textContent = `Cached: ${formatTokens(s.cached_tokens)} | Total: ${formatTokens(s.prompt_tokens)}`;
-
-    document.getElementById('kpiSavedCost').textContent = formatUsd(s.net_savings_usd);
-    const estNotice = s.has_estimated_pricing ? ' (incl. est. models)' : '';
-    document.getElementById('kpiCostSub').textContent = `Net: ${formatUsd(s.net_cost_usd)} | Base: ${formatUsd(s.gross_cost_usd)}${estNotice}`;
-
+    // Rates use a matching measured subset; known token sums disclose missing records.
+    document.getElementById('kpiRate').textContent = formatRate(s.cache_read_rate);
+    document.getElementById('kpiRateSub').textContent = Number.isFinite(s.cache_read_rate)
+      ? `${formatTokens(s.eligible_cached_tokens)} cache reads / ${formatTokens(s.eligible_prompt_tokens)} input tokens in ${counted(s.rate_records, 'record')}`
+      : 'No record has both a positive input total and a cache-read measurement';
+    document.getElementById('kpiCacheReads').textContent = formatTokens(s.cached_tokens);
+    document.getElementById('tokensRatioBadge').textContent = `${s.unknown_read_records} unknown`;
+    document.getElementById('kpiCachedSub').textContent = 'Reported cache reads; unknown records excluded';
+    document.getElementById('kpiCoverage').textContent = `${s.measured_records} / ${s.total_records}`;
+    document.getElementById('kpiCoverageSub').textContent = `Records with both measurements · ${s.zero_volume_records} have zero input`;
     document.getElementById('kpiVolume').textContent = formatTokens(s.prompt_tokens);
-    document.getElementById('callsBadge').textContent = `${s.total_calls.toLocaleString()} calls`;
-    document.getElementById('kpiUncachedSub').textContent = `Uncached: ${formatTokens(s.uncached_tokens)}`;
-
-    // Diagnostics
-    document.getElementById('diagWindow').textContent = `${q.window_records || 0} calls`;
+    document.getElementById('recordsBadge').textContent = `${s.unknown_total_records} unknown`;
+    document.getElementById('kpiVolumeSub').textContent = recordUnits(s);
+    document.getElementById('timeRangeSub').textContent = `${state.data.timeframe === 'ALL' ? 'All retained records' : state.data.timeframe + ' window'} · measured input tokens and cache reads`;
+    document.getElementById('diagWindow').textContent = `${q.window_records || 0} records`;
     document.getElementById('diagTotal').textContent = `${q.settled_records_total || 0} records`;
-    document.getElementById('diagHits').textContent = `${q.cache_hits || 0} hits`;
-    if (q.oldest_ts && q.newest_ts) {
-      document.getElementById('diagSpan').textContent = `${q.oldest_ts.slice(0,10)} → ${q.newest_ts.slice(0,10)}`;
-    }
+    document.getElementById('diagOmitted').textContent = `${q.models_omitted || 0} rows / ${q.buckets_omitted || 0} buckets`;
+    document.getElementById('diagSpan').textContent = q.oldest_ts && q.newest_ts ? `${q.oldest_ts.slice(0,10)} → ${q.newest_ts.slice(0,10)}` : 'No activity';
+    document.getElementById('retainedCoverage').textContent = `${q.coverage || ''} Compacted summaries skipped: ${q.raw_stats?.compacted_records_skipped || 0}.`;
 
+    // A poll keeps the selected point; renderChart re-inspects the nearest bin.
     renderTable();
     renderChart();
   }
@@ -913,6 +853,8 @@
     models.sort((a, b) => {
       let va = a[state.sortCol];
       let vb = b[state.sortCol];
+      if (va === null) return vb === null ? 0 : 1;
+      if (vb === null) return -1;
       if (typeof va === 'string') return state.sortAsc ? va.localeCompare(vb) : vb.localeCompare(va);
       return state.sortAsc ? (va - vb) : (vb - va);
     });
@@ -922,17 +864,18 @@
       return;
     }
 
-    tbody.innerHTML = models.map(m => `
+    tbody.innerHTML = models.map(model => `
       <tr>
         <td style="font-weight:600; color:#f8fafc;">
-          ${m.display_name} ${m.pricing_estimated ? '<span style="font-size:0.65rem; color:#94a3b8; background:rgba(255,255,255,0.08); padding:1px 5px; border-radius:4px; font-weight:normal; margin-left:4px;">≈ est</span>' : ''}
-          <div class="ces-bar-wrap"><div class="ces-bar-fill" style="width:${Math.min(100, Math.max(0, m.rate))}%"></div></div>
+          ${escapeHtml(model.model)}
+          <span class="ces-route">${escapeHtml(model.provider)} · ${model.kind === 'subscription_session' ? 'Session aggregate · final reported model' : escapeHtml(model.kind)}</span>
+          ${model.rate === null ? '' : `<div class="ces-bar-wrap"><div class="ces-bar-fill" style="width:${model.rate}%"></div></div>`}
         </td>
-        <td>${m.calls.toLocaleString()}</td>
-        <td>${formatTokens(m.prompt_tokens)}</td>
-        <td style="color:#38bdf8">${formatTokens(m.cached_tokens)}</td>
-        <td><b style="color:#e85d6f">${m.rate}%</b></td>
-        <td style="color:#34d399; font-weight:700;">${formatUsd(m.savings_usd)}</td>
+        <td>${counted(model.total_records, model.kind === 'attempt' ? 'request' : model.kind === 'subscription_session' ? 'session' : 'record')}</td>
+        <td>${formatTokens(model.prompt_tokens)}</td>
+        <td style="color:#38bdf8">${formatTokens(model.cached_tokens)}</td>
+        <td><b style="color:#e85d6f">${formatRate(model.rate)}</b><span class="ces-route">${model.rate === null ? 'No comparable input' : `${formatTokens(model.eligible_cached_tokens)} / ${formatTokens(model.eligible_prompt_tokens)} measured`}</span></td>
+        <td>${model.measured_records} / ${model.total_records}<span class="ces-route">${model.unknown_total_records} unknown input · ${model.unknown_read_records} unknown reads</span></td>
       </tr>
     `).join('');
   }
@@ -943,6 +886,7 @@
       document.querySelectorAll('#tfGroup .ces-tf-btn').forEach(b => b.classList.remove('active'));
       e.target.classList.add('active');
       state.timeframe = e.target.dataset.tf;
+      clearInspection();
       fetchData();
     }
   });
@@ -963,7 +907,9 @@
       document.querySelectorAll('.ces-chart-mode-btn').forEach(b => b.classList.remove('active'));
       e.target.classList.add('active');
       state.chartMode = e.target.dataset.mode;
+      clearInspection();
       document.getElementById('chartTitle').textContent = state.chartMode === 'trend' ? 'Cache-Read Rate Trend (%)' : 'Token Volume Composition';
+      document.getElementById('chartLegend').textContent = state.chartMode === 'trend' ? 'Gaps mean no comparable measurement. A measured zero is 0%.' : 'Green: cache reads · Slate: other input · Amber: input with unknown cache reads. Unknown input volumes cannot be drawn.';
       renderChart();
     }
   });
@@ -997,10 +943,12 @@
   }
 
   // Widget Disposal Hook
-  window.__ouroWidgetOnDispose = function () {
+  window.__ouroWidgetOnDispose(function () {
+    state.disposed = true;
+    state.reqSequence += 1;
     stopPolling();
     window.removeEventListener('resize', resizeCanvas);
-  };
+  });
 
   // Initial Load
   resizeCanvas();
