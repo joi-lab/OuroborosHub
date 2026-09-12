@@ -192,19 +192,19 @@
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "d65adfeefe5700553d717fb003635709ada3c322bffbb70f01f54d807ff0f0c1",
+          "sha256": "0add14dba39d066130ed548943b84d668f80cc49c27bb5656f44023001e1b03b",
           "size": 4215
         },
         {
           "path": "plugin.py",
-          "sha256": "4f3b9b6afe1144770a5964ad075dff39c817d8aa9f4d05b4336d2f7ba99f5cbf",
-          "size": 16554
+          "sha256": "8bf72e303b5cc7697b368137d3d59c7695044e9ca2f00e16d8fe4c0e159ddaea",
+          "size": 17544
         }
       ],
       "name": "backlog_manager",
       "slug": "backlog_manager",
       "type": "extension",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "when_to_use": "User wants to inspect, triage, add, annotate, or manage Ouroboros improvement backlog items from a reviewed widget."
     },
     {
