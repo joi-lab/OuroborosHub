@@ -35,7 +35,16 @@ REFRESH_PATH = "/api/claudexor/quota/refresh"
 PREFS_FILE = "prefs.json"
 DENSITIES = ("compact", "normal", "detailed")
 MODEL_VIEWS = ("all", "models", "shared")
-DEFAULT_PREFS: Dict[str, Any] = {"density": "normal", "models": {}}
+# Why an account can be folded out of the list, in the order its sections are
+# shown. The reader answers each of them separately. An account can match more
+# than one (a failed check is often reported with no login); the widget then
+# files it by its own order of checks, no login first, not by this one.
+FOLD_REASONS = ("failed", "disabled", "signed_out")
+DEFAULT_PREFS: Dict[str, Any] = {
+    "density": "normal",
+    "models": {},
+    "fold": {reason: True for reason in FOLD_REASONS},
+}
 # A harness id is a short slug from the host's own catalog. The cap is there so
 # a malformed call cannot grow the file without bound.
 MAX_MODEL_ENTRIES = 32
@@ -685,7 +694,13 @@ def clean_prefs(raw: Any) -> Dict[str, Any]:
     """Whatever comes back from disk or from the widget, reduced to what this
     skill is willing to remember. An unknown value is not corrected into a
     guess — it is dropped, and the default stands in its place."""
-    out: Dict[str, Any] = {"density": DEFAULT_PREFS["density"], "models": {}}
+    out: Dict[str, Any] = {
+        "density": DEFAULT_PREFS["density"],
+        "models": {},
+        # A copy, not the map itself: one shared map here and the first
+        # write would edit the defaults themselves.
+        "fold": dict(DEFAULT_PREFS["fold"]),
+    }
     if not isinstance(raw, dict):
         return out
     density = raw.get("density")
@@ -697,6 +712,15 @@ def clean_prefs(raw: Any) -> Dict[str, Any]:
             key = str(harness_id)[:MAX_HARNESS_ID].strip()
             if key and choice in MODEL_VIEWS:
                 out["models"][key] = choice
+    fold = raw.get("fold")
+    if isinstance(fold, dict):
+        for reason in FOLD_REASONS:
+            choice = fold.get(reason)
+            # Only a real boolean answers this. "no", 0 and null are somebody
+            # else's idea of false, and guessing which way they meant would
+            # fold accounts away, or stop folding them, behind the reader.
+            if isinstance(choice, bool):
+                out["fold"][reason] = choice
     return out
 
 
@@ -727,10 +751,21 @@ def write_prefs(api: Any, raw: Any) -> Tuple[Dict[str, Any], str]:
     path = _prefs_path(api)
     if path is None:
         return prefs, "no state directory"
+    # Written beside the file and moved over it in one step. A write cut in half
+    # leaves prefs.json unreadable, and the next read answers with the defaults
+    # — the reader's choices gone without anything saying so.
+    tmp = path.with_name(path.name + ".tmp")
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(prefs), encoding="utf-8")
+        tmp.write_text(json.dumps(prefs), encoding="utf-8")
+        os.replace(tmp, path)
     except Exception as exc:
+        try:
+            tmp.unlink()
+        except Exception:
+            # Nothing to clean up, or nothing that can be: the error that
+            # brought us here is the one worth reporting.
+            pass
         return prefs, f"{type(exc).__name__}: {exc}"
     return prefs, ""
 
