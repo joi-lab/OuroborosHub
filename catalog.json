@@ -407,8 +407,8 @@
         },
         {
           "path": "SKILL.md",
-          "sha256": "e909c8d99f32019e0b170477de14b6ed8a3d168c4b394baa65f249bb22179c1a",
-          "size": 8081
+          "sha256": "c0ed33d53a6b2cd9e29d79a89cd3134060e4599ac2e04d72c684967d65fea0c3",
+          "size": 8099
         },
         {
           "path": "client.py",
@@ -429,7 +429,7 @@
       "name": "email",
       "slug": "email",
       "type": "extension",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "when_to_use": "When the user wants to list unread emails, read email message contents, compose and send emails via standard IMAP/SMTP protocols, or test email server connectivity."
     },
     {
@@ -957,8 +957,8 @@
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "bb7d46445e49391fe9916f41d8822def0d3b58aacc6a730e8fccf1b066621099",
-          "size": 2525
+          "sha256": "ca5823034edac89317fe66ce991e384ea019f54ed4ecf67e1b9bed7e0f8421ba",
+          "size": 2543
         },
         {
           "path": "client.py",
@@ -974,7 +974,7 @@
       "name": "sber-ring",
       "slug": "sber-ring",
       "type": "extension",
-      "version": "1.0.0"
+      "version": "1.0.1"
     },
     {
       "description": "Local second-opinion layer over the owner's own medical data — genome (VCF), laboratory history, prescriptions, wearables. 30 tools; answers carry provenance and say what the data cannot support. Not a medical device.",
@@ -1210,8 +1210,8 @@
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "4ae59c405524536c96d9681c9daac656a7ea9f14e7203c9b7d00d7a57b138a15",
-          "size": 2236
+          "sha256": "0e34ec8366f5eba4680031d195fe3bf791e0829a94df32bb911afae2e36422c0",
+          "size": 2254
         },
         {
           "path": "client.py",
@@ -1227,7 +1227,7 @@
       "name": "vkusvill",
       "slug": "vkusvill",
       "type": "extension",
-      "version": "1.0.0"
+      "version": "1.0.1"
     },
     {
       "description": "Wide polished weather widget — current conditions, compact forecast, astronomy, and resilient wttr.in cache (no API key).",
