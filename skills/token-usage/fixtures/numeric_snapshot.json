@@ -1,0 +1,51 @@
+{
+  "fixture_schema": 1,
+  "fixture_note": "Public synthetic numeric metadata only. No prompts, chats, account identifiers or private project metadata. A frozen latest-state projection, not a monetary ledger.",
+  "revision": "synthetic-token-observatory-2026-09-10-v1",
+  "coverage": {"status": "complete", "issues": [], "source": "synthetic"},
+  "captured_at": "2026-09-10T10:00:00Z",
+  "rows": [
+    {"attempt_id":"legacy-input", "kind":"attempt", "state":"settled", "seq":3, "ts":"2026-07-30T12:00:00Z", "model":"claude-opus-test", "provider":"anthropic", "task_id":"root-a", "root_task_id":"root-a", "project_id":"aurora", "project_name":"Aurora", "source":"claude_code.readonly", "prompt_tokens":15, "completion_tokens":39828, "cached_tokens":3037316, "cache_write_tokens":448991, "cost_usd":1.25, "cost_final":true, "pricing_known":true},
+    {"attempt_id":"native-child", "kind":"attempt", "state":"settled", "seq":4, "ts":"2026-09-10T09:00:00Z", "model":"native-test", "provider":"vendor-test", "subscription_route":"launched-native", "task_id":"child-a1", "root_task_id":"root-a", "parent_task_id":"root-a", "project_id":"aurora", "project_name":"Aurora", "source":"native", "prompt_tokens":1200, "completion_tokens":300, "cached_tokens":700, "cache_write_tokens":100, "cost_usd":0.2, "cost_final":true, "pricing_known":true},
+    {"attempt_id":"null-child", "kind":"attempt", "state":"settled", "seq":5, "ts":"2026-09-10T09:30:00Z", "model":"native-test", "provider":"vendor-test", "subscription_route":"launched-native", "task_id":"child-a2", "root_task_id":"root-a", "parent_task_id":"child-a1", "project_id":"aurora", "project_name":"Aurora", "source":"native", "prompt_tokens":null, "completion_tokens":0, "cached_tokens":0, "cost_usd":null, "cost_final":false, "reservation_upper_bound_usd":0.75, "pricing_known":false},
+    {"attempt_id":"measured-zero", "kind":"attempt", "state":"settled", "seq":6, "ts":"2026-09-10T10:00:00Z", "model":"gpt-test", "provider":"openai", "task_id":"root-b", "root_task_id":"root-b", "project_id":"borealis", "project_name":"Borealis", "prompt_tokens":0, "completion_tokens":0, "cached_tokens":0, "cache_write_tokens":0, "cost_usd":0, "cost_final":true, "pricing_known":true},
+    {"attempt_id":"undated", "kind":"attempt", "state":"unresolved", "seq":7, "ts":null, "model":null, "provider":"vendor-test", "task_id":"orphan", "root_task_id":null, "project_id":null, "prompt_tokens":null, "completion_tokens":null, "cached_tokens":null, "cache_write_tokens":null, "cost_usd":null, "reservation_upper_bound_usd":0.8},
+    {"attempt_id":"before-hour", "kind":"attempt", "state":"dispatched", "seq":8, "ts":"2026-09-10T08:59:59Z", "model":"gpt-test", "provider":"openai", "task_id":"root-d", "root_task_id":"root-d", "project_id":null, "reservation_upper_bound_usd":0.4},
+    {"attempt_id":"estimated-day-boundary", "kind":"attempt", "state":"settled", "seq":9, "ts":"2026-09-09T10:00:00Z", "model":"claude-opus-test", "provider":"anthropic", "task_id":"root-c", "root_task_id":"root-c", "project_id":"borealis", "project_name":"Borealis", "prompt_tokens":25, "completion_tokens":10, "cached_tokens":null, "cache_write_tokens":0, "cost_usd":0.125, "cost_final":false},
+    {"attempt_id":"similar-prefix", "kind":"attempt", "state":"settled", "seq":10, "ts":"2026-09-10T09:20:00Z", "model":"gpt-test", "provider":"openai", "task_id":"root-a-extra", "root_task_id":"root-a-extra", "project_id":"aurora-extra", "project_name":"Aurora Extra", "prompt_tokens":10, "completion_tokens":2, "cached_tokens":0, "cache_write_tokens":0, "cost_usd":0.01, "cost_final":true},
+    {"attempt_id":"subscription-unknown", "kind":"subscription_session", "state":"settled", "seq":11, "ts":"2026-09-10T09:15:00Z", "model":null, "provider":"subscription-vendor", "subscription_route":"launched-native", "task_id":"root-a", "root_task_id":"root-a", "project_id":"aurora", "prompt_tokens":null, "completion_tokens":null, "cached_tokens":null, "cache_write_tokens":null, "cost_usd":null, "cost_final":false},
+    {"attempt_id":"subscription-aggregate", "kind":"subscription_session", "state":"settled", "seq":12, "ts":"2026-09-10T09:45:00Z", "model":"native-test", "provider":"subscription-vendor", "subscription_route":"launched-native", "task_id":"child-a1", "root_task_id":"root-a", "parent_task_id":"root-a", "project_id":"aurora", "prompt_tokens":999999, "completion_tokens":777777, "cached_tokens":500000, "cache_write_tokens":1000, "cost_usd":99, "cost_final":true},
+    {"attempt_id":"legacy-meta", "kind":"legacy_metadata", "state":"settled", "seq":13, "ts":"2026-09-10T09:10:00Z", "model":"legacy-model", "task_id":"root-a", "root_task_id":"root-a", "project_id":"aurora", "prompt_tokens":8000000, "completion_tokens":9000000, "cost_usd":1000, "cost_final":true},
+    {"attempt_id":"legacy-delta", "kind":"legacy_delta", "state":"settled", "seq":14, "ts":"2026-09-10T09:10:00Z", "model":"legacy-model", "task_id":"root-a", "root_task_id":"root-a", "project_id":"aurora", "prompt_tokens":4000000, "completion_tokens":5000000, "cost_usd":500, "cost_final":true},
+    {"attempt_id":"reservation-only", "kind":"attempt", "state":"reserved", "seq":15, "ts":"2026-09-10T09:05:00Z", "task_id":"root-a", "root_task_id":"root-a", "project_id":"aurora", "reservation_upper_bound_usd":0.9},
+    {"attempt_id":"released-reservation", "kind":"attempt", "state":"released", "seq":16, "ts":"2026-09-10T09:05:00Z", "task_id":"root-a", "root_task_id":"root-a", "project_id":"aurora", "reservation_upper_bound_usd":0.9}
+  ],
+  "oracle": {
+    "now": "2026-09-10T10:00:00Z",
+    "all": {
+      "physical_calls":8, "rows":8, "subscription_sessions":2, "unknown_subscription_sessions":1, "fully_reported_rows":5, "reported_tokens":41390, "unknown_cost_rows":1, "undated_rows":1,
+      "metrics": {
+        "prompt_tokens":{"value":1250,"known":5,"missing":3},
+        "completion_tokens":{"value":40140,"known":6,"missing":2},
+        "cached_tokens":{"value":3038016,"known":5,"missing":3},
+        "cache_write_tokens":{"value":449091,"known":5,"missing":3},
+        "cost_confirmed_usd":{"value":1.46,"known":4,"missing":0},
+        "cost_estimated_usd":{"value":0.125,"known":1,"missing":1},
+        "cost_held_usd":{"value":1.2,"known":2,"missing":0}
+      },
+      "subscription_summary": {
+        "reported_tokens":1777776,
+        "metrics": {
+          "prompt_tokens":{"value":999999,"known":1,"missing":1},
+          "completion_tokens":{"value":777777,"known":1,"missing":1},
+          "cached_tokens":{"value":500000,"known":1,"missing":1},
+          "cache_write_tokens":{"value":1000,"known":1,"missing":1}
+        }
+      }
+    },
+    "own_root_a": {"physical_calls":1,"reported_tokens":39843,"subscription_sessions":1},
+    "descendants_root_a": {"physical_calls":2,"reported_tokens":1500,"subscription_sessions":1},
+    "hour": {"physical_calls":3,"reported_tokens":1512,"fully_reported_rows":2,"undated_rows":0},
+    "day": {"physical_calls":5,"reported_tokens":1547,"fully_reported_rows":3,"undated_rows":0}
+  }
+}

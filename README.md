@@ -101,8 +101,10 @@ https://raw.githubusercontent.com/razzant/OuroborosHub/main/skills/<slug>/<path>
 Before submitting a change, check the published catalog without rewriting it:
 
 ```bash
+python -m pip install PyYAML pytest
 python scripts/build_catalog.py --check
 python -m unittest discover -s tests -v
+PYTHONDONTWRITEBYTECODE=1 python -m pytest -p no:cacheprovider -q skills/cache_efficiency_snapshot/test_cache_efficiency.py
 ```
 
 The check verifies the catalog structure, installation-name collisions and every

@@ -1,7 +1,10 @@
 """High-performance, multi-timeframe cache efficiency analytics engine for Ouroboros.
 
-Provides incremental ledger ingestion with thread-safe caching, token-weighted
-cache rate calculations, monetary savings modeling, and a sync/async HTTP endpoint for the module widget.
+Requests come from the per-call ``llm_usage`` events (the live ``logs/events.jsonl``
+plus its rotated ``archive/events_*.jsonl`` files inside a bounded window), which
+survive ledger compaction; whole harness sessions still come from the retained
+``state/usage_attempts.jsonl`` ledger. Both readers are incremental and thread-safe,
+measurements keep explicit coverage, and one HTTP endpoint feeds the module widget.
 """
 from __future__ import annotations
 
@@ -9,61 +12,47 @@ import json
 import math
 import os
 import threading
-from collections import OrderedDict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
-LEDGER_FALLBACK = Path("state") / "usage_attempts.jsonl"
 TERMINAL_STATE = "settled"
 MAX_MODELS_RETURNED = 25
 MAX_BUCKETS_RETURNED = 120
 MAX_CACHE_RETAIN_DAYS = 30
-
-# Default Model Pricing Map per 1M tokens (Input, Cache Read, Cache Write)
-# Derived from canonical provider tariffs
-MODEL_PRICING: Dict[str, Tuple[float, float, float]] = {
-    # Anthropic / Claude
-    "claude-opus-5": (15.00, 1.50, 18.75),
-    "claude-opus-4": (15.00, 1.50, 18.75),
-    "claude-sonnet-5": (3.00, 0.30, 3.75),
-    "claude-sonnet-4": (3.00, 0.30, 3.75),
-    "claude-3-7-sonnet": (3.00, 0.30, 3.75),
-    "claude-3-5-sonnet": (3.00, 0.30, 3.75),
-    "claude-3-5-haiku": (0.80, 0.08, 1.00),
-    "claude-haiku-4": (0.80, 0.08, 1.00),
-    # Google Gemini
-    "gemini-3.7-flash": (0.15, 0.0375, 0.15),
-    "gemini-3.6-flash": (0.15, 0.0375, 0.15),
-    "gemini-2.5-flash": (0.15, 0.0375, 0.15),
-    "gemini-2.5-pro": (1.25, 0.3125, 1.25),
-    # OpenAI GPT
-    "gpt-5.6-terra": (3.00, 0.75, 3.75),
-    "gpt-5.6-sol": (3.00, 0.75, 3.75),
-    "gpt-5.6-luna": (0.25, 0.0625, 0.30),
-    "gpt-5.5": (2.50, 0.625, 3.125),
-    "gpt-5": (2.50, 0.625, 3.125),
-    "gpt-4.5": (10.00, 2.50, 12.50),
-    "gpt-4o": (2.50, 1.25, 2.50),
-    "gpt-4o-mini": (0.15, 0.075, 0.15),
-    # xAI Grok
-    "grok-4.6": (2.00, 0.50, 2.00),
-    "grok-4.5": (2.00, 0.50, 2.00),
-    "grok-4": (2.00, 0.50, 2.00),
-    # DeepSeek
-    "deepseek-v4": (0.27, 0.07, 0.27),
-    "deepseek-v3": (0.27, 0.07, 0.27),
-    "deepseek-r1": (0.55, 0.14, 0.55),
+BASELINE_KINDS = frozenset({"usage_baseline", "usage_baseline_group"})
+USAGE_EVENT_TYPE = "llm_usage"
+USAGE_ARCHIVE_GLOB = "events_*.jsonl"
+USAGE_ARCHIVE_WINDOW_DAYS = 7
+_EMPTY_EVENT_STATS = {
+    "total_lines_read": 0,
+    "malformed_lines": 0,
+    "non_usage_lines": 0,
+    "usage_events": 0,
+    "unparsed_events": 0,
+    "duplicate_events_skipped": 0,
+    "archives_read": 0,
 }
 
-# Default fallback pricing: 75% savings on cache read
-DEFAULT_FALLBACK_PRICING: Tuple[float, float, float] = (2.00, 0.50, 2.00)
+_EMPTY_LEDGER_STATS = {
+    "total_lines_read": 0,
+    "malformed_lines": 0,
+    "non_settled_lines": 0,
+    "valid_records": 0,
+    "compacted_records_skipped": 0,
+    "request_rows_skipped": 0,
+}
 
 _DATA_DIR: Optional[Path] = None
 
 
 class LedgerCache:
-    """Thread-safe incremental cache for the usage attempts JSONL ledger."""
+    """Thread-safe incremental cache for whole-session rows of the usage ledger.
+
+    Physical request rows are NOT taken from here any more: compaction folds them
+    into ``usage_baseline_group`` summaries within hours, so the per-call
+    ``llm_usage`` events are the request source (``UsageEventsCache``).
+    """
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
@@ -71,12 +60,7 @@ class LedgerCache:
         self.last_mtime_ns: int = 0
         self.last_size: int = 0
         self.records: List[Dict[str, Any]] = []
-        self.raw_stats: Dict[str, int] = {
-            "total_lines_read": 0,
-            "malformed_lines": 0,
-            "non_settled_lines": 0,
-            "valid_records": 0,
-        }
+        self.raw_stats: Dict[str, int] = dict(_EMPTY_LEDGER_STATS)
 
     def clear(self) -> None:
         with self._lock:
@@ -84,12 +68,7 @@ class LedgerCache:
             self.last_mtime_ns = 0
             self.last_size = 0
             self.records = []
-            self.raw_stats = {
-                "total_lines_read": 0,
-                "malformed_lines": 0,
-                "non_settled_lines": 0,
-                "valid_records": 0,
-            }
+            self.raw_stats = dict(_EMPTY_LEDGER_STATS)
 
     def update(self, ledger_path: Path) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
         with self._lock:
@@ -122,12 +101,7 @@ class LedgerCache:
             ):
                 self.records = []
                 self.last_size = 0
-                self.raw_stats = {
-                    "total_lines_read": 0,
-                    "malformed_lines": 0,
-                    "non_settled_lines": 0,
-                    "valid_records": 0,
-                }
+                self.raw_stats = dict(_EMPTY_LEDGER_STATS)
                 self.file_identity = current_ident
 
             # If no change in size/mtime and we already have records, return cached copy
@@ -182,6 +156,18 @@ class LedgerCache:
                     self.raw_stats["non_settled_lines"] += 1
                     continue
 
+                # Compaction rows (the settled ``usage_baseline`` header and its
+                # folded ``usage_baseline_group`` rows) carry compaction time,
+                # not per-request timestamps; the core reader skips them too.
+                if str(row.get("kind") or "") in BASELINE_KINDS:
+                    self.raw_stats["compacted_records_skipped"] += 1
+                    continue
+                # Physical requests are counted from the per-call usage events
+                # (they outlive compaction there); counting the ledger row too
+                # would double the request.
+                if str(row.get("kind") or "attempt") == "attempt":
+                    self.raw_stats["request_rows_skipped"] += 1
+                    continue
                 parsed = _normalize_record(row)
                 if parsed is not None:
                     self.records.append(parsed)
@@ -199,6 +185,187 @@ class LedgerCache:
 _CACHE = LedgerCache()
 
 
+def _usage_event_identity(row: Mapping[str, Any]) -> str:
+    """One physical call = one event; a byte-identical replay (rotation seam) is the same call."""
+    facts = [row.get(key) for key in ("ts", "task_id", "model", "source", "prompt_tokens",
+                                       "completion_tokens", "cached_tokens", "llm_call_id",
+                                       "ledger_attempt_ids")]
+    return json.dumps(facts, sort_keys=True, default=str, separators=(",", ":"))
+
+
+def _normalize_usage_event(row: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
+    """A per-call ``llm_usage`` event: inclusive input, cache reads, cache writes."""
+    stamp = _parse_timestamp(row)
+    if stamp is None:
+        return None
+    provider = str(row.get("provider") or row.get("api_key_type") or "unknown")
+    model = str(row.get("model") or "unknown")
+    prompt = _token_count(row.get("prompt_tokens"))
+    cached = _token_count(row.get("cached_tokens"))
+    write = _token_count(row.get("cache_write_tokens"))
+    if prompt is not None and cached is not None and cached > prompt:
+        cached = None  # Inconsistent measurements are unknown, never clipped or guessed.
+    measured = prompt is not None and cached is not None
+    return {
+        "ts": stamp, "kind": "attempt", "provider": provider, "model": model,
+        "display_name": _clean_model_display_name(model),
+        "prompt_tokens": prompt, "cached_tokens": cached, "cache_write_tokens": write,
+        "measured": measured, "eligible": measured and prompt > 0,
+        "uncached_tokens": prompt - cached if measured else None,
+        "identity": _usage_event_identity(row),
+    }
+
+
+class UsageEventsCache:
+    """Thread-safe incremental cache over the per-call ``llm_usage`` events.
+
+    The live ``logs/events.jsonl`` is read incrementally (identity, offset, torn
+    trailing line) like the ledger. The core rotates it by renaming it to
+    ``archive/events_<stamp>.jsonl``; those files are immutable once they exist
+    and each is read once, inside a bounded mtime window. Records are keyed by
+    call identity, so the rotation seam (a tail already read from the live file
+    and then met again inside the new archive) never counts a request twice.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self.file_identity: Optional[Tuple[int, int]] = None
+        self.last_size: int = 0
+        self.records: List[Dict[str, Any]] = []
+        self.seen: set = set()
+        self.archives: Dict[str, Tuple[int, int]] = {}
+        self.raw_stats: Dict[str, int] = dict(_EMPTY_EVENT_STATS)
+
+    def clear(self) -> None:
+        with self._lock:
+            self.file_identity = None
+            self.last_size = 0
+            self.records = []
+            self.seen = set()
+            self.archives = {}
+            self.raw_stats = dict(_EMPTY_EVENT_STATS)
+
+    def update(self, live_path: Path, archive_dir: Path, *,
+               now: Optional[datetime] = None) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+        with self._lock:
+            now = now or datetime.now(timezone.utc)
+            horizon = now - timedelta(days=USAGE_ARCHIVE_WINDOW_DAYS)
+            meta: Dict[str, Any] = {
+                "exists": live_path.is_file(), "events_path": str(live_path),
+                "archive_dir": str(archive_dir), "archive_window_days": USAGE_ARCHIVE_WINDOW_DAYS,
+                "read_error": None,
+            }
+            # Archives first: after a rotation the tail of the previous live file
+            # lives only in the newest archive, and the live file starts over.
+            self._ingest_archives(archive_dir, horizon, meta)
+            if meta["exists"]:
+                self._ingest_live(live_path, meta)
+            else:
+                meta["read_error"] = meta["read_error"] or "file_not_found"
+            self._prune(horizon)
+            meta["raw_stats"] = dict(self.raw_stats)
+            return list(self.records), meta
+
+    def _ingest_archives(self, archive_dir: Path, horizon: datetime, meta: Dict[str, Any]) -> None:
+        try:
+            candidates = sorted(archive_dir.glob(USAGE_ARCHIVE_GLOB)) if archive_dir.is_dir() else []
+        except OSError as exc:
+            meta["read_error"] = f"archive_error:{type(exc).__name__}"
+            return
+        for path in candidates:
+            try:
+                stat = path.stat()
+            except OSError:
+                continue
+            if datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc) < horizon:
+                continue
+            identity = (stat.st_size, stat.st_mtime_ns)
+            if self.archives.get(str(path)) == identity:
+                continue
+            try:
+                data = path.read_bytes()
+            except OSError as exc:
+                meta["read_error"] = f"archive_read_error:{type(exc).__name__}"
+                continue
+            self._ingest_bytes(data)
+            self.archives[str(path)] = identity
+            self.raw_stats["archives_read"] += 1
+
+    def _ingest_live(self, live_path: Path, meta: Dict[str, Any]) -> None:
+        try:
+            stat = live_path.stat()
+        except OSError as exc:
+            meta["read_error"] = f"stat_error:{type(exc).__name__}"
+            return
+        current_ident = (stat.st_ino, stat.st_dev)
+        meta["file_size_bytes"] = stat.st_size
+        # A replaced (rotated) or truncated live file starts over at offset 0;
+        # records already read stay, the identity set absorbs any replay.
+        if self.file_identity != current_ident or stat.st_size < self.last_size:
+            self.file_identity = current_ident
+            self.last_size = 0
+        if stat.st_size == self.last_size:
+            return
+        try:
+            with live_path.open("rb") as handle:
+                if self.last_size:
+                    handle.seek(self.last_size)
+                new_bytes = handle.read()
+        except OSError as exc:
+            meta["read_error"] = f"read_error:{type(exc).__name__}"
+            return
+        cut = new_bytes.rfind(b"\n")
+        if cut < 0:
+            return  # Incomplete partial line: wait for its newline.
+        complete = new_bytes[: cut + 1]
+        self._ingest_bytes(complete)
+        self.last_size += len(complete)
+
+    def _ingest_bytes(self, data: bytes) -> None:
+        for raw in data.splitlines():
+            if not raw.strip():
+                continue
+            self.raw_stats["total_lines_read"] += 1
+            if USAGE_EVENT_TYPE.encode() not in raw:
+                self.raw_stats["non_usage_lines"] += 1
+                continue
+            try:
+                row = json.loads(raw)
+            except Exception:
+                self.raw_stats["malformed_lines"] += 1
+                continue
+            if not isinstance(row, dict) or row.get("type") != USAGE_EVENT_TYPE:
+                self.raw_stats["non_usage_lines"] += 1
+                continue
+            record = _normalize_usage_event(row)
+            if record is None:
+                self.raw_stats["unparsed_events"] += 1
+                continue
+            if record["identity"] in self.seen:
+                self.raw_stats["duplicate_events_skipped"] += 1
+                continue
+            self.seen.add(record["identity"])
+            self.records.append(record)
+            self.raw_stats["usage_events"] += 1
+
+    def _prune(self, horizon: datetime) -> None:
+        # Archives are read in name order and the live tail last, so an expired
+        # record can sit anywhere in the list; scan the whole list.
+        if any(r["ts"] < horizon for r in self.records):
+            self.records = [r for r in self.records if r["ts"] >= horizon]
+            self.seen = {r["identity"] for r in self.records}
+        for key in list(self.archives):
+            try:
+                stale = datetime.fromtimestamp(Path(key).stat().st_mtime, tz=timezone.utc) < horizon
+            except OSError:
+                stale = True
+            if stale:
+                self.archives.pop(key, None)
+
+
+_EVENTS = UsageEventsCache()
+
+
 def _runtime_data_dir(api: Any) -> Optional[Path]:
     try:
         info = api.get_runtime_info()
@@ -208,49 +375,9 @@ def _runtime_data_dir(api: Any) -> Optional[Path]:
     return Path(raw).expanduser() if isinstance(raw, str) and raw.strip() else None
 
 
-def _resolve_pricing(model_name: str) -> Tuple[Tuple[float, float, float], bool]:
-    """Returns ((p_input, p_read, p_write), is_estimated_fallback)."""
-    clean = model_name.lower().strip()
-    for key, rates in MODEL_PRICING.items():
-        if key in clean:
-            return rates, False
-    return DEFAULT_FALLBACK_PRICING, True
-
-
 def _clean_model_display_name(model_name: str) -> str:
-    raw = str(model_name or "unknown").strip()
-    if "/" in raw:
-        parts = raw.split("/")
-        raw = parts[-1]
-    if "::" in raw:
-        parts = raw.split("::")
-        raw = parts[-1]
-
-    name_map = {
-        "claude-opus-5": "Claude Opus 5",
-        "claude-sonnet-5": "Claude Sonnet 5",
-        "claude-3-7-sonnet": "Claude 3.7 Sonnet",
-        "claude-3-5-sonnet": "Claude 3.5 Sonnet",
-        "claude-3-5-haiku": "Claude 3.5 Haiku",
-        "gemini-3.7-flash": "Gemini 3.7 Flash",
-        "gemini-3.6-flash": "Gemini 3.6 Flash",
-        "gemini-2.5-flash": "Gemini 2.5 Flash",
-        "gemini-2.5-pro": "Gemini 2.5 Pro",
-        "gpt-5.6-terra": "GPT-5.6 Terra",
-        "gpt-5.6-sol": "GPT-5.6 Sol",
-        "gpt-5.6-luna": "GPT-5.6 Luna",
-        "gpt-5": "GPT-5",
-        "gpt-4o": "GPT-4o",
-        "gpt-4o-mini": "GPT-4o Mini",
-        "grok-4.6": "Grok 4.6",
-        "grok-4.5": "Grok 4.5",
-        "deepseek-v3": "DeepSeek V3",
-        "deepseek-r1": "DeepSeek R1",
-    }
-    for k, v in name_map.items():
-        if k in raw.lower():
-            return v
-    return raw[:48]
+    """Short label only; exact provider/model/kind remain the grouping identity."""
+    return str(model_name or "unknown").rsplit("/", 1)[-1].rsplit("::", 1)[-1]
 
 
 def _parse_timestamp(row: Mapping[str, Any]) -> Optional[datetime]:
@@ -270,268 +397,164 @@ def _parse_timestamp(row: Mapping[str, Any]) -> Optional[datetime]:
     return None
 
 
+def _token_count(value: Any) -> Optional[int]:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    if not math.isfinite(value) or value < 0 or int(value) != value:
+        return None
+    return int(value)
+
+
 def _normalize_record(row: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
     stamp = _parse_timestamp(row)
     if stamp is None:
         return None
+    kind = str(row.get("kind") or "attempt")  # the core ledger reader's default
+    provider = str(row.get("provider") or "unknown")
+    model = str(row.get("model") or row.get("resolved_model") or "unknown")
 
-    usage = row.get("usage") if isinstance(row.get("usage"), Mapping) else {}
-
-    def _get_num(*keys: str) -> int:
-        for k in keys:
-            v = row.get(k)
-            if v is None and usage:
-                v = usage.get(k)
-            if isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) and v >= 0:
-                return int(v)
-        return 0
-
-    raw_prompt = _get_num("prompt_tokens", "input_tokens", "tokens_prompt")
-    raw_cached = _get_num("cached_tokens", "cache_read_input_tokens", "cache_read_tokens")
-    raw_write = _get_num("cache_write_tokens", "cache_creation_input_tokens")
-
-    if raw_prompt <= 0 and raw_cached <= 0:
-        return None
-
-    if raw_cached > raw_prompt:
-        canonical_prompt = raw_prompt + raw_cached + raw_write
+    # The additive object is authoritative, including its unknown fields.
+    if "input_token_usage" in row:
+        usage = row["input_token_usage"]
+        usage = usage if isinstance(usage, Mapping) else {}
+        prompt = _token_count(usage.get("total_tokens"))
+        cached = _token_count(usage.get("cache_read_tokens"))
+        write = _token_count(usage.get("cache_write_tokens"))
+    elif kind == "attempt" or (
+        kind == "subscription_session" and provider == "codex"
+        and row.get("subscription_route") == "codex"
+    ):
+        # Physical attempts are already canonical. Legacy native Codex sessions
+        # report inclusive input and cache reads; Claude/Cursor combined reads
+        # and creation in the old cached field, so cannot be reconstructed here.
+        usage = row.get("usage") if isinstance(row.get("usage"), Mapping) else {}
+        prompt = _token_count(row.get("prompt_tokens", usage.get("prompt_tokens")))
+        cached = _token_count(row.get("cached_tokens", usage.get("cached_tokens")))
+        write = _token_count(row.get("cache_write_tokens", usage.get("cache_write_tokens")))
     else:
-        canonical_prompt = raw_prompt
+        prompt = cached = write = None
 
-    if canonical_prompt <= 0:
-        return None
-
-    cached_tokens = min(raw_cached, canonical_prompt)
-    uncached_tokens = max(0, canonical_prompt - cached_tokens)
-
-    model_name = str(row.get("model") or row.get("resolved_model") or "unknown")
-    (p_input, p_read, p_write), is_estimated = _resolve_pricing(model_name)
-
-    gross_cost = (canonical_prompt * p_input) / 1_000_000.0
-    gross_savings = (cached_tokens * (p_input - p_read)) / 1_000_000.0
-    write_surcharge = (raw_write * max(0.0, p_write - p_input)) / 1_000_000.0
-    net_savings = max(0.0, gross_savings - write_surcharge)
-    net_cost = max(0.0, gross_cost - net_savings)
-
-    # If row carries exact settled cost, keep reference
-    recorded_cost = row.get("cost_usd")
-    if isinstance(recorded_cost, (int, float)) and math.isfinite(recorded_cost) and recorded_cost >= 0:
-        net_cost = float(recorded_cost)
-
+    if prompt is not None and cached is not None and cached > prompt:
+        cached = None  # Inconsistent measurements are unknown, never clipped or guessed.
+    measured = prompt is not None and cached is not None
     return {
-        "ts": stamp,
-        "model": model_name,
-        "display_name": _clean_model_display_name(model_name),
-        "prompt_tokens": canonical_prompt,
-        "cached_tokens": cached_tokens,
-        "uncached_tokens": uncached_tokens,
-        "cache_write_tokens": raw_write,
-        "has_cache": cached_tokens > 0,
-        "gross_cost_usd": gross_cost,
-        "net_savings_usd": net_savings,
-        "net_cost_usd": net_cost,
-        "pricing_estimated": is_estimated,
+        "ts": stamp, "kind": kind, "provider": provider, "model": model,
+        "display_name": _clean_model_display_name(model),
+        "prompt_tokens": prompt, "cached_tokens": cached, "cache_write_tokens": write,
+        "measured": measured, "eligible": measured and prompt > 0,
+        "uncached_tokens": prompt - cached if measured else None,
     }
 
 
-def _get_timeframe_bounds(tf_normalized: str, now: datetime) -> Tuple[datetime, timedelta, int]:
-    if tf_normalized == "1H":
-        return now - timedelta(hours=1), timedelta(minutes=5), 12
-    elif tf_normalized == "6H":
-        return now - timedelta(hours=6), timedelta(minutes=30), 12
-    elif tf_normalized == "7D":
-        return now - timedelta(days=7), timedelta(hours=6), 28
-    elif tf_normalized == "ALL":
-        return datetime.fromtimestamp(0, tz=timezone.utc), timedelta(days=1), 30
-    else:  # Default: 24H
-        return now - timedelta(hours=24), timedelta(hours=1), 24
+def _aggregate(records: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """One arithmetic owner for headlines, route rows and time buckets."""
+    totals = [r["prompt_tokens"] for r in records if r["prompt_tokens"] is not None]
+    reads = [r["cached_tokens"] for r in records if r["cached_tokens"] is not None]
+    eligible = [r for r in records if r["eligible"]]
+    prompt = sum(r["prompt_tokens"] for r in eligible)
+    cached = sum(r["cached_tokens"] for r in eligible)
+    return {
+        "total_records": len(records),
+        "request_count": sum(r["kind"] == "attempt" for r in records),
+        "session_count": sum(r["kind"] == "subscription_session" for r in records),
+        "other_count": sum(r["kind"] not in ("attempt", "subscription_session") for r in records),
+        "prompt_tokens": sum(totals) if totals else None,
+        "cached_tokens": sum(reads) if reads else None,
+        "eligible_prompt_tokens": prompt,
+        "eligible_cached_tokens": cached,
+        "uncached_tokens": prompt - cached,
+        "unknown_prompt_tokens": sum(totals) - prompt,
+        "cache_read_rate": round(cached / prompt * 100, 2) if prompt else None,
+        "measured_records": sum(r["measured"] for r in records),
+        "rate_records": len(eligible),
+        "unknown_total_records": len(records) - len(totals),
+        "unknown_read_records": len(records) - len(reads),
+        "zero_volume_records": sum(r["measured"] and r["prompt_tokens"] == 0 for r in records),
+    }
+
+
+def _get_timeframe_bounds(tf: str, now: datetime) -> Tuple[datetime, timedelta]:
+    if tf == "1H":
+        return now - timedelta(hours=1), timedelta(minutes=5)
+    if tf == "6H":
+        return now - timedelta(hours=6), timedelta(minutes=30)
+    if tf == "7D":
+        return now - timedelta(days=7), timedelta(hours=6)
+    return now - timedelta(hours=24), timedelta(hours=1)
 
 
 def calculate_analytics(
     records: List[Dict[str, Any]],
     timeframe: str = "24H",
     meta: Optional[Dict[str, Any]] = None,
+    *,
+    now: Optional[datetime] = None,
 ) -> Dict[str, Any]:
-    tf_normalized = str(timeframe or "24H").upper().strip()
-    now = datetime.now(timezone.utc)
-    start_dt, step_delta, _ = _get_timeframe_bounds(tf_normalized, now)
+    tf = str(timeframe or "24H").upper().strip()
+    if tf not in ("1H", "6H", "24H", "7D", "ALL"):
+        tf = "24H"
+    now = now or datetime.now(timezone.utc)
+    start, step = _get_timeframe_bounds(tf, now)
+    if tf == "ALL":
+        start = min((r["ts"] for r in records if r["ts"] < now), default=now)
+        span = (now - start).total_seconds()
+        step = timedelta(hours=1 if span <= 86400 else 6 if span <= 7 * 86400 else 12 if span <= 30 * 86400 else 24)
+    window = [r for r in records if start <= r["ts"] < now]
+    summary = _aggregate(window)
 
-    # Filter records in window
-    window_records = (
-        [r for r in records if r["ts"] >= start_dt]
-        if tf_normalized != "ALL"
-        else list(records)
-    )
+    # Half-open intervals contain each observation once, including boundaries.
+    # ALL also retains empty intervals, so the chart cannot bridge unobserved time.
+    count = math.ceil((now - start).total_seconds() / step.total_seconds())
+    omitted = max(0, count - MAX_BUCKETS_RETURNED)
+    bucket_records: Dict[int, List[Dict[str, Any]]] = {i: [] for i in range(omitted, count)}
+    groups: Dict[Tuple[str, str, str], List[Dict[str, Any]]] = {}
+    for record in window:
+        index = int((record["ts"] - start).total_seconds() // step.total_seconds())
+        if index in bucket_records:
+            bucket_records[index].append(record)
+        key = (record["provider"], record["model"], record["kind"])
+        groups.setdefault(key, []).append(record)
 
-    # If ALL, adapt bucket step to span
-    if tf_normalized == "ALL" and window_records:
-        oldest_ts = min(r["ts"] for r in window_records)
-        span = (now - oldest_ts).total_seconds()
-        if span <= 86400:
-            step_delta = timedelta(hours=1)
-        elif span <= 7 * 86400:
-            step_delta = timedelta(hours=6)
-        elif span <= 30 * 86400:
-            step_delta = timedelta(hours=12)
-        else:
-            step_delta = timedelta(days=1)
-        start_dt = oldest_ts
+    buckets = []
+    for index, members in bucket_records.items():
+        stamp = start + index * step
+        aggregate = _aggregate(members)
+        buckets.append({
+            **aggregate, "ts": stamp.isoformat(),
+            "label": stamp.strftime("%Y-%m-%d %H:%M" if tf == "ALL" else "%m-%d %H:%M"),
+            "rate": aggregate["cache_read_rate"],
+            "prompt": aggregate["prompt_tokens"],
+            "cached": aggregate["eligible_cached_tokens"],
+            "uncached": aggregate["uncached_tokens"],
+            "unknown": aggregate["unknown_prompt_tokens"],
+        })
 
-    total_calls = len(window_records)
-    total_prompt = sum(r["prompt_tokens"] for r in window_records)
-    total_cached = sum(r["cached_tokens"] for r in window_records)
-    total_uncached = sum(r["uncached_tokens"] for r in window_records)
-    total_gross_cost = sum(r["gross_cost_usd"] for r in window_records)
-    total_net_savings = sum(r["net_savings_usd"] for r in window_records)
-    total_net_cost = sum(r["net_cost_usd"] for r in window_records)
-    cache_hits = sum(1 for r in window_records if r["has_cache"])
-
-    cache_read_rate = round((total_cached / total_prompt * 100.0), 2) if total_prompt > 0 else 0.0
-    call_hit_rate = round((cache_hits / total_calls * 100.0), 2) if total_calls > 0 else 0.0
-
-    buckets_dict: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
-
-    if tf_normalized != "ALL":
-        curr = start_dt
-        while curr <= now:
-            b_label = (
-                curr.strftime("%m-%d %H:%M")
-                if tf_normalized in ("1H", "6H", "24H")
-                else curr.strftime("%Y-%m-%d %H:%M")
-            )
-            buckets_dict[b_label] = {
-                "label": b_label,
-                "ts": curr.isoformat(),
-                "prompt": 0,
-                "cached": 0,
-                "uncached": 0,
-                "unknown": 0,
-                "rate": 0.0,
-                "savings_usd": 0.0,
-                "calls": 0,
-            }
-            curr += step_delta
-
-    for r in window_records:
-        r_ts = r["ts"]
-        if tf_normalized != "ALL":
-            delta_sec = max(0.0, (r_ts - start_dt).total_seconds())
-            bucket_idx = int(delta_sec // step_delta.total_seconds())
-            bucket_time = start_dt + (step_delta * bucket_idx)
-            b_label = (
-                bucket_time.strftime("%m-%d %H:%M")
-                if tf_normalized in ("1H", "6H", "24H")
-                else bucket_time.strftime("%Y-%m-%d %H:%M")
-            )
-        else:
-            b_label = (
-                r_ts.strftime("%Y-%m-%d")
-                if step_delta >= timedelta(days=1)
-                else r_ts.strftime("%Y-%m-%d %H:00")
-            )
-
-        if b_label not in buckets_dict:
-            buckets_dict[b_label] = {
-                "label": b_label,
-                "ts": r_ts.isoformat(),
-                "prompt": 0,
-                "cached": 0,
-                "uncached": 0,
-                "unknown": 0,
-                "rate": 0.0,
-                "savings_usd": 0.0,
-                "calls": 0,
-            }
-
-        b = buckets_dict[b_label]
-        b["prompt"] += r["prompt_tokens"]
-        b["cached"] += r["cached_tokens"]
-        b["uncached"] += r["uncached_tokens"]
-        b["savings_usd"] += r["net_savings_usd"]
-        b["calls"] += 1
-
-    buckets_list = []
-    for b in buckets_dict.values():
-        p = b["prompt"]
-        c = b["cached"]
-        b["rate"] = round((c / p * 100.0), 2) if p > 0 else 0.0
-        b["savings_usd"] = round(b["savings_usd"], 4)
-        buckets_list.append(b)
-
-    # Ensure chronological sort across all timeframes before bounding
-    buckets_list.sort(key=lambda x: x["ts"])
-    buckets_omitted = max(0, len(buckets_list) - MAX_BUCKETS_RETURNED)
-    if len(buckets_list) > MAX_BUCKETS_RETURNED:
-        buckets_list = buckets_list[-MAX_BUCKETS_RETURNED:]
-
-    model_groups: Dict[str, Dict[str, Any]] = {}
-    for r in window_records:
-        m_key = r["display_name"]
-        if m_key not in model_groups:
-            model_groups[m_key] = {
-                "model": r["model"],
-                "display_name": m_key,
-                "calls": 0,
-                "prompt_tokens": 0,
-                "cached_tokens": 0,
-                "savings_usd": 0.0,
-                "pricing_estimated": r.get("pricing_estimated", False),
-            }
-        mg = model_groups[m_key]
-        mg["calls"] += 1
-        mg["prompt_tokens"] += r["prompt_tokens"]
-        mg["cached_tokens"] += r["cached_tokens"]
-        mg["savings_usd"] += r["net_savings_usd"]
-
-    models_list = []
-    for mg in model_groups.values():
-        p = mg["prompt_tokens"]
-        c = mg["cached_tokens"]
-        mg["rate"] = round((c / p * 100.0), 2) if p > 0 else 0.0
-        mg["savings_usd"] = round(mg["savings_usd"], 2)
-        models_list.append(mg)
-
-    models_list.sort(key=lambda x: x["prompt_tokens"], reverse=True)
-    has_estimated_pricing = any(m.get("pricing_estimated") for m in models_list)
-    models_omitted = max(0, len(models_list) - MAX_MODELS_RETURNED)
-    models_list = models_list[:MAX_MODELS_RETURNED]
-
-    oldest_str = min((r["ts"] for r in window_records), default=now).isoformat()
-    newest_str = max((r["ts"] for r in window_records), default=now).isoformat()
-
-    has_error = bool(meta and meta.get("read_error"))
-    resp_status = "degraded" if has_error else "ok"
-
-    quality_info = {
-        "settled_records_total": len(records),
-        "window_records": total_calls,
-        "oldest_ts": oldest_str,
-        "newest_ts": newest_str,
-        "cache_hits": cache_hits,
-        "models_omitted": models_omitted,
-        "buckets_omitted": buckets_omitted,
-    }
-    if meta:
-        quality_info.update(meta)
-
+    models = []
+    for (provider, model, kind), members in groups.items():
+        aggregate = _aggregate(members)
+        models.append({
+            **aggregate, "provider": provider, "model": model, "kind": kind,
+            "display_name": _clean_model_display_name(model), "rate": aggregate["cache_read_rate"],
+        })
+    models.sort(key=lambda row: row["prompt_tokens"] or 0, reverse=True)
+    quality = dict(meta or {})
+    quality.update({
+        "settled_records_total": len(records), "window_records": len(window),
+        "oldest_ts": min((r["ts"] for r in window), default=None),
+        "newest_ts": max((r["ts"] for r in window), default=None),
+        "models_omitted": max(0, len(models) - MAX_MODELS_RETURNED),
+        "buckets_omitted": omitted,
+        "coverage": (
+            "Requests come from the per-call usage events (live log plus rotated archives within "
+            f"the last {USAGE_ARCHIVE_WINDOW_DAYS} days); whole harness sessions come from the "
+            "retained ledger. Older history is not reconstructed."
+        ),
+    })
+    for key in ("oldest_ts", "newest_ts"):
+        quality[key] = quality[key].isoformat() if quality[key] else None
     return {
-        "status": resp_status,
-        "timeframe": tf_normalized,
-        "summary": {
-            "cache_read_rate": cache_read_rate,
-            "call_hit_rate": call_hit_rate,
-            "total_calls": total_calls,
-            "prompt_tokens": total_prompt,
-            "cached_tokens": total_cached,
-            "uncached_tokens": total_uncached,
-            "net_savings_usd": round(total_net_savings, 2),
-            "gross_cost_usd": round(total_gross_cost, 2),
-            "net_cost_usd": round(total_net_cost, 2),
-            "has_estimated_pricing": has_estimated_pricing,
-        },
-        "buckets": buckets_list,
-        "models": models_list,
-        "quality": quality_info,
+        "status": "degraded" if quality.get("read_error") else "ok", "timeframe": tf,
+        "summary": summary, "buckets": buckets, "models": models[:MAX_MODELS_RETURNED], "quality": quality,
     }
 
 
@@ -542,6 +565,8 @@ def register(api: Any) -> None:
     def route_handler(request: Any = None) -> Dict[str, Any]:
         global _DATA_DIR
         data_dir = _DATA_DIR or _runtime_data_dir(api) or Path(os.path.expanduser("~/Ouroboros/data"))
+        events_path = data_dir / "logs" / "events.jsonl"
+        archive_dir = data_dir / "archive"
         ledger_path = data_dir / "state" / "usage_attempts.jsonl"
 
         timeframe = "24H"
@@ -551,8 +576,16 @@ def register(api: Any) -> None:
             elif isinstance(request, Mapping) and "query_params" in request:
                 timeframe = request["query_params"].get("timeframe", "24H")
 
-        records, meta = _CACHE.update(ledger_path)
-        return calculate_analytics(records, timeframe=timeframe, meta=meta)
+        requests, events_meta = _EVENTS.update(events_path, archive_dir)
+        sessions, ledger_meta = _CACHE.update(ledger_path)
+        # A missing ledger loses only the session rows; the request view stays healthy.
+        meta = {
+            **events_meta, "ledger_path": str(ledger_path),
+            "ledger_read_error": ledger_meta.get("read_error"),
+            "raw_stats": {**events_meta["raw_stats"],
+                          **{f"ledger_{key}": value for key, value in ledger_meta["raw_stats"].items()}},
+        }
+        return calculate_analytics(requests + sessions, timeframe=timeframe, meta=meta)
 
     api.register_route("data", route_handler, methods=("GET",))
     api.register_ui_tab(
@@ -563,6 +596,6 @@ def register(api: Any) -> None:
     )
     if hasattr(api, "on_unload") and callable(api.on_unload):
         try:
-            api.on_unload(lambda: _CACHE.clear())
+            api.on_unload(lambda: (_EVENTS.clear(), _CACHE.clear()))
         except Exception:
             pass
