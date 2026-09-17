@@ -2,6 +2,7 @@
 import copy
 import importlib.util
 import json
+import os
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -17,7 +18,9 @@ sys.modules[spec.name] = plugin
 spec.loader.exec_module(plugin)
 
 LedgerCache = plugin.LedgerCache
+UsageEventsCache = plugin.UsageEventsCache
 _normalize_record = plugin._normalize_record
+_normalize_usage_event = plugin._normalize_usage_event
 calculate_analytics = plugin.calculate_analytics
 register = plugin.register
 NOW = datetime(2026, 9, 11, 12, 0, tzinfo=timezone.utc)
@@ -28,6 +31,19 @@ def row(**values: Any) -> Dict[str, Any]:
         "state": "settled", "kind": "attempt", "provider": "openai",
         "model": "test-model", "ts": (NOW - timedelta(minutes=10)).isoformat(),
         "prompt_tokens": 100, "cached_tokens": 80, "cache_write_tokens": 0,
+    }
+    result.update(values)
+    return result
+
+
+def event(**values: Any) -> Dict[str, Any]:
+    """One per-call ``llm_usage`` event as ``ouroboros/loop_llm_call.py`` emits it."""
+    result = {
+        "type": "llm_usage", "ts": (NOW - timedelta(minutes=10)).isoformat(),
+        "task_id": "task-1", "model": "claudexor::codex=gpt-6-astra", "provider": "claudexor",
+        "api_key_type": "claudexor", "source": "loop", "category": "task",
+        "prompt_tokens": 100, "cached_tokens": 80, "cache_write_tokens": 0,
+        "completion_tokens": 7, "llm_call_id": None, "ledger_attempt_ids": ["a1"],
     }
     result.update(values)
     return result
@@ -295,80 +311,169 @@ def test_analytics_has_no_invented_money_or_ambiguous_call_counts() -> None:
 
 
 def write_rows(path: Path, *rows: Dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("".join(json.dumps(item) + "\n" for item in rows), encoding="utf-8")
 
 
-def test_ledger_keeps_unknown_and_zero_but_excludes_unsettled_and_baseline(tmp_path: Path) -> None:
+def append_rows(path: Path, *rows: Dict[str, Any]) -> None:
+    with path.open("a", encoding="utf-8") as stream:
+        stream.write("".join(json.dumps(item) + "\n" for item in rows))
+
+
+# ---------------------------------------------------------------------------
+# Requests: the per-call usage events
+# ---------------------------------------------------------------------------
+
+def test_usage_event_keeps_inclusive_counts_and_unknowns() -> None:
+    measured = _normalize_usage_event(event(prompt_tokens=337290, cached_tokens=228352))
+    assert (measured["prompt_tokens"], measured["cached_tokens"], measured["uncached_tokens"]) == (337290, 228352, 108938)
+    assert measured["kind"] == "attempt" and measured["measured"] and measured["eligible"]
+    unknown_read = _normalize_usage_event(event(cached_tokens=None))
+    assert unknown_read["prompt_tokens"] == 100 and unknown_read["cached_tokens"] is None
+    assert unknown_read["measured"] is False and unknown_read["uncached_tokens"] is None
+    too_many = _normalize_usage_event(event(prompt_tokens=10, cached_tokens=11))
+    assert too_many["cached_tokens"] is None and too_many["measured"] is False
+    assert _normalize_usage_event(event(provider="", api_key_type="openai"))["provider"] == "openai"
+    assert _normalize_usage_event(event(ts=None)) is None
+
+
+def test_usage_events_are_read_from_live_log_and_skip_other_rows(tmp_path: Path) -> None:
+    live = tmp_path / "logs" / "events.jsonl"
+    write_rows(live, {"type": "llm_round", "ts": NOW.isoformat(), "prompt_tokens": 5},
+               event(model="first"), event(model="second", prompt_tokens=0, cached_tokens=0),
+               {"type": "task_checkpoint", "ts": NOW.isoformat(), "note": "llm_usage mentioned in text"})
+    cache = UsageEventsCache()
+    records, meta = cache.update(live, tmp_path / "archive", now=NOW)
+    assert [item["model"] for item in records] == ["first", "second"]
+    assert meta["exists"] is True and meta["read_error"] is None
+    assert meta["raw_stats"]["usage_events"] == 2
+    assert meta["raw_stats"]["non_usage_lines"] == 2
+    assert meta["raw_stats"]["archives_read"] == 0
+    summary = calculate_analytics(records, timeframe="1H", now=NOW)["summary"]
+    assert summary["request_count"] == 2 and summary["session_count"] == 0
+    assert summary["zero_volume_records"] == 1 and summary["cache_read_rate"] == 80.0
+    repeated, same = cache.update(live, tmp_path / "archive", now=NOW)
+    assert repeated == records and same["raw_stats"] == meta["raw_stats"]
+    cache.clear()
+    assert cache.records == [] and cache.seen == set()
+
+
+def test_usage_events_torn_line_waits_and_duplicates_count_once(tmp_path: Path) -> None:
+    live = tmp_path / "logs" / "events.jsonl"
+    write_rows(live, event(model="first", ledger_attempt_ids=["a1"]))
+    second = json.dumps(event(model="second", ledger_attempt_ids=["a2"])).encode()
+    with live.open("ab") as stream:
+        stream.write(second[: len(second) // 2])
+    cache = UsageEventsCache()
+    records, meta = cache.update(live, tmp_path / "archive", now=NOW)
+    assert [item["model"] for item in records] == ["first"]
+    with live.open("ab") as stream:
+        stream.write(second[len(second) // 2:] + b"\n{\"type\": \"llm_usage\", broken\nnot-json\n")
+    records, meta = cache.update(live, tmp_path / "archive", now=NOW)
+    assert [item["model"] for item in records] == ["first", "second"]
+    assert meta["raw_stats"]["malformed_lines"] == 1  # a broken usage line
+    assert meta["raw_stats"]["non_usage_lines"] == 1  # a line that is not a usage event at all
+    append_rows(live, event(model="second", ledger_attempt_ids=["a2"]))  # a byte-identical replay
+    records, meta = cache.update(live, tmp_path / "archive", now=NOW)
+    assert [item["model"] for item in records] == ["first", "second"]
+    assert meta["raw_stats"]["duplicate_events_skipped"] == 1
+
+
+def test_rotation_moves_the_live_tail_into_an_archive_without_gaps_or_doubles(tmp_path: Path) -> None:
+    live = tmp_path / "logs" / "events.jsonl"
+    archive_dir = tmp_path / "archive"
+    archive_dir.mkdir()
+    write_rows(live, event(model="one", ledger_attempt_ids=["a1"]))
+    cache = UsageEventsCache()
+    assert [r["model"] for r in cache.update(live, archive_dir, now=NOW)[0]] == ["one"]
+    # The core appends more, then rotates: rename live -> archive, start a new live file.
+    append_rows(live, event(model="two", ledger_attempt_ids=["a2"]))
+    live.rename(archive_dir / "events_20260911T115900.jsonl")
+    write_rows(live, event(model="three", ledger_attempt_ids=["a3"]))
+    records, meta = cache.update(live, archive_dir, now=NOW)
+    assert [r["model"] for r in records] == ["one", "two", "three"]
+    assert meta["raw_stats"]["archives_read"] == 1
+    assert meta["raw_stats"]["duplicate_events_skipped"] == 1  # "one" met again inside the archive
+    # Truncation of the live file restarts its offset and keeps what was read.
+    live.write_text("", encoding="utf-8")
+    append_rows(live, event(model="four", ledger_attempt_ids=["a4"]))
+    records, meta = cache.update(live, archive_dir, now=NOW)
+    assert [r["model"] for r in records] == ["one", "two", "three", "four"]
+    assert meta["raw_stats"]["archives_read"] == 1  # an unchanged archive is not re-read
+
+
+def test_archives_outside_the_window_are_ignored_and_old_records_pruned(tmp_path: Path) -> None:
+    live = tmp_path / "logs" / "events.jsonl"
+    archive_dir = tmp_path / "archive"
+    write_rows(live, event(model="live"))
+    old = archive_dir / "events_20260801T000000.jsonl"
+    write_rows(old, event(model="ancient", ts=(NOW - timedelta(days=40)).isoformat()))
+    stale = (NOW - timedelta(days=40)).timestamp()
+    os.utime(old, (stale, stale))
+    recent = archive_dir / "events_20260911T100000.jsonl"
+    write_rows(recent, event(model="recent", ts=(NOW - timedelta(days=2)).isoformat()),
+               event(model="expired", ts=(NOW - timedelta(days=9)).isoformat()))
+    cache = UsageEventsCache()
+    records, meta = cache.update(live, archive_dir, now=NOW)
+    assert sorted(r["model"] for r in records) == ["live", "recent"]
+    assert meta["raw_stats"]["archives_read"] == 1
+    assert meta["archive_window_days"] == plugin.USAGE_ARCHIVE_WINDOW_DAYS
+    assert calculate_analytics(records, timeframe="7D", now=NOW)["summary"]["request_count"] == 2
+
+
+def test_missing_live_log_is_degraded_but_archives_still_count(tmp_path: Path) -> None:
+    archive_dir = tmp_path / "archive"
+    write_rows(archive_dir / "events_20260911T100000.jsonl", event(model="archived"))
+    records, meta = UsageEventsCache().update(tmp_path / "logs" / "events.jsonl", archive_dir, now=NOW)
+    assert [r["model"] for r in records] == ["archived"]
+    assert meta["exists"] is False and meta["read_error"] == "file_not_found"
+
+
+# ---------------------------------------------------------------------------
+# Sessions: the retained ledger keeps whole-session rows, never requests
+# ---------------------------------------------------------------------------
+
+def test_ledger_keeps_sessions_and_skips_requests_baseline_and_unsettled(tmp_path: Path) -> None:
     path = tmp_path / "usage_attempts.jsonl"
-    # The compaction header is a settled row stamped with compaction time, not a request
-    # (ouroboros/usage_compaction.py builds it beside the folded group rows).
     header = {"kind": "usage_baseline", "attempt_id": "baseline-1", "state": "settled", "seq": 1,
               "ts": (NOW - timedelta(minutes=5)).isoformat(), "compaction_epoch": 1,
               "folded_attempt_count": 3, "group_count": 1, "retained_row_count": 3}
     write_rows(path, header, row(kind="usage_baseline_group", state="settled", folded_attempt_count=3),
-               row(), row(input_token_usage=measurement(0, 0)),
-               row(kind="subscription_session", provider="claude"),
+               row(), row(kind="subscription_session", provider="claude", input_token_usage=measurement(0, 0)),
+               row(kind="subscription_session", provider="claude", input_token_usage=measurement(100, 90)),
                row(state="dispatched"))
     cache = LedgerCache()
     records, meta = cache.update(path)
-    assert len(records) == 3
-    assert {item["kind"] for item in records} == {"attempt", "subscription_session"}
-    assert meta["exists"] is True
+    assert len(records) == 2
+    assert {item["kind"] for item in records} == {"subscription_session"}
     assert meta["raw_stats"]["non_settled_lines"] == 1
     assert meta["raw_stats"]["compacted_records_skipped"] == 2
-    assert meta["raw_stats"]["valid_records"] == 3
+    assert meta["raw_stats"]["request_rows_skipped"] == 1  # requests come from usage events
+    assert meta["raw_stats"]["valid_records"] == 2
     assert meta["raw_stats"]["total_lines_read"] == 6
     summary = calculate_analytics(records, timeframe="1H", now=NOW)["summary"]
-    assert summary["other_count"] == 0
-    assert summary["total_records"] == 3
+    assert summary["request_count"] == 0 and summary["session_count"] == 2
     repeated, same_meta = cache.update(path)
-    assert repeated == records
-    assert same_meta["raw_stats"] == meta["raw_stats"]
+    assert repeated == records and same_meta["raw_stats"] == meta["raw_stats"]
     cache.clear()
     assert cache.records == []
 
 
-def test_ledger_torn_line_waits_for_newline_and_is_counted_exactly_once(tmp_path: Path) -> None:
-    path = tmp_path / "usage_attempts.jsonl"
-    write_rows(path, row(model="first"))
-    second = json.dumps(row(model="second", input_token_usage=measurement(None, None))).encode()
-    split = len(second) // 2
-    with path.open("ab") as stream:
-        stream.write(second[:split])
-    cache = LedgerCache()
-    records, meta = cache.update(path)
-    assert [item["model"] for item in records] == ["first"]
-    assert meta["raw_stats"]["malformed_lines"] == 0
-    with path.open("ab") as stream:
-        stream.write(second[split:])
-    records, meta = cache.update(path)
-    assert len(records) == 1
-    with path.open("ab") as stream:
-        stream.write(b"\nnot-json\n[]\n")
-    records, meta = cache.update(path)
-    assert [item["model"] for item in records] == ["first", "second"]
-    assert meta["raw_stats"]["malformed_lines"] == 2
-    assert meta["raw_stats"]["total_lines_read"] == 4
-    records, repeated_meta = cache.update(path)
-    assert len(records) == 2
-    assert repeated_meta["raw_stats"] == meta["raw_stats"]
-
-
 def test_ledger_rotation_and_truncation_replace_cached_records(tmp_path: Path) -> None:
     path = tmp_path / "usage_attempts.jsonl"
-    write_rows(path, row(model="first"), row(model="second"))
+    session = dict(kind="subscription_session", provider="claude", input_token_usage=measurement(10, 5))
+    write_rows(path, row(model="first", **session), row(model="second", **session))
     cache = LedgerCache()
     assert len(cache.update(path)[0]) == 2
     replacement = tmp_path / "new.jsonl"
-    write_rows(replacement, row(model="replacement"))
+    write_rows(replacement, row(model="replacement", **session))
     replacement.replace(path)
     records, meta = cache.update(path)
     assert [item["model"] for item in records] == ["replacement"]
     assert meta["raw_stats"]["total_lines_read"] == 1
-    write_rows(path, row(model="x"))
+    write_rows(path, row(model="x", **session))
     records, meta = cache.update(path)
     assert [item["model"] for item in records] == ["x"]
-    assert meta["raw_stats"]["total_lines_read"] == 1
 
 
 class MockAPI:
@@ -390,12 +495,15 @@ class MockAPI:
         self.unload_fn = fn
 
 
-def test_plugin_route_uses_runtime_ledger_and_unload_clears_cache(tmp_path: Path) -> None:
-    state_dir = tmp_path / "state"
-    state_dir.mkdir()
-    path = state_dir / "usage_attempts.jsonl"
-    stamp = datetime.now(timezone.utc) - timedelta(minutes=10)
-    write_rows(path, row(ts=stamp.isoformat(), input_token_usage=measurement(100, 90)))
+def test_plugin_route_joins_usage_events_with_ledger_sessions_and_unload_clears(tmp_path: Path) -> None:
+    stamp = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+    live = tmp_path / "logs" / "events.jsonl"
+    write_rows(live, event(ts=stamp, prompt_tokens=100, cached_tokens=90, ledger_attempt_ids=["a1"]))
+    write_rows(tmp_path / "archive" / "events_20260911T100000.jsonl",
+               event(ts=stamp, model="archived", prompt_tokens=100, cached_tokens=90, ledger_attempt_ids=["a2"]))
+    ledger = tmp_path / "state" / "usage_attempts.jsonl"
+    write_rows(ledger, row(ts=stamp, prompt_tokens=100, cached_tokens=0),  # a request row: not counted twice
+               row(ts=stamp, kind="subscription_session", provider="claude", input_token_usage=measurement(100, 90)))
     api = MockAPI(tmp_path)
     register(api)
     assert "data" in api.routes
@@ -408,11 +516,28 @@ def test_plugin_route_uses_runtime_ledger_and_unload_clears_cache(tmp_path: Path
         response = api.routes["data"](MockRequest())
         assert response["status"] == "ok"
         assert response["summary"]["cache_read_rate"] == 90.0
-        assert response["summary"]["request_count"] == 1
-        assert response["summary"]["session_count"] == 0
+        assert response["summary"]["request_count"] == 2
+        assert response["summary"]["session_count"] == 1
         assert len(response["buckets"]) == 12
-        assert response["quality"]["ledger_path"] == str(path)
+        quality = response["quality"]
+        assert quality["events_path"] == str(live) and quality["ledger_path"] == str(ledger)
+        assert quality["raw_stats"]["archives_read"] == 1
+        assert quality["raw_stats"]["ledger_request_rows_skipped"] == 1
+        assert "usage events" in quality["coverage"]
         assert api.routes["data"]({"query_params": {"timeframe": "6H"}})["timeframe"] == "6H"
     finally:
         api.unload_fn()
-    assert plugin._CACHE.records == []
+    assert plugin._CACHE.records == [] and plugin._EVENTS.records == []
+
+
+def test_missing_ledger_only_loses_sessions(tmp_path: Path) -> None:
+    stamp = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+    write_rows(tmp_path / "logs" / "events.jsonl", event(ts=stamp))
+    api = MockAPI(tmp_path)
+    register(api)
+    try:
+        response = api.routes["data"]({"query_params": {"timeframe": "1H"}})
+        assert response["status"] == "ok" and response["summary"]["request_count"] == 1
+        assert response["quality"]["ledger_read_error"] == "file_not_found"
+    finally:
+        api.unload_fn()

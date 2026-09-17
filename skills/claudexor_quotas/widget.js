@@ -1,4 +1,4 @@
-/* Claudexor Quotas widget — v0.4.0
+/* Claudexor Quotas widget — v0.5.0
  *
  * Runs as a reviewed module widget: a classic inline script inside an
  * opaque-origin sandboxed iframe whose window.fetch is a parent-mediated
@@ -45,8 +45,36 @@
     var SETTINGS_TABS = [
         { key: 'detail', name: 'Row detail', icon: 'rows' },
         { key: 'models', name: 'Models', icon: 'filter' },
+        { key: 'accounts', name: 'Accounts', icon: 'fold' },
         { key: 'state', name: 'System state', icon: 'signal' }
     ];
+
+    // Why an account can be folded out of the list. The skill keeps a yes or
+    // no for each of them, and the order here is the order they stand in.
+    var FOLD_REASONS = ['failed', 'disabled', 'signed_out'];
+    // Folded until the skill says otherwise, written once. A fresh map every
+    // time: one shared object here and the reader's first switch would edit
+    // the defaults themselves.
+    function foldDefaults() {
+        var out = {};
+        FOLD_REASONS.forEach(function (reason) { out[reason] = true; });
+        return out;
+    }
+    // Sentence case, and the same words the row's tail uses one line lower, so
+    // a reader is not told the state twice in two vocabularies.
+    var FOLD_TITLE = {
+        failed: 'Verification failed',
+        disabled: 'Disabled',
+        signed_out: 'Not signed in'
+    };
+    // What the reader is actually switching, in the words of the thing that
+    // caused it. A title alone leaves "Disabled" and "Not signed in" looking
+    // like the same trouble twice.
+    var FOLD_NOTE = {
+        failed: 'Signed in, but the check failed. Their dot stays red.',
+        disabled: 'Switched off in Claudexor, so nothing runs on them.',
+        signed_out: 'No login on this machine.'
+    };
 
     var root = document.getElementById('root');
     var generation = 0;
@@ -67,6 +95,9 @@
     // by whatever the skill has kept, which arrives with the first reading.
     var density = 'normal';
     var modelChoices = {};
+    // A reader who has never opened the settings sees the short list, not
+    // every dead account.
+    var foldChoices = foldDefaults();
     // While a save is in the air the screen is ahead of the skill; a reading
     // that lands in that window would drag the choice back to what was stored
     // a moment ago.
@@ -75,12 +106,18 @@
     // screen paints the wish, holds it for thirty seconds and then quietly
     // reverts — the very thing the route was added to stop.
     var saveError = '';
+    // Every save still in the air, as one promise the dispose hook can wait on;
+    // cleared when the count above comes back to zero.
+    var prefsSaving = null;
     // The screen shows one account at a time: which family, and which account
     // inside it. Both survive the 30-second redraw, and both fall back on their
     // own when what they point at stops existing.
     var selectedHarness = '';
     var selectedAccountKey = '';
     var accountsOpen = false;
+    // Folded shut every time the list opens; the one exception is decided in
+    // the handler that opens it, where the accounts are in hand.
+    var foldOpen = false;
     var focusAccountBtn = false;
     var currentView = null;
     var staleMessage = '';
@@ -309,7 +346,15 @@
            reason when something is wrong, plan and reading age otherwise. */
         '.acct-line2{font-size:10.5px;color:var(--text-muted);margin-top:2px;',
         'overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
-        '.acct-wins{display:flex;gap:10px;flex-wrap:wrap;margin-top:4px}',
+        '.acct-wins{display:flex;gap:10px;flex-wrap:wrap;margin-top:4px;align-items:center}',
+        /* A pool and its windows are one piece: the group moves to the next
+           line whole. Only when the group alone is wider than the list — the
+           list is as wide as the account button, ~215px in a narrow pane —
+           does it fold inside itself, chip first, bars after. Without that
+           fold the bars gave way instead: "5 hours" shrank to nothing and the
+           last bar was cut off at the edge. */
+        '.acct-grp{display:inline-flex;flex-wrap:wrap;align-items:center;gap:10px;min-width:0;max-width:100%}',
+        '.acct-sep{width:1px;height:12px;background:var(--glass-edge);flex:none}',
         /* Narrower inside a row than on the button. In the app's own width
            four windows still stand on one line; in a 520px frame they wrap and
            the row grows — data intact, height paid. */
@@ -322,8 +367,6 @@
            rather than pushing the list sideways. */
         '.acct-win-tag{color:var(--text-muted);min-width:0;overflow:hidden;text-overflow:ellipsis}',
         '.acct-win-pct{color:var(--text-secondary)}',
-        '.acct-line3{font-size:10px;color:var(--text-muted);margin-top:3px;overflow:hidden;',
-        'text-overflow:ellipsis;white-space:nowrap}',
         '.acct-rls{margin-top:5px;font-size:10.5px}',
         '.acct-rl{display:flex;align-items:baseline;gap:7px;padding:2px 0}',
         '.acct-rl-tag{font-size:10px;font-weight:600;padding:1px 6px;border-radius:var(--radius-sm);',
@@ -350,6 +393,11 @@
         'max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;',
         'border-radius:var(--radius-sm);padding:0 5px}',
         '.acct-cap.exhausted{color:var(--status-bad);background:var(--status-bad-bg)}',
+        /* A pool's name gives way from the front: "GPT-5.3-Codex-Spark" becomes
+           "…Codex-Spark", and the tail is what tells one pool from another.
+           The box runs right-to-left so the ellipsis lands at the start; the
+           <bdi> inside keeps the name itself left-to-right, digits included. */
+        '.acct-pool{direction:rtl;text-align:left;flex:none}',
         '.acct-opt:hover{background:var(--glass-fill)}',
         '.acct-opt.active{background:var(--glass-fill);color:var(--text-primary)}',
         /* The name became a span inside a block, and overflow rules do not
@@ -360,6 +408,44 @@
            say the same kinds of things — a share, or a word about trouble — so
            they share one rule and cannot drift apart in weight or colour. */
         '.acct-opt-tail{margin-top:1px}',
+        /* The fold. One line, hung on a hairline, in the font and side padding
+           of an account row: it reads as the list going on, not as a control
+           stuck under it, at the line where the accounts that do not work begin. */
+        '.acct-fold{width:100%;font:inherit;font-size:12px;display:flex;align-items:center;gap:8px;',
+        'margin-top:2px;padding:7px 8px;border:0;border-top:1px solid var(--glass-edge);',
+        'border-radius:0;background:transparent;color:var(--text-muted);cursor:pointer;text-align:left}',
+        '.acct-fold:hover{color:var(--text-secondary)}',
+        '.acct-fold-caret{display:flex;flex:none;transform:rotate(-90deg);',
+        'transition:transform var(--transition-fast)}',
+        '.acct-fold.open .acct-fold-caret{transform:none}',
+        '.acct-fold-word{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+        '.acct-fold-dots{display:inline-flex;align-items:center;gap:3px;flex:none}',
+        '.acct-fold-count{font-size:11px;flex:none;font-variant-numeric:tabular-nums}',
+        /* A section names the one thing its accounts have in common. The line
+           carries the eye to the edge without drawing a box around them. */
+        '.acct-sec-head{display:flex;align-items:center;gap:7px;padding:8px 8px 3px;',
+        'font-size:10.5px;color:var(--text-muted)}',
+        /* The list is as wide as the account button — ~215px in a narrow pane —
+           and "Verification failed" beside a count and a rule is wider than
+           that. The name gives way first, the count and the rule stay. */
+        '.acct-sec-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+        '.acct-sec-count{font-variant-numeric:tabular-nums;color:rgba(255, 255, 255, 0.38)}',
+        '.acct-sec-line{flex:1 1 auto;height:1px;background:var(--glass-edge)}',
+        '.acct-sec.broken{background:rgba(201, 53, 69, 0.08);border-radius:var(--radius-sm);',
+        'margin:4px 0;padding-bottom:2px}',
+        '.acct-sec.broken .acct-sec-head{color:var(--status-bad)}',
+        '.acct-sec.broken .acct-sec-line{background:var(--status-bad-border)}',
+        /* The list asks its own width, not the frame's: how wide it is depends
+           on how many families share the control row (316 − 30 × families in a
+           444 frame). Below 248 points of list — 240 inside its padding, taken
+           with three sections and two-digit numbers — "N need attention" no
+           longer fits beside "Hidden", the dots and the count, and both were cut
+           short. There the words step aside and the pill keeps the number; the
+           whole phrase stays in the row's label and on the button above. The
+           gaps give up two points each as well: with five families in the row
+           and ten or more accounts hidden, the number alone was still 7 wide. */
+        '.acct-pop{container-type:inline-size}',
+        '@container (max-width:240px){.acct-fold{gap:6px}.acct-fold .acct-alarm-words{display:none}}',
 
         /* Banners */
         '.banner{border-radius:var(--radius-md);padding:10px 14px;margin-bottom:12px;font-size:12px;',
@@ -534,6 +620,15 @@
         'background:transparent;color:var(--text-muted);cursor:pointer;white-space:nowrap;',
         'transition:all var(--transition-fast)}',
         '.tab-pip{position:static;display:inline-block;margin-left:6px;vertical-align:middle}',
+        /* Four tabs are wider than a narrow frame: at 444 the row ran 35 points
+           past the panel and cut off System state with its pip. Below 490 of
+           panel — the four words, the pip and the row's margins, measured —
+           the tabs not open keep only their icon and the open one keeps its
+           word, so where the reader is stays named. Every tab carries its name
+           in its title as well. */
+        '.settings-panel{container-type:inline-size}',
+        '@container (max-width:490px){.settings-tab:not(.active)>span:not(.tab-pip){display:none}',
+        '.settings-tab:not(.active){gap:0;padding:6px 11px}}',
         '.settings-body{padding:12px 16px 16px}',
         '.settings-note{font-size:11.5px;color:var(--text-muted);margin-bottom:10px}',
         '.settings-opts{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:4px}',
@@ -589,6 +684,26 @@
         '.models-name{font-size:10px;font-weight:600;padding:1px 6px;border-radius:var(--radius-sm);',
         'color:var(--status-bad);background:var(--status-bad-bg)}',
         '.models-note{font-size:10.5px;color:var(--text-muted);margin:-3px 2px 6px;padding-left:22px}',
+        /* One reason per row: what folds away on the left, the switch for it on
+           the right. The note under the name is there because "Disabled" and
+           "Not signed in" otherwise read as the same trouble twice. Every row,
+           the first too, hangs on the hairline the fold row itself wears: it
+           parts the switches from the notes above them. */
+        '.fold-row{display:flex;align-items:center;justify-content:space-between;gap:14px;',
+        'padding:9px 2px;border-top:1px solid var(--glass-edge)}',
+        '.fold-words{min-width:0}',
+        '.fold-name{display:block;font-size:12.5px;color:var(--text-primary)}',
+        '.fold-note{display:block;font-size:10.5px;color:var(--text-muted);margin-top:1px}',
+        /* The widget's first switch: one thing that is on or off. The knob
+           moves rather than the track changing shape, so the two states are
+           the same object in two places. */
+        '.switch{position:relative;width:30px;height:17px;flex:none;padding:0;cursor:pointer;',
+        'border-radius:var(--radius-pill);border:1px solid var(--glass-edge);',
+        'background:rgba(255, 255, 255, 0.14);transition:background var(--transition-fast)}',
+        '.switch.on{background:var(--accent-core);border-color:var(--accent-edge)}',
+        '.switch-knob{position:absolute;top:2px;left:2px;width:11px;height:11px;border-radius:50%;',
+        'background:rgba(255, 255, 255, 0.70);transition:left var(--transition-fast),background var(--transition-fast)}',
+        '.switch.on .switch-knob{left:15px;background:#fff}',
     ].join('');
 
     function el(tag, cls, text) {
@@ -619,7 +734,10 @@
         rows: ['M4 5h16v14H4z', 'M8 10h8', 'M8 14h5'],
         // A funnel: the tab decides what passes through into a row, and lets
         // the rest by. Nothing is thrown away, only kept out of the list.
-        filter: ['M4 5h16l-6.2 7.4v5.3l-3.6 1.8v-7.1z']
+        filter: ['M4 5h16l-6.2 7.4v5.3l-3.6 1.8v-7.1z'],
+        // Rows folding into a chevron: this tab decides which rows leave the
+        // list and gather under one of them.
+        fold: ['M4 6h16', 'M4 10h16', 'M8 14l4 4 4-4']
     };
 
     // Family marks are the vendors' own: a widget that names an account's CLI
@@ -871,9 +989,9 @@
         return tone === 'warn' || tone === 'bad';
     }
 
-    // Two questions, deliberately different answers, and both are asked in the
-    // same row of the selector — so the difference is written here rather than
-    // being inferred from two call sites.
+    // Three questions, deliberately different answers, and all three are asked
+    // about the same row of the selector — so the differences are written here
+    // rather than being inferred from the call sites.
     //
     //   isAlertAccount — "calls for a look": spent quota, cooldown, a failed
     //   check, a switched-off account. It feeds the dot and the "N need
@@ -883,14 +1001,30 @@
     //   isTroubled — "something to fix": not signed in, switched off, or the
     //   check failed. It decides whether the engine's own explanation is worth
     //   a line. A stale reading is in neither: nobody has to do anything.
+    //
+    //   foldReason — "why it is hidden": the same three states as isTroubled,
+    //   but named one at a time, because the fold puts each under its own
+    //   heading and the reader switches them on and off separately.
 
-    // Why this account is in trouble, in the engine's own words — or '' when it
-    // is not. Both the yes/no question and the word for the screen come from
-    // here, so the two can never answer differently.
-    function troubleReason(account) {
-        if (!account.signed_in) return 'not signed in';
+    // The key for one account, or '' when nothing is wrong. The order is the
+    // order a person would explain it in: with no login there is nothing to say
+    // about a check, and a switched-off account is the reader's own doing
+    // before it is anything else. troubleReason turns the key into words.
+    function foldReason(account) {
+        if (!account.signed_in) return 'signed_out';
         if (account.enabled === false) return 'disabled';
-        if (verificationFailed(account)) {
+        if (verificationFailed(account)) return 'failed';
+        return '';
+    }
+
+    // The same trouble in the engine's own words — or '' when there is none.
+    // The yes/no question and the word for the screen both come from the key
+    // above, so the two can never answer differently.
+    function troubleReason(account) {
+        var reason = foldReason(account);
+        if (reason === 'signed_out') return 'not signed in';
+        if (reason === 'disabled') return 'disabled';
+        if (reason === 'failed') {
             // The engine always sends a label with the tone — but if it ever
             // sends the tone alone, an empty string here would make a failed
             // check look like a healthy account, which is the one thing this
@@ -898,6 +1032,60 @@
             return (account.verification || {}).label || 'verification failed';
         }
         return '';
+    }
+
+    // The list in two: what works, in the order the engine sent it, and what
+    // does not, gathered by reason. A reason the reader switched off is not a
+    // reason at all here — those accounts stay upstairs where they were.
+    // Whether folding works at all right now. While the accounts facet is
+    // unread, every state on this screen is last known — and the engine answers
+    // a failed check with a muted tone then, so that one reason would quietly
+    // stop folding while the other two carried on. Nothing folds until the
+    // facet answers again. The list asks this, and so does the Accounts tab,
+    // which has to say why its switches change nothing meanwhile.
+    function foldPaused(facets) {
+        return !!(facets && facets.accounts && facets.accounts !== 'ok');
+    }
+
+    function splitAccounts(accounts, facets) {
+        var live = [];
+        var byReason = {};
+        var folded = [];
+        // The banner above already says why the list looks different.
+        var unread = foldPaused(facets);
+        (accounts || []).forEach(function (candidate) {
+            var reason = unread ? '' : foldReason(candidate);
+            if (!reason || !foldChoices[reason]) {
+                live.push(candidate);
+                return;
+            }
+            if (!byReason[reason]) byReason[reason] = [];
+            byReason[reason].push(candidate);
+        });
+        FOLD_REASONS.forEach(function (reason) {
+            if (byReason[reason]) {
+                folded.push({
+                    reason: reason,
+                    title: FOLD_TITLE[reason],
+                    accounts: byReason[reason]
+                });
+            }
+        });
+        return { live: live, folded: folded };
+    }
+
+    function foldedCount(folded) {
+        var total = 0;
+        folded.forEach(function (section) { total += section.accounts.length; });
+        return total;
+    }
+
+    function holdsSelected(folded) {
+        return folded.some(function (section) {
+            return section.accounts.some(function (candidate) {
+                return candidate.key === selectedAccountKey;
+            });
+        });
     }
 
     function isTroubled(account) {
@@ -909,7 +1097,7 @@
         liveWindows(account).forEach(function (c) {
             // Honesty rule 4: a per-model cap never marks the whole account.
             // The cooldown branch used to ignore that and did mark it.
-            if (c.scoped_models && c.scoped_models.length) return;
+            if (isModelWindow(c)) return;
             if (isCooling(c)) hasCooldown = true;
         });
         return (account.quota && account.quota.state === 'exhausted') ||
@@ -931,6 +1119,14 @@
             ? prefs.density : 'normal';
         modelChoices = (prefs.models && typeof prefs.models === 'object'
             && !Array.isArray(prefs.models)) ? prefs.models : {};
+        var fold = (prefs.fold && typeof prefs.fold === 'object'
+            && !Array.isArray(prefs.fold)) ? prefs.fold : {};
+        foldChoices = foldDefaults();
+        FOLD_REASONS.forEach(function (reason) {
+            // Anything that is not a plain yes or no leaves the default
+            // standing: a missing answer is not the reader answering "no".
+            if (typeof fold[reason] === 'boolean') foldChoices[reason] = fold[reason];
+        });
     }
 
     // The screen changes at once and the skill catches up: waiting for a round
@@ -938,8 +1134,13 @@
     function savePrefs() {
         prefsInFlight++;
         saveError = '';
-        var body = JSON.stringify({ density: density, models: modelChoices });
-        Promise.resolve().then(function () {
+        // All three choices travel together: the skill keeps them in one file
+        // and writes what it is given, so a save that left one out would wipe
+        // it rather than leave it alone.
+        var body = JSON.stringify({
+            density: density, models: modelChoices, fold: foldChoices
+        });
+        var request = Promise.resolve().then(function () {
             return window.fetch(PREFS_ROUTE, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -951,6 +1152,7 @@
             var answer = null;
             try { answer = JSON.parse(text); } catch (err) { answer = null; }
             prefsInFlight = Math.max(0, prefsInFlight - 1);
+            if (!prefsInFlight) prefsSaving = null;
             saveError = (answer && answer.error) ? String(answer.error)
                 : (answer ? '' : 'the skill answered with something unreadable');
             // What the skill kept, not what we sent: if it refused a value, the
@@ -959,9 +1161,23 @@
             rerender();
         })['catch'](function (err) {
             prefsInFlight = Math.max(0, prefsInFlight - 1);
+            if (!prefsInFlight) prefsSaving = null;
             saveError = (err && err.message) ? err.message : 'the skill could not be reached';
             rerender();
         });
+        prefsSaving = prefsSaving ? Promise.all([prefsSaving, request]) : request;
+    }
+
+    // The frame is disposable: the host removes it on Stop, on leaving the page
+    // and when the skill's revision changes, and gives its dispose hooks up to a
+    // second first. Every choice is saved the moment it is made, so what can
+    // still be lost is a save in the air — the hook waits for that, and never
+    // past the host's second.
+    function flushPrefs() {
+        if (!prefsSaving) return undefined;
+        return Promise.race([prefsSaving, new Promise(function (resolve) {
+            window.setTimeout(resolve, 900);
+        })]);
     }
 
     function modelView(harnessId) {
@@ -1073,23 +1289,109 @@
     // "7 day (Fable)" — the length plus the model it is scoped to;
     // "1 reset credit available" — a whole phrase and no length at all.
     // Taking "the last word" as the role read "5 hour" as model 5, role hour.
+    // `pool` says whether the model is the name of a pool the window belongs
+    // to: a name with a role ("codex primary") or a bracket ("7 day (Fable)").
+    // A name with neither — a stand-in, a whole phrase, a length said another
+    // way ("Weekly") — is a window in its own right, not a pool.
     function splitWindowName(label, seconds) {
         var length = windowLength(seconds);
         var text = String(label || '').trim();
-        if (!text) return { model: length ? '' : 'Window Limit', role: '' };
+        if (!text) return { model: length ? '' : 'Window Limit', role: '', pool: false };
         var parts = text.split(/\s+/);
         var role = ROLE_WORDS.indexOf(parts[parts.length - 1].toLowerCase()) !== -1
             ? parts.pop() : '';
         var rest = parts.join(' ');
         var bracket = /\(([^()]+)\)/.exec(rest);
-        if (bracket) return { model: bracket[1], role: role };
+        if (bracket) return { model: bracket[1], role: role, pool: true };
         // A name that only repeats the length is not worth a chip of its own —
         // but only when it repeats it exactly.
-        if (length && sameLength(rest, seconds)) return { model: '', role: role };
+        if (length && sameLength(rest, seconds)) return { model: '', role: role, pool: false };
         // "primary" on its own leaves nothing behind once the role is taken;
         // with no length either, the tile would carry no name at all.
-        if (!rest && !length) return { model: 'Window Limit', role: role };
-        return { model: rest, role: role };
+        if (!rest && !length) return { model: 'Window Limit', role: role, pool: false };
+        return { model: rest, role: role, pool: !!role };
+    }
+
+    // The pool a window belongs to. Codex keeps two — "codex" and
+    // "GPT-5.3-Codex-Spark", each with windows of its own — and the engine
+    // names them only inside each window's label. A window scoped to a model
+    // belongs to that model's pool. A window that names no pool is general:
+    // the plain 5-hour and 7-day windows of Claude.
+    function poolOf(view) {
+        if (isModelWindow(view)) return modelLabel(view.scoped_models);
+        var name = splitWindowName(view.label, view.window_seconds);
+        return name.pool ? name.model : '';
+    }
+
+    function roleRank(view) {
+        var role = splitWindowName(view.label, view.window_seconds).role;
+        var rank = ROLE_WORDS.indexOf(role.toLowerCase());
+        return rank === -1 ? ROLE_WORDS.length : rank;
+    }
+
+    // The window's length in seconds, or Infinity when none was reported —
+    // the same guard windowLength keeps, so a window with no length sorts
+    // last: it has no place on the clock.
+    function knownLength(view) {
+        var seconds = view.window_seconds;
+        return typeof seconds === 'number' && seconds > 0 ? seconds : Infinity;
+    }
+
+    function compareText(a, b) {
+        return a < b ? -1 : (a > b ? 1 : 0);
+    }
+
+    // Shorter first, then primary before secondary, then by name.
+    function windowOrder(a, b) {
+        var la = knownLength(a);
+        var lb = knownLength(b);
+        if (la !== lb) return la < lb ? -1 : 1;
+        var ra = roleRank(a);
+        var rb = roleRank(b);
+        if (ra !== rb) return ra - rb;
+        return compareText(String(a.label || ''), String(b.label || ''));
+    }
+
+    // The general pool — the one with no name — stands first; named pools
+    // follow by name, case set aside, and two spellings of one name stand in
+    // a fixed order of their own. So the order never depends on what the
+    // engine sent first.
+    function poolOrder(a, b) {
+        var named = (a.pool ? 1 : 0) - (b.pool ? 1 : 0);
+        if (named) return named;
+        return compareText(a.pool.toLowerCase(), b.pool.toLowerCase())
+            || compareText(a.pool, b.pool);
+    }
+
+    // The engine hands the windows over in an order that changes from one
+    // reading to the next, and it differs between accounts. Nothing here
+    // keeps that order: windows are grouped by pool — the general pool first,
+    // then pools by name — and stand by length inside each. Every drawing of
+    // windows (the tiles, the row, the lines under it) reads these groups,
+    // so they cannot disagree. A pool is grouped by its exact name: merging
+    // spellings would hand the chip whichever spelling the engine sent first.
+    function poolGroups(constraints) {
+        var groups = [];
+        var byPool = {};
+        (constraints || []).forEach(function (view) {
+            var pool = poolOf(view);
+            if (!byPool[pool]) {
+                byPool[pool] = { pool: pool, windows: [] };
+                groups.push(byPool[pool]);
+            }
+            byPool[pool].windows.push(view);
+        });
+        groups.sort(poolOrder);
+        groups.forEach(function (group) { group.windows.sort(windowOrder); });
+        return groups;
+    }
+
+    function orderedWindows(constraints) {
+        var out = [];
+        poolGroups(constraints).forEach(function (group) {
+            out.push.apply(out, group.windows);
+        });
+        return out;
     }
 
     function renderConstraint(view, stale) {
@@ -1108,18 +1410,14 @@
         // The version is the point of the chip — a reader needs "GPT-5.3", not a
         // family word — so the name is never shortened here; it ellipsises when
         // the column is narrow and keeps the whole of itself in the title.
-        var scoped = !!(view.scoped_models && view.scoped_models.length);
+        var scoped = isModelWindow(view);
         // Only a model-scoped window carries a red name chip, and only when it
         // is actually spent: red here means "this model is out", which is the
         // one thing a per-model cap says and a plain window does not. A scoped
         // window at 10 %, or one with no ratio at all, is not an exhausted one.
-        // His rule that a stale reading claims nothing, and the cooldown test
-        // the account dot and the reset lines already use: counting the ratio
-        // alone left a cooling window with a neutral chip on a card whose own
-        // note above it said that very model was spent.
-        var spent = !stale && scoped && (isCooling(view)
-            || (view.cooldown_until && !formatResetAt(view.cooldown_until))
-            || (hasPct(pct) && pct >= 100));
+        // His rule that a stale reading claims nothing, and the one word for
+        // "spent" the account dot and the reset lines read too.
+        var spent = !stale && scoped && isSpent(view);
         if (name.model) {
             var chip = el('span', 'tile-model' + (spent ? ' spent' : ''), name.model);
             chip.title = view.label || '';
@@ -1211,6 +1509,23 @@
             && Date.parse(view.cooldown_until) > Date.now());
     }
 
+    // A cooldown the engine sent with a date the widget cannot read. isCooling
+    // says no to it; on its own that "no" read as "open".
+    function unreadableCooldown(view) {
+        return !!(view && view.cooldown_until && !formatResetAt(view.cooldown_until));
+    }
+
+    // One word for "spent", the same word plugin.py uses (_spent): a window
+    // at its edge, or cooling, or cooling until a date nobody can read. The
+    // tile, the family mark, the reset lines and the pool's chip all ask this
+    // one question. When each asked its own way, a model window with an
+    // unreadable cooldown was red on the card and neutral in the row.
+    function isSpent(view) {
+        if (!view) return false;
+        if (isCooling(view) || unreadableCooldown(view)) return true;
+        return hasPct(view.used_pct) && view.used_pct >= 100;
+    }
+
     // Two halves of one answer: the moment, and how long that is from now.
     // Both are drawn once per redraw — nothing counts down, because a ticking
     // second-hand was already taken out of this widget once.
@@ -1223,8 +1538,7 @@
         // A cooldown that cannot be parsed is still a cooldown the engine sent:
         // isCooling says no to it, and without this branch the row would drop
         // it in silence while plugin.py counts the same account as spent.
-        var unreadableCooldown = view.cooldown_until && !formatResetAt(view.cooldown_until);
-        var cooling = isCooling(view) || unreadableCooldown;
+        var cooling = isCooling(view) || unreadableCooldown(view);
         if (cooling) {
             wrap.appendChild(el('span', 'tile-when-word', 'cooldown'));
             appendStamp(wrap, view.cooldown_until, !stale, true);
@@ -1298,7 +1612,9 @@
 
         if (quota.constraints && quota.constraints.length) {
             var constraintsWrap = el('div', 'quotas-container');
-            quota.constraints.forEach(function (view) {
+            // The tiles stand in the widget's own order, not the engine's: the
+            // engine's changes from one reading to the next.
+            orderedWindows(quota.constraints).forEach(function (view) {
                 constraintsWrap.appendChild(renderConstraint(view, false));
             });
             parent.appendChild(constraintsWrap);
@@ -1315,7 +1631,7 @@
                 ), 'warn', 12));
                 if (snap.constraints && snap.constraints.length) {
                     var staleConstraints = el('div', 'quotas-container');
-                    snap.constraints.forEach(function (view) {
+                    orderedWindows(snap.constraints).forEach(function (view) {
                         staleConstraints.appendChild(renderConstraint(view, true));
                     });
                     staleBlock.appendChild(staleConstraints);
@@ -1354,7 +1670,7 @@
     function worstUsedPct(account) {
         var worst = -1;
         liveWindows(account).forEach(function (c) {
-            if (c.scoped_models && c.scoped_models.length) return;
+            if (isModelWindow(c)) return;
             if (typeof c.used_pct === 'number' && c.used_pct > worst) worst = c.used_pct;
         });
         return worst < 0 ? null : worst;
@@ -1365,7 +1681,7 @@
     // and that difference is exactly what the dot is asked about.
     function hasSpentModelCap(account) {
         return liveWindows(account).some(function (c) {
-            return isModelWindow(c) && (c.used_pct >= 100 || isCooling(c));
+            return isModelWindow(c) && isSpent(c);
         });
     }
 
@@ -1516,14 +1832,22 @@
     // The family mark answers the same question its accounts do, so it answers
     // it with the same word: the worst tone anything under it carries. Writing
     // a second scale here would be a second opinion about one fact.
-    function groupTone(group, facets) {
-        if (groupTrouble(group)) return 'bad';
+    // The worst state a set of accounts is in, by the weights above. The mark
+    // of a family asks it about the family; the fold row asks it about one
+    // section — and a section's dot has to say what the worst row in it would
+    // say, or the two disagree about the same account.
+    function worstTone(accounts, facets) {
         var worst = 'ok';
-        (group.accounts || []).forEach(function (account) {
+        (accounts || []).forEach(function (account) {
             var tone = accountTone(account, facets);
             if (TONE_WEIGHT[tone] > TONE_WEIGHT[worst]) worst = tone;
         });
         return worst;
+    }
+
+    function groupTone(group, facets) {
+        if (groupTrouble(group)) return 'bad';
+        return worstTone(group.accounts, facets);
     }
 
     // What the reader picked by hand outlives the 30-second redraw, but never
@@ -1685,37 +2009,48 @@
         return TONE_WORD.muted;
     }
 
-    // Codex holds two seven-day windows, so "week" twice would name neither.
-    // Colliding lengths are marked instead, and the row prints their full names
-    // on a line of its own, in the same order as the bars. Windows scoped to a
-    // model stay out of the collision: their model chip already tells them apart.
+    // What a window is called in the row: its length. Codex holds two
+    // seven-day windows, and "week" twice would name neither — but they belong
+    // to different pools, and the pool's chip stands in front of its own
+    // windows, so the length is usually all a tag has to say. The windows
+    // here are one pool's; two of one length inside it take the role word
+    // from their names as well — "week primary", "week secondary" — and only
+    // then, so the everyday row keeps its short words.
     function windowTags(constraints) {
         var marks = constraints.map(function (c) {
             return {
                 c: c,
-                scoped: !!(c.scoped_models && c.scoped_models.length),
-                tag: windowLength(c.window_seconds)
-            };
-        });
-        var seen = {};
-        marks.forEach(function (m) {
-            if (m.tag && !m.scoped) seen[m.tag] = (seen[m.tag] || 0) + 1;
-        });
-        marks.forEach(function (m) {
-            if (!m.tag) {
+                scoped: isModelWindow(c),
+                pool: poolOf(c),
                 // No length reported: the window keeps its own name. With no
                 // name either it takes the same stand-in the card uses, so a
                 // read window is never silently dropped from the row.
-                m.tag = String(m.c.label || '') || 'Window Limit';
-                return;
-            }
-            if (m.scoped || seen[m.tag] < 2) return;
-            // Two windows of the same length are told apart by their names, but
-            // the names run to 27 characters. They go on a line of their own,
-            // in the same order as the bars above them.
-            m.named = true;
+                tag: windowLength(c.window_seconds) || String(c.label || '') || 'Window Limit'
+            };
+        });
+        var seen = {};
+        marks.forEach(function (m) { seen[m.tag] = (seen[m.tag] || 0) + 1; });
+        marks.forEach(function (m) {
+            if (seen[m.tag] < 2) return;
+            var role = splitWindowName(m.c.label, m.c.window_seconds).role;
+            // Same length and no role to tell them apart: the window's own
+            // name is the last honest difference.
+            m.tag = role ? m.tag + ' ' + role : (String(m.c.label || '') || m.tag);
         });
         return marks;
+    }
+
+    // The pool's chip: the same chip the tile wears, in front of the pool's
+    // windows. A long name gives way from the front — "…Codex-Spark" — because
+    // the tail is the part that tells one pool from another; the whole of it
+    // stays in the title. Red only when the pool is a model's own and its
+    // window is spent: that is the one thing a per-model cap says and a plain
+    // window does not.
+    function poolChip(pool, spent) {
+        var chip = el('span', 'acct-cap acct-pool' + (spent ? ' exhausted' : ''));
+        chip.appendChild(el('bdi', null, pool));
+        chip.title = pool;
+        return chip;
     }
 
     // One sentence per fact: the card says "83% used" because it has room for
@@ -1785,9 +2120,7 @@
     function appendResetLines(parent, marks) {
         // Compact is the list as it was before these lines existed: bars only.
         if (density === 'compact') return '';
-        var spent = marks.filter(function (m) {
-            return m.c.used_pct >= 100 || isCooling(m.c);
-        });
+        var spent = marks.filter(function (m) { return isSpent(m.c); });
         // Nothing is owed: the bars above have already said everything — unless
         // the reader asked for detail, in which case an empty answer is not the
         // detail they asked for.
@@ -1809,42 +2142,47 @@
         var box = el('div', 'acct-rls');
 
         shown.forEach(function (m) {
-            var isSpent = spent.indexOf(m) >= 0;
-            var cooling = isCooling(m.c);
-            // A general window standing next to a per-model one is "everything
+            var isSpentRow = spent.indexOf(m) >= 0;
+            // The word matches the tile: a cooldown with an unreadable date is
+            // still "cooling down", and the line then says "no reset time".
+            var cooling = isCooling(m.c) || unreadableCooldown(m.c);
+            // The tag is the window's length; the pool it belongs to stands
+            // beside it, as the same chip the bars wear. A general window next
+            // to a spent per-model one in the folded view is "everything
             // else": naming it by length would repeat the bar above it.
-            // A scoped window whose names collapsed to nothing still has to be
-            // named: the window's own length is the honest fallback, and an
-            // empty label would leave a coloured chip with no word in it.
-            var name = (m.scoped && modelLabel(m.c.scoped_models))
-                || (scopedSpent && !isSpent && density !== 'detailed' && !m.scoped ? 'others' : m.tag);
+            var name = (scopedSpent && !isSpentRow && density !== 'detailed' && !m.scoped)
+                ? 'others' : m.tag;
             var line = el('div', 'acct-rl');
-            var tag = el('span', 'acct-rl-tag ' + (isSpent ? 'bad' : 'ok'), name);
+            var tag = el('span', 'acct-rl-tag ' + (isSpentRow ? 'bad' : 'ok'), name);
             tag.title = m.c.label || m.tag;
             line.appendChild(tag);
+            if (m.pool) line.appendChild(poolChip(m.pool, m.scoped && isSpentRow));
+            var said = name + (m.pool ? ' ' + m.pool : '');
 
             var word = cooling ? 'cooling down'
-                : (isSpent ? 'spent' : usedText(m.c.used_pct) + ' used');
+                : (isSpentRow ? 'spent' : usedText(m.c.used_pct) + ' used');
             line.appendChild(el('span', 'acct-rl-txt', word));
             line.appendChild(el('span', 'acct-rl-lead'));
 
             var stampIso = cooling ? m.c.cooldown_until : m.c.resets_at;
-            var when = isSpent ? formatResetAt(stampIso) : '';
-            if (isSpent && when) {
+            var when = isSpentRow ? formatResetAt(stampIso) : '';
+            if (isSpentRow && when) {
                 line.appendChild(el('span', 'acct-rl-when', when));
-                var left = relTime(stampIso);
-                line.appendChild(el('span', 'acct-rl-in', left ? 'in ' + left : ''));
-                spoken.push(name + ' ' + word + ', back ' + when);
-            } else if (isSpent) {
+                // relTime already answers as a phrase — "in 6d", "2h ago" — so
+                // the line prints it as it is. It used to put an "in" of its
+                // own in front, and a spent window read "in in 6d".
+                line.appendChild(el('span', 'acct-rl-in', relTime(stampIso)));
+                spoken.push(said + ' ' + word + ', back ' + when);
+            } else if (isSpentRow) {
                 // Spent with no date reported: say so rather than leave a gap
                 // that reads as "available".
                 line.appendChild(el('span', 'acct-rl-when', 'no reset time'));
                 line.appendChild(el('span', 'acct-rl-in'));
-                spoken.push(name + ' ' + word + ', no reset time reported');
+                spoken.push(said + ' ' + word + ', no reset time reported');
             } else {
                 line.appendChild(el('span', 'acct-rl-when free', 'available'));
                 line.appendChild(el('span', 'acct-rl-in'));
-                spoken.push(name + ' available, ' + word);
+                spoken.push(said + ' available, ' + word);
             }
             box.appendChild(line);
         });
@@ -1868,7 +2206,6 @@
         var known = liveWindows(account);
         var windows = windowsForRow(account, harnessId);
         var spoken = [];
-        var named = [];
         // The filter took everything this account had. An empty row here is
         // indistinguishable from "nothing was reported", and those are two
         // different facts — so the row says which one it is.
@@ -1880,56 +2217,62 @@
         }
         if (windows.length) {
             var wins = el('div', 'acct-wins');
-            var marks = windowTags(windows);
-            marks.forEach(function (m) {
-                var win = el('span', 'acct-win');
-                var bar = spark(m.c.used_pct);
-                if (bar) win.appendChild(bar);
-                var pct = usedText(m.c.used_pct);
-                // A tag can be a whole phrase — "1 reset credit available" is a
-                // real window name — and "name no ratio" then runs together as
-                // one sentence. With no ratio there is no bar either, so the
-                // absent figure is already visible: the name stands alone and
-                // the full wording stays in the tooltip.
-                win.appendChild(el('span', 'acct-win-tag', m.tag));
-                if (hasPct(m.c.used_pct)) {
-                    win.appendChild(el('span', 'acct-win-pct', pct));
-                }
-                if (m.scoped) {
-                    var models = m.c.scoped_models;
-                    var chip = modelLabel(models);
+            // The row draws the same groups the tiles stand in: a pool's chip,
+            // then its bars. A group moves to the next line whole; only when
+            // it alone is wider than the list does it fold inside itself
+            // (the rule on .acct-grp). The lines under the bars read the same
+            // marks in the same order.
+            var marks = [];
+            var groups = poolGroups(windows).map(function (group) {
+                var groupMarks = windowTags(group.windows);
+                marks.push.apply(marks, groupMarks);
+                return { pool: group.pool, marks: groupMarks };
+            });
+            groups.forEach(function (group, index) {
+                if (index > 0) wins.appendChild(el('span', 'acct-sep'));
+                var grp = el('span', 'acct-grp');
+                if (group.pool) {
                     // Red is spent, and only spent — the card next to it paints
-                    // this chip by the same threshold.
-                    var chipCls = 'acct-cap' + (m.c.used_pct >= 100 ? ' exhausted' : '');
-                    // Nothing printable came back: a chip with no word in it is
-                    // a coloured gap, not information.
-                    if (chip) win.appendChild(el('span', chipCls, chip));
+                    // this chip by the same threshold, and only for a model's
+                    // own pool.
+                    var poolSpent = group.marks.some(function (m) {
+                        return m.scoped && isSpent(m.c);
+                    });
+                    grp.appendChild(poolChip(group.pool, poolSpent));
                 }
-                var cooling = isCooling(m.c);
-                if (cooling) win.appendChild(el('span', 'acct-cap exhausted', 'cooldown'));
-                win.title = (m.c.label || m.tag) + ' — ' + pct
-                    + (m.c.resets_at ? ', resets ' + formatResetAt(m.c.resets_at) : '')
-                    // The tile above says "cooldown" with the same date; the
-                    // row used to drop it, leaving a red mark with no reason.
-                    + (cooling ? ', cooldown until ' + formatResetAt(m.c.cooldown_until) : '');
-                // Without the model, "week 58%" and "week 100%" are the same
-                // sentence twice — and the chip that tells them apart is exactly
-                // what a screen reader cannot see.
-                spoken.push(m.tag + ' ' + pct
-                    + (m.scoped ? ' ' + m.c.scoped_models.join(', ') : '')
-                    + (cooling ? ' cooldown' : ''));
-                if (m.named && m.c.label) named.push(String(m.c.label));
-                wins.appendChild(win);
+                group.marks.forEach(function (m) {
+                    var win = el('span', 'acct-win');
+                    var bar = spark(m.c.used_pct);
+                    if (bar) win.appendChild(bar);
+                    var pct = usedText(m.c.used_pct);
+                    // A tag can be a whole phrase — "1 reset credit available" is
+                    // a real window name — and "name no ratio" then runs together
+                    // as one sentence. With no ratio there is no bar either, so
+                    // the absent figure is already visible: the name stands alone
+                    // and the full wording stays in the tooltip.
+                    win.appendChild(el('span', 'acct-win-tag', m.tag));
+                    if (hasPct(m.c.used_pct)) {
+                        win.appendChild(el('span', 'acct-win-pct', pct));
+                    }
+                    var cooling = isCooling(m.c);
+                    if (cooling) win.appendChild(el('span', 'acct-cap exhausted', 'cooldown'));
+                    win.title = (m.c.label || m.tag) + ' — ' + pct
+                        + (m.c.resets_at ? ', resets ' + formatResetAt(m.c.resets_at) : '')
+                        // The tile above says "cooldown" with the same date; the
+                        // row used to drop it, leaving a red mark with no reason.
+                        + (cooling ? ', cooldown until ' + formatResetAt(m.c.cooldown_until) : '');
+                    // Without the pool, "week 58%" and "week 100%" are the same
+                    // sentence twice — and the chip that tells them apart is
+                    // exactly what a screen reader cannot see.
+                    spoken.push((m.pool ? m.pool + ' ' : '') + m.tag + ' ' + pct
+                        + (cooling ? ' cooldown' : ''));
+                    grp.appendChild(win);
+                });
+                wins.appendChild(grp);
             });
             parent.appendChild(wins);
             var owed = appendResetLines(parent, marks);
-            if (named.length) {
-                parent.appendChild(el('div', 'acct-line3', 'windows: ' + named.join(' · ')));
-            }
-            return spoken.join(', ')
-                + (owed ? ' · ' + owed : '')
-
-                + (named.length ? ' · windows: ' + named.join(', ') : '');
+            return spoken.join(', ') + (owed ? ' · ' + owed : '');
         }
         // Raw engine detail may contain local paths or vendor bodies. The row
         // uses only the independently typed account state; quota actions are
@@ -2005,6 +2348,11 @@
             e.stopPropagation();
             if (!accounts.length) return;
             accountsOpen = !accountsOpen;
+            if (accountsOpen) {
+                // Shut, unless the account on screen is inside it: a fold that
+                // hid the selected row would answer a question nobody asked.
+                foldOpen = holdsSelected(splitAccounts(accounts, facets).folded);
+            }
             // Opening one panel closes the others: the click that opens this
             // one never reaches the document handler, so it cannot close them.
             settingsOpen = false;
@@ -2020,7 +2368,8 @@
             accountPop = pop;
             pop.setAttribute('role', 'group');
             pop.setAttribute('aria-label', 'Accounts in ' + familyName(group));
-            accounts.forEach(function (candidate) {
+            var split = splitAccounts(accounts, facets);
+            var option = function (candidate) {
                 var isOn = candidate.key === selectedAccountKey;
                 var opt = el('button', 'acct-opt' + (isOn ? ' active' : ''));
                 opt.setAttribute('data-focus', 'opt:' + candidate.key);
@@ -2056,11 +2405,105 @@
                     focusAccountBtn = true;
                     rerender();
                 });
-                pop.appendChild(opt);
+                return opt;
+            };
+
+            split.live.forEach(function (candidate) {
+                pop.appendChild(option(candidate));
             });
+
+            if (split.folded.length) {
+                var showFolded = foldOpen;
+                if (!split.live.length) {
+                    // Nothing above to fold under. The sections stand on their
+                    // own and say why the family looks empty; a row reading
+                    // "Hidden" over an empty list would hide the answer behind
+                    // one more click.
+                    showFolded = true;
+                } else {
+                    pop.appendChild(foldRow(split.folded, facets));
+                }
+                if (showFolded) {
+                    split.folded.forEach(function (section) {
+                        pop.appendChild(foldSection(section, option));
+                    });
+                }
+            }
             wrap.appendChild(pop);
         }
         parent.appendChild(wrap);
+    }
+
+    // One row under the live accounts, one line tall at every density: it names
+    // what is hidden and does not grow with it.
+    function foldRow(folded, facets) {
+        var row = el('button', 'acct-fold' + (foldOpen ? ' open' : ''));
+        row.setAttribute('data-focus', 'fold');
+        row.setAttribute('aria-expanded', foldOpen ? 'true' : 'false');
+        row.appendChild(withIcon(el('span', 'acct-fold-caret'), 'caret', 12));
+        row.appendChild(el('span', 'acct-fold-word', 'Hidden'));
+        var dots = el('span', 'acct-fold-dots');
+        var spoken = [];
+        folded.forEach(function (section) {
+            // The dots are the reason this row can stay shut: a check that
+            // failed downstairs still shows its colour from the outside.
+            dots.appendChild(stateDot(worstTone(section.accounts, facets)));
+            spoken.push(section.accounts.length + ' ' + section.title.toLowerCase());
+        });
+        // The button above counts every account in trouble except the one on
+        // screen, whose trouble is on screen already. This row counts those same
+        // accounts among the ones it hides, by the same rule, so the two differ
+        // only by red rows standing upstairs in plain sight. The number goes in
+        // the red pill the button wears — folding an account the reader switched
+        // off on purpose should not force the fold open every time.
+        var attention = 0;
+        folded.forEach(function (section) {
+            section.accounts.forEach(function (candidate) {
+                if (candidate.key !== selectedAccountKey
+                    && accountTone(candidate, facets) === 'bad') attention++;
+            });
+        });
+        var attentionTail = (attention === 1 ? ' needs' : ' need') + ' attention';
+        var attentionWords = attention + attentionTail;
+        if (attention) {
+            // The number and the words are two pieces, so that a list too
+            // narrow for the phrase keeps the number alone (the rule on .acct-pop).
+            var pill = el('span', 'acct-alarm');
+            pill.appendChild(el('span', null, attention));
+            pill.appendChild(el('span', 'acct-alarm-words', attentionTail));
+            row.appendChild(pill);
+        }
+        row.appendChild(dots);
+        row.appendChild(el('span', 'acct-fold-count', foldedCount(folded)));
+        // Open or shut is aria-expanded's to say: a word for it here is read
+        // twice, and "shown" in this list already names the account on screen.
+        row.setAttribute('aria-label', foldedCount(folded) + ' hidden — '
+            + spoken.join(', ')
+            + (attention ? ' · ' + attentionWords : ''));
+        // Said to the mouse as well. The dots keep quiet on purpose — the
+        // label says the same thing in words.
+        row.title = row.getAttribute('aria-label');
+        row.addEventListener('click', function (e) {
+            e.stopPropagation();
+            foldOpen = !foldOpen;
+            rerender();
+        });
+        return row;
+    }
+
+    function foldSection(section, option) {
+        // Only one section is not the reader's own doing — a check that failed
+        // — and it wears a tint rather than a second colour on its rows.
+        var box = el('div', 'acct-sec' + (section.reason === 'failed' ? ' broken' : ''));
+        var head = el('div', 'acct-sec-head');
+        head.appendChild(el('span', 'acct-sec-title', section.title));
+        head.appendChild(el('span', 'acct-sec-count', section.accounts.length));
+        head.appendChild(el('span', 'acct-sec-line'));
+        box.appendChild(head);
+        section.accounts.forEach(function (candidate) {
+            box.appendChild(option(candidate));
+        });
+        return box;
     }
 
     function quotaIdentity(harness, subjectId) {
@@ -2232,6 +2675,10 @@
                 b.appendChild(el('span', null, tab.name));
                 b.setAttribute('role', 'tab');
                 b.setAttribute('aria-selected', on ? 'true' : 'false');
+                // In a narrow frame a tab not open shows only its icon (the rule
+                // on .settings-panel); its name stays under the pointer and in
+                // what a screen reader announces.
+                b.title = tab.name;
                 // Every button that triggers a redraw carries this: the redraw
                 // rebuilds the tree, and the keyboard is put back by key alone.
                 b.setAttribute('data-focus', 'settings-tab:' + tab.key);
@@ -2329,6 +2776,46 @@
                         body.appendChild(el('div', 'models-note',
                             'No window here is tied to a named model, so this changes nothing yet.'));
                     }
+                });
+            } else if (settingsTab === 'accounts') {
+                body.appendChild(el('div', 'settings-note',
+                    'Accounts that cannot run anything gather by reason at the '
+                    + 'bottom of the account list. Off puts them back in place.'));
+                // The switches still keep the choice, but the list ignores them
+                // until the accounts are read again. Said here, the way the
+                // Models tab says when its choice changes nothing yet.
+                if (foldPaused(facets)) {
+                    body.appendChild(el('div', 'settings-note',
+                        'Accounts were not read on the last answer, so this changes '
+                        + 'nothing yet: nothing folds until they are.'));
+                }
+                FOLD_REASONS.forEach(function (reason) {
+                    var on = foldChoices[reason] !== false;
+                    var row = el('div', 'fold-row');
+                    var words = el('span', 'fold-words');
+                    words.appendChild(el('span', 'fold-name', FOLD_TITLE[reason]));
+                    words.appendChild(el('span', 'fold-note', FOLD_NOTE[reason]));
+                    row.appendChild(words);
+
+                    // A switch, not a pill pair: this is one thing that is on
+                    // or off, and the panel's other choices are one-of-three.
+                    var sw = el('button', 'switch' + (on ? ' on' : ''));
+                    sw.setAttribute('role', 'switch');
+                    sw.setAttribute('aria-checked', on ? 'true' : 'false');
+                    sw.setAttribute('aria-label', FOLD_TITLE[reason] + ' — '
+                        + FOLD_NOTE[reason]
+                        + (on ? ' · folded away' : ' · shown in the list'));
+                    sw.title = FOLD_NOTE[reason];
+                    sw.setAttribute('data-focus', 'fold-pref:' + reason);
+                    sw.appendChild(el('span', 'switch-knob'));
+                    sw.addEventListener('click', function (ev) {
+                        ev.stopPropagation();
+                        foldChoices[reason] = !on;
+                        savePrefs();
+                        rerender();
+                    });
+                    row.appendChild(sw);
+                    body.appendChild(row);
                 });
             } else {
                 // Word for word from the strip this replaced: same wording,
@@ -2627,6 +3114,9 @@
     }
 
     window.addEventListener('pagehide', stop);
+    if (typeof window.__ouroWidgetOnDispose === 'function') {
+        window.__ouroWidgetOnDispose(flushPrefs);
+    }
     // Restored from the back/forward cache the widget is otherwise dead for
     // good: the timer is gone and every answer is dropped by the stopped flag,
     // while Refresh keeps spinning as if it worked.

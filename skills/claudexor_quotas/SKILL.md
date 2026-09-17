@@ -1,7 +1,7 @@
 ---
 name: claudexor_quotas
 description: Quota widget showing fresh and last-known limits for every authorized Claudexor account, with honest foreground refresh and per-facet read state. Writes nothing but the reader's display choices, into its own state directory.
-version: 0.4.1
+version: 0.5.0
 type: extension
 runtime: python3
 entry: plugin.py
@@ -20,7 +20,7 @@ ui_tab:
     entry: widget.js
 ---
 
-# Claudexor Quotas (v0.4.0)
+# Claudexor Quotas (v0.5.0)
 
 A projection of the host's own account surface. Cached projection reads remain
 read-only. The owner's explicit Refresh button invokes the host's dedicated
@@ -28,11 +28,12 @@ foreground quota action; the skill reads no daemon token and owns no quota
 freshness, routing, retry, pacing, or vendor policy.
 
 The one thing it writes is the reader's own display choices — how much of a row
-to unfold, and which windows a row shows per agent family — into `prefs.json`
-in its own state directory. The widget cannot keep them itself: module widgets
-run in an opaque-origin sandbox where every browser store throws, so a
-preference kept there is silently forgotten. The route accepts those two
-values and nothing else; anything unrecognized is dropped rather than stored.
+to unfold, which windows a row shows per agent family, and which kinds of
+account fold away at the bottom of the account list — into `prefs.json` in its
+own state directory. The widget cannot keep them itself: module widgets run in
+an opaque-origin sandbox where every browser store throws, so a preference kept
+there is silently forgotten. The route accepts those three values and nothing
+else; anything unrecognized is dropped rather than stored.
 
 ## What it reads
 
@@ -109,6 +110,7 @@ exhausted window is never reported as the default login's.
 
 - **One control row, no header**: the frame is short and the host already prints the widget's name, so there is no title row. A status button carries a pip — green when all three facets answered, red when one did not — and opens sideways into daemon state, engine version and per-facet read state (`catalog`, `accounts`, `quota`). A facet that did not answer also raises a banner above the list, so a failure is never hidden behind the button.
 - **One account at a time, chosen in the row**: the frame opens at 320px and grows only when the module asks, so the screen shows one account in full — every window, every reset time — instead of a list whose remainder is scrolled out of sight without a scrollbar to say so. The family is picked from a segment carrying each vendor's own mark; the account selector beside it names the account on screen, shows how full its hottest window is and says how many of the family's other accounts need attention; opening it gives every account a state dot and a second line — its live quota windows, a typed generic state, or its plan and quota observation age. Raw status detail and local paths stay out of visible text, ARIA, and titles. What is hidden still speaks: a pip on the family mark whenever any of its accounts needs attention, and the banners above the account speak for every family, not for the selection.
+- **Accounts that do not work fold away**: an account with no login, one switched off in Claudexor, or one whose check failed cannot run anything, and in a family of several it buries the account that can. Those gather by reason at the bottom of the account list — under one row carrying a dot per reason and the number of them that need attention, so nothing hidden goes quiet; a family where nothing works has no such row and shows the reasons themselves. The Accounts tab in settings switches each reason on or off, all three start folded, and nothing folds at all while the accounts facet is unread.
 - **8px Gradient Progress Bars**: Height-expanded progress indicators with smooth transitions and theme gradients (`--grad-ok` Emerald, `--grad-warn` Amber, `--grad-bad` Ouroboros red, diagonal striped unmetered).
 - **Reset Times**: the moment a window resets and a cooldown ends, printed as a date and hour in tabular numerals — no per-second ticking and no layout shift.
 - **Model Scoped Indicators & Last-known Bars**: Clean chips for per-model caps and muted amber bars for cached historical readings.
@@ -129,5 +131,5 @@ own endpoints over loopback with `urllib` (no external host and no proxy
 handler): passive status GET uses 25 seconds, while the explicit foreground
 quota POST uses 180 seconds. No secret key grant is required. The one file the
 skill writes, `prefs.json`, lives in the state directory the host hands it and
-holds two display choices; no account name, address or figure is ever written
+holds three display choices; no account name, address or figure is ever written
 down. Enabling a reviewed skill remains the owner's action in Skills.

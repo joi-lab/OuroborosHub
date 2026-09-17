@@ -1,8 +1,8 @@
 ---
 name: cache_efficiency_snapshot
-version: 0.4.0
+version: 0.5.0
 title: Cache Efficiency Snapshot
-description: Interactive cache observability dashboard with token-weighted read rates, separate request and session counts, measurement coverage, and Canvas charts.
+description: Interactive cache observability dashboard over per-call usage events with token-weighted read rates, separate request and session counts, measurement coverage, and Canvas charts.
 type: extension
 runtime: python3
 entry: plugin.py
@@ -16,9 +16,17 @@ env_from_settings: []
 
 # Cache Efficiency Snapshot
 
-A read-only dashboard over Ouroboros's retained `state/usage_attempts.jsonl`.
-It reports input tokens and cache reads with explicit measurement coverage.
-It makes no model calls and changes no runtime state or task-card accounting.
+A read-only dashboard over Ouroboros's own usage records. Requests come from
+the per-call `llm_usage` events in `logs/events.jsonl` and its rotated
+`archive/events_*.jsonl` files; whole harness sessions come from the retained
+`state/usage_attempts.jsonl` ledger. It reports input tokens and cache reads
+with explicit measurement coverage. It makes no model calls and changes no
+runtime state or task-card accounting.
+
+Requests are read from events rather than from the ledger because ledger
+compaction folds settled request rows into `usage_baseline_group` summaries
+within hours, after which the main model lane of the day is invisible to any
+ledger-only reader; the per-call events keep one row per physical request.
 
 ## Measurements
 
@@ -27,13 +35,15 @@ tokens from the **same measured records**. Both counts must be known, input
 must be positive, and reads cannot exceed input. Missing cache-write data does
 not invalidate an independently measured input total and cache-read count.
 
-New session records use `input_token_usage` with nullable `total_tokens`,
+A usage event carries inclusive `prompt_tokens`, `cached_tokens` and
+`cache_write_tokens` for one physical request; a missing count stays unknown,
+and cache reads above the input total make the read unknown rather than
+clipped. Session records use `input_token_usage` with nullable `total_tokens`,
 `cache_read_tokens`, and `cache_write_tokens`. Null fields are never filled
-from older fields. Existing physical-request rows already carry inclusive input
-and cache reads. Legacy Codex session rows retain their proven inclusive input
-and read-only counters when the recorded route is Codex. Other legacy sessions
-remain unknown because their old counters do not establish these semantics.
-There is no guess based on model names or on which count is larger.
+from older fields. Legacy Codex session rows retain their proven inclusive
+input and read-only counters when the recorded route is Codex. Other legacy
+sessions remain unknown because their old counters do not establish these
+semantics. There is no guess based on model names or on which count is larger.
 
 Known-token totals exclude unknown records, whose counts remain visible. The
 coverage card counts records with both valid measurements, including measured
@@ -54,14 +64,17 @@ attribution of every token in that session.
 - `7D`: trailing week in six-hour bins.
 - `ALL`: all retained records, with adaptive hourly, six-hour, half-day or daily bins.
 
-Intervals are half-open and have no artificial empty endpoint. The existing
-incremental reader preserves incomplete trailing lines for the next read and
-reloads after file replacement/truncation. Its in-memory retention may discard
-records older than thirty days once more than 20,000 records are loaded.
-`ALL` does not replay archived history or turn compacted summary rows into
-new requests. Diagnostics disclose skipped summaries and display limits
-(25 model/route rows and 120 latest time bins); headline totals still cover the
-selected retained window.
+Intervals are half-open and have no artificial empty endpoint. The live
+event log is read incrementally: incomplete trailing lines wait for their
+newline, a rotated or truncated live file restarts at offset zero, and each
+rotated archive is read once. Records are keyed by call identity, so a request
+met in the live tail and again inside the archive it rotated into counts once.
+Requests are kept for the last seven days (the archive window); session rows
+follow the ledger's own retention. `ALL` therefore means all retained records,
+not a replay of older history, and compacted ledger summaries are never turned
+into requests. Diagnostics disclose archives read, duplicates skipped, skipped
+summaries and display limits (25 model/route rows and 120 latest time bins);
+headline totals still cover the selected retained window.
 
 ## Widget lifecycle
 
