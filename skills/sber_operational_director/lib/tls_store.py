@@ -10,6 +10,7 @@ Docs: https://developers.sber.ru/docs/ru/sber-api/start/tls
 from __future__ import annotations
 
 import hashlib
+import os
 import shutil
 from pathlib import Path
 from typing import Dict, Tuple
@@ -78,6 +79,7 @@ def install_p12_from_path(state_dir: str, source_path: str, password: str) -> Di
     dest = stored_p12_path(state_dir)
     dest.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(src, dest)
+    _restrict(dest)
     _invalidate_pem_cache(Path(state_dir))
     ensure_p12_tls(state_dir, password)
     return {
@@ -149,8 +151,17 @@ def ensure_p12_tls(
     cert_pem, key_pem = _p12_to_pem(p12_bytes, pwd)
     cert_path.write_bytes(cert_pem)
     key_path.write_bytes(key_pem)
+    _restrict(key_path)
     marker.write_text(digest + "\n", encoding="utf-8")
     return str(cert_path), str(key_path)
+
+
+def _restrict(path: Path) -> None:
+    """Owner-only permissions for private key material (best effort on Windows)."""
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
 
 
 def _invalidate_pem_cache(state_dir: Path) -> None:

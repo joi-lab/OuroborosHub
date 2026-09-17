@@ -310,7 +310,7 @@ def _check_setup(api: Any) -> Dict[str, Any]:
             context.load_cert_chain(cert_path, key_path)
     except Exception as exc:
         cert_path, key_path = "", ""
-        tls_error = "не удалось прочитать P12; проверьте файл, пароль и доступ к state"
+        tls_error = f"не удалось прочитать P12 ({type(exc).__name__}); проверьте файл, пароль и доступ к state"
 
     checks: List[Dict[str, Any]] = []
 
@@ -339,7 +339,7 @@ def _check_setup(api: Any) -> Dict[str, Any]:
         ok=bool(token),
         required=True,
         detail=("задан" if token else "отсутствует или нет grant"),
-        how="Settings → Custom Keys, scope MCP_TRANSACT_AGENT, затем Grant скиллу",
+        how="Settings → Custom Keys, scope MCP_COMMON и MCP_TRANSACT_AGENT, затем Grant скиллу",
     )
     add(
         "SBER_TLS_P12_PASSWORD",
@@ -406,10 +406,10 @@ def _check_setup(api: Any) -> Dict[str, Any]:
     hints: List[str] = []
     steps: List[str] = []
     if not token:
-        hints.append("Выдайте grant на SBER_ACCESS_TOKEN (scope MCP_TRANSACT_AGENT).")
+        hints.append("Выдайте grant на SBER_ACCESS_TOKEN (scope MCP_COMMON и MCP_TRANSACT_AGENT).")
         steps.append(
             "**Токен доступа** — Ouroboros: Settings → Custom Keys / Secrets → "
-            "`SBER_ACCESS_TOKEN` (scope **MCP_TRANSACT_AGENT**), затем **Grant** "
+            "`SBER_ACCESS_TOKEN` (scope **MCP_COMMON** и **MCP_TRANSACT_AGENT**), затем **Grant** "
             "на карточке скилла `sber_operational_director`."
         )
     if not p12_password:
@@ -519,14 +519,16 @@ def _invoke(api: Any, fn: Callable[..., Dict[str, Any]], **kwargs: Any) -> Dict[
             ca_path=cfg["ca_path"],
             **kwargs,
         )
-    except Exception:
-        result = {"error": "Не удалось выполнить запрос к банку. Проверьте TLS и доступность сервера."}
+    except Exception as exc:
+        # Keep the failure class (never the message, which may carry paths or
+        # URLs) so TLS, dependency and protocol failures stay distinguishable.
+        result = {"error": f"Не удалось выполнить запрос к банку ({type(exc).__name__}). Проверьте TLS и доступность сервера."}
     if "error" in result:
         error = str(result["error"])
         if "HTTP 401" in error or "HTTP 403" in error:
             instruction = (
                 "Банк отклонил авторизацию или доступ. Проверьте срок действия "
-                "SBER_ACCESS_TOKEN, scope MCP_TRANSACT_AGENT и Grant скиллу в Settings. "
+                "SBER_ACCESS_TOKEN, scope MCP_COMMON и MCP_TRANSACT_AGENT и Grant скиллу в Settings. "
                 "Убедитесь, что токен и клиентский сертификат относятся к выбранному контуру."
             )
         else:
@@ -612,7 +614,11 @@ def register(api: Any) -> None:
         if not isinstance(body, dict):
             return JSONResponse({"error": "JSON body must be an object"}, status_code=400)
 
-        session_id = str(body.get("legal_person_session_id", ""))
+        session_id = str(body.get("legal_person_session_id", "")).strip()
+        if not session_id:
+            # A poll must never start a new bank session (SKILL.md: не запускайте
+            # новую сессию при опросе); check_collect would mint a fresh uuid4.
+            return JSONResponse({"error": "legal_person_session_id is required"}, status_code=400)
         integration_name = body.get("integration_name")
         collected = await asyncio.to_thread(
             _invoke,
@@ -636,7 +642,12 @@ def register(api: Any) -> None:
         )
         if "error" in result:
             return JSONResponse({**result, "status": "failed"}, status_code=502)
-        if result.get("data") is None and integration_name:
+        # The bank answers with an empty body while collection or generation is
+        # still running (official doc: "если сбор данных еще не завершен —
+        # возвращается пустой ответ"), so an empty result is not completion.
+        data = result.get("data")
+        has_payload = data not in (None, [], {}, "") or bool(result.get("short_summary"))
+        if not has_payload:
             return JSONResponse({"status": "pending", "result": result}, status_code=200)
         return JSONResponse({"status": "completed", "result": result}, status_code=200)
 
@@ -756,7 +767,7 @@ def register(api: Any) -> None:
             "только после этого вызывайте get_data с тем же ключом и теми же разделами. "
             "Опционально text_input — формулировка клиента. "
             "В ответе клиенту — бизнес-вывод без перечисления кодов. "
-            "Токен со scope MCP_TRANSACT_AGENT."
+            "Токен со scope MCP_COMMON и MCP_TRANSACT_AGENT."
         ),
         schema={
             "type": "object",
@@ -790,7 +801,7 @@ def register(api: Any) -> None:
             },
             "required": [],
         },
-        timeout_sec=60,
+        timeout_sec=90,
     )
 
     api.register_tool(
@@ -833,7 +844,7 @@ def register(api: Any) -> None:
             },
             "required": ["legal_person_session_id"],
         },
-        timeout_sec=60,
+        timeout_sec=90,
     )
 
     api.register_route("check_setup", _route_check_setup, methods=("POST",))

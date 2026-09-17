@@ -11,6 +11,13 @@ env_from_settings:
   - SBER_ACCESS_TOKEN
   - SBER_TLS_P12_PASSWORD
   - SBER_MCP_URL
+install_specs:
+  - kind: pip
+    package: httpx
+  - kind: pip
+    package: cryptography
+  - kind: pip
+    package: starlette
 when_to_use: Пользователь просит у «Операционного директора» Сбера бизнес-сведения — есть ли ограничения на счетах, задолженность, готовые справки, бизнес-карты, профиль организации, доверенности, операции, балансы, обороты, сводку по банку и т.п. (без технических кодов разделов).
 timeout_sec: 90
 ui_tab:
@@ -226,8 +233,9 @@ ui_tab:
 ## Настройка через чат
 
 1. В **Settings** задайте и выдайте grant:
-   - `SBER_ACCESS_TOKEN` — токен со scope **`MCP_TRANSACT_AGENT`**
+   - `SBER_ACCESS_TOKEN` — токен со scope **`MCP_COMMON`** и **`MCP_TRANSACT_AGENT`** (оба требуются по документации Сбера)
    - `SBER_TLS_P12_PASSWORD` — пароль к P12
+   - `SBER_MCP_URL` (только если нужен IFT или другой адрес) — тоже пользовательский ключ, поэтому после задания ему нужен grant, иначе скилл молча остаётся на PROM
 2. **Прикрепите** в чат:
    - клиентский `.p12` / `.pfx`
    - Для PROM корневой `SberCA Root Ext` уже включён в скилл — прикладывать его не нужно.

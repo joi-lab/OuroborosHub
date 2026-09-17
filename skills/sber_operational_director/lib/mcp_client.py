@@ -7,7 +7,6 @@ Default: https://fintech.sberbank.ru:9443/fintech/api/transactional-agent/mcp
 from __future__ import annotations
 
 import json
-import os
 import re
 import uuid
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -134,15 +133,14 @@ def _build_tls(cert_path: str, key_path: str) -> Optional[Tuple[str, str]]:
     if not cert and not key:
         return None
     if not cert or not key:
-        raise ValueError("both SBER_TLS_CERT_PATH and SBER_TLS_KEY_PATH are required for mTLS")
+        raise ValueError("client certificate and key are both required for mTLS; install the P12 first")
     return (cert, key)
 
 
 def _resolve_ca_path(ca_path: str = "") -> str:
-    cleaned = (ca_path or "").strip()
-    if cleaned:
-        return cleaned
-    return os.environ.get("SBER_TLS_CA_PATH", "").strip()
+    # The CA comes only from the skill state (installed CA) or the bundled root;
+    # no environment fallback in a trust position.
+    return (ca_path or "").strip()
 
 
 def _httpx_tls_kwargs(

@@ -1630,13 +1630,13 @@
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "8c9cd8cba645741e2765d8ec29aca97320d41de37525eccdf42669ea3db0ab0a",
-          "size": 16483
+          "sha256": "4a1b35375032607266dd842fa0b7a2f812bd6cec5889bafc06401dfd6b32a87b",
+          "size": 16969
         },
         {
           "path": "certs/README.md",
-          "sha256": "fc9d58d3035cfcfff3a6598dce0127da1f9e40263be81bd5507a728c8c4ee0fb",
-          "size": 785
+          "sha256": "107f55859a3c8f21a9b8c5289bc2f1e0a609a948832cb11632126c743111cd3f",
+          "size": 2273
         },
         {
           "path": "certs/SberCA_Root_Ext.crt",
@@ -1650,18 +1650,18 @@
         },
         {
           "path": "lib/mcp_client.py",
-          "sha256": "c89b14ed6308813409d1ae1c91f108e0586f0bdb10c56c987f89927cc3b58714",
-          "size": 14718
+          "sha256": "67badc0b9ee4e706ba05da53b48ad6f7ab071312204a19f489df1f9c5ec51717",
+          "size": 14749
         },
         {
           "path": "lib/tls_store.py",
-          "sha256": "44a465fb05751033252eb6b62f515ce58ef63a34690d584da03126ca74dc1266",
-          "size": 6922
+          "sha256": "d95e34b801fa30fda2ec9eb506bf3d33b0ec71a22d8d8b7894f6c92e8169ee4a",
+          "size": 7169
         },
         {
           "path": "plugin.py",
-          "sha256": "5c908e773d2ab4924b9591c916cbd181b59cf805d909090aae1b70f37513574b",
-          "size": 37414
+          "sha256": "c269a58677bc57522161209c579ad02412ad34defc5b6a6f010a4b37f0742a9d",
+          "size": 38404
         }
       ],
       "description": "ИИ-агент «Операционный директор» Сбербанка через MCP — сбор клиентских данных и ответы на бизнес-вопросы (ограничения, задолженность, справки, карты, профиль и т.п.).",
