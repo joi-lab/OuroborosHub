@@ -1680,6 +1680,45 @@
           "package": "starlette"
         }
       ]
+    },
+    {
+      "slug": "confluence",
+      "name": "confluence",
+      "description": "Read, search and author Confluence Cloud pages, comments and attachments using an existing personal or scoped API token.",
+      "version": "0.1.0",
+      "type": "extension",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "sha256": "2bf3380e505256f768f6b1f74d08bd19b249b4f508fb1774a19725055fa399a8",
+          "size": 6299
+        },
+        {
+          "path": "client.py",
+          "sha256": "b8c5d02e1f30d5d7989895dc0b4d6b205ceb2b9b9f778ee9556635516e8c5b8e",
+          "size": 11167
+        },
+        {
+          "path": "operations.py",
+          "sha256": "c9d0f94f47885ae97b9ba247f53fa18f20ac46475019147658fc3baf65ebb41c",
+          "size": 13932
+        },
+        {
+          "path": "plugin.py",
+          "sha256": "1ac68e7c101539e4e3246267e854b2dd8044ba68b74cd656065a775d0b4c8b95",
+          "size": 6330
+        },
+        {
+          "path": "tests/conftest.py",
+          "sha256": "7bd4c9905584ecd8466e99e8e07129e63b2f0a856077d8ec861912775a2efed6",
+          "size": 252
+        },
+        {
+          "path": "tests/test_confluence.py",
+          "sha256": "c6693ff0860c2676cfce443bcbc82ad54ed4946d91eff34746e42e508e8588b7",
+          "size": 19671
+        }
+      ]
     }
   ]
 }
