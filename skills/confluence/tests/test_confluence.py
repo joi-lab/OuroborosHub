@@ -185,37 +185,47 @@ def test_link_header_continuation_and_metadata_filters(tmp_path):
 
 def test_create_and_update_draft_have_receipts_and_expected_version(tmp_path):
     calls = []
+    stored = page(version=1, body="<p>Draft</p>", status="draft")
+    replacement = "<h2>Updated</h2><p>Complete new draft body.</p>"
     def provider(request):
         calls.append(request)
         if request.method == "GET":
             assert request.url.params["status"] == "draft"
-            return httpx.Response(200, json=page(version=1, status="draft"))
+            assert request.url.params["get-draft"] == "true"
+            return httpx.Response(200, json=stored)
         payload = json.loads(request.content)
         assert payload["status"] == "draft"
-        assert payload["body"] == {"representation": "storage", "value": "<p>Draft</p>"}
         if request.method == "POST":
+            assert payload["body"] == {"representation": "storage", "value": "<p>Draft</p>"}
             assert payload["spaceId"] == "12" and payload["parentId"] == "122"
-            return httpx.Response(201, json=page(version=1, status="draft"))
-        assert payload["version"] == {"number": 2, "message": "Revision"}
-        return httpx.Response(200, json=page(version=2, status="draft"))
+            return httpx.Response(201, json=stored)
+        if payload["version"]["number"] != 1:
+            return httpx.Response(400, json={"message": "DRAFT pages do not support multiple versions. Expected version: [1]."})
+        assert payload["version"] == {"number": 1, "message": "Revision"}
+        assert payload["body"] == {"representation": "storage", "value": replacement}
+        stored["body"]["storage"] = payload["body"]
+        return httpx.Response(200, json=stored)
     client, tools = connect(provider, tmp_path)
     with client:
         created = tools.create_page("12", "Draft", "<p>Draft</p>", parent_id="122", status="draft")
-        updated = tools.update_page("123", "Draft", "<p>Draft</p>", 1, status="draft", version_message="Revision")
+        updated = tools.update_page("123", "Draft", replacement, 1, status="draft", version_message="Revision")
+        read_back = tools.get_page("123", status="draft")
     assert created["page_id"] == "123" and created["version"] == 1
-    assert updated["version"] == 2 and updated["url"]
-    assert [r.method for r in calls] == ["POST", "GET", "PUT"]
+    assert updated["version"] == 1 and updated["url"]
+    assert read_back["page"]["body"]["storage"]["value"] == replacement
+    assert [r.method for r in calls] == ["POST", "GET", "PUT", "GET"]
 
 
-def test_stale_update_does_not_write(tmp_path):
+@pytest.mark.parametrize("status,expected,observed", [("current", 4, 5), ("draft", 0, 1)])
+def test_stale_update_does_not_write(tmp_path, status, expected, observed):
     calls = []
     def provider(request):
         calls.append(request)
-        return httpx.Response(200, json=page(version=5))
+        return httpx.Response(200, json=page(version=observed, status=status))
     client, tools = connect(provider, tmp_path)
     with client, pytest.raises(ConfluenceError) as failure:
-        tools.update_page("123", "Title", "<p>Body</p>", 4)
-    assert failure.value.error["current_version"] == 5
+        tools.update_page("123", "Title", "<p>Body</p>", expected, status=status)
+    assert failure.value.error["current_version"] == observed
     assert failure.value.error["write_attempted"] is False
     assert [r.method for r in calls] == ["GET"]
 
@@ -252,7 +262,10 @@ def test_concurrent_update_conflict_is_not_retried(tmp_path):
     calls = []
     def provider(request):
         calls.append(request)
-        return httpx.Response(200, json=page(version=4)) if request.method == "GET" else httpx.Response(409, json={"message": "Version conflict"})
+        if request.method == "GET":
+            return httpx.Response(200, json=page(version=4))
+        assert json.loads(request.content)["version"]["number"] == 5
+        return httpx.Response(409, json={"message": "Version conflict"})
     client, tools = connect(provider, tmp_path)
     with client, pytest.raises(ConfluenceError) as failure:
         tools.update_page("123", "Title", "<p>Body</p>", 4)

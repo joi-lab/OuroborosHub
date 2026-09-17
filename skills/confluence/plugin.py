@@ -52,7 +52,7 @@ TOOLS = {
          "body": BODY, "parent_id": PAGE_ID, "status": STATUS}, ["space_id", "title", "body"],
     ),
     "update_page": (
-        "Update a page or draft only from the supplied expected_version; a conflict requires rereading and reconciling. The complete body replaces the current body.",
+        "Replace the complete page body after checking expected_version. Published pages increment the version and detect concurrent conflicts; drafts use fixed revision 1, so the precheck cannot protect against concurrent draft edits. Never automatically retried.",
         {"page_id": PAGE_ID, "title": text("Complete desired title."), "body": BODY,
          "expected_version": {"type": "integer", "minimum": 0, "description": "Version observed in the page you read, including 0 for a draft when returned by the provider; never guess."},
          "status": STATUS, "version_message": text("Optional edit summary.")},

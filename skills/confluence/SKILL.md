@@ -1,7 +1,7 @@
 ---
 name: confluence
 description: Read, search and author Confluence Cloud pages, comments and attachments using an existing personal or scoped API token.
-version: 0.1.0
+version: 0.1.1
 type: extension
 entry: plugin.py
 plugin_api: "2.0"
@@ -69,10 +69,13 @@ particular page is accessible. Writes are never implied by a read probe.
   `<h2>Overview</h2><p>A short explanation.</p>`, rather than Markdown. Both
   support `status="draft"` as well as `current`. Preserve existing macros and
   meaningful content when constructing a replacement body. `update_page`
-  requires the version actually read as `expected_version`, checks it and sends
-  the next version. A conflict requires a fresh read and deliberate reconciliation;
-  no update is blindly retried. Confluence's own current/draft reconciliation
-  still applies when publishing or editing a published page.
+  requires the version actually read as `expected_version` and checks it before
+  writing. Published pages send the next version and detect concurrent version
+  conflicts. Drafts must send fixed revision `1`: their version does not advance,
+  so this precheck cannot provide atomic protection against concurrent draft
+  edits. A conflict requires a fresh read and deliberate reconciliation; no
+  update is blindly retried. Confluence's own current/draft reconciliation still
+  applies when publishing or editing a published page.
 - `list_comments` returns root footer or inline comments. To read replies,
   call it with each `parent_comment_id`. `add_comment` creates a footer comment
   on a page or replies to one footer comment; specify exactly one target.
