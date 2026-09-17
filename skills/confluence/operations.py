@@ -122,9 +122,10 @@ class Operations:
             raise ConfluenceError("invalid_argument", "expected_version must be the nonnegative integer read from this page.")
         page_id = self.client.page_id(page_id)
         payload = {"id": page_id, "title": _title(title), "status": _status(status), "body": storage(body),
-                   "version": {"number": expected_version + 1, "message": version_message}}
-        # Detect already-stale edits before PUT; Confluence also checks the version
-        # atomically if a concurrent writer wins between this read and the update.
+                   "version": {"number": 1 if status == "draft" else expected_version + 1,
+                               "message": version_message}}
+        # Published pages have atomic version conflicts. Drafts stay at revision
+        # 1, so this precheck cannot detect concurrent edits to the draft body.
         params = {"status": status, **({"get-draft": "true"} if status == "draft" else {})}
         current = self.client.request("GET", V2 + "/pages/" + page_id, params=params)
         observed = (current.get("version") or {}).get("number")
