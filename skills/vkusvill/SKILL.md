@@ -1,10 +1,11 @@
 ---
 name: vkusvill
 description: "Поиск товаров ВкусВилл, просмотр деталей (состав, КБЖУ, цена, рейтинг) и создание ссылки на корзину через официальный MCP API ВкусВилл."
-version: "1.0.0"
+version: "1.0.1"
 type: extension
 runtime: python3
 entry: plugin.py
+plugin_api: "2.0"
 timeout_sec: 60
 permissions:
   - net

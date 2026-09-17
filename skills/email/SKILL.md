@@ -1,10 +1,11 @@
 ---
 name: email
-version: 0.1.0
+version: 0.1.1
 type: extension
 description: Public universal skill for reading and sending email via IMAP and SMTP with secure defaults.
 runtime: python3
 entry: plugin.py
+plugin_api: "2.0"
 timeout_sec: 60
 permissions:
   - net
