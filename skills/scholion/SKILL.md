@@ -7,7 +7,7 @@ runtime: python3
 entry: plugin.py
 plugin_api: "2.0"
 os: any
-permissions: [tool, fs, net, widget, route]
+permissions: [tool, fs, net, subprocess, widget, route]
 env_from_settings: []
 install_specs:
   - kind: pip
@@ -53,6 +53,15 @@ owner's own study and for a conversation with a physician.
   records why one day holds two draws; `marker_propose` files a marker name as
   a proposal a person still has to confirm. Every other tool is read-only, and
   no tool sets a value, a sex, or a therapy.
+- `version` / `update` — the installed build and whether PyPI has a newer one
+  (asked at most once a day). `update` acts only with `confirm=true` after the
+  person said yes in the conversation, and then runs `pip install --upgrade
+  scholion` with the interpreter that runs the skill; under Ouroboros that is the
+  host's Python, not this skill's isolated environment. While a newer build is
+  out, answers end with a one-line note about it.
+- The package starts local programs when they are installed — `bcftools` for
+  the genome, `pdftotext` / `pdftoppm` / `tesseract` for PDF forms, pip for
+  `update` — hence the `subprocess` permission.
 
 - `rules` — the safety canon this product is operated under, in full. A model
   reaching Scholion through the tool interface is handed a list of tools and no
@@ -115,10 +124,11 @@ respected and the skill will not move anything.
 
 ## Network and privacy
 
-Local by construction: no key, no account, no telemetry. Exactly two named
-lookups go out, only when used — an unknown drug name (RxNorm/RxClass/CPIC,
-plus a translation service for non-Latin spellings) and rsID lookups
-(Ensembl). `SCHOLION_OFFLINE=1` disables all outbound traffic; every analysis
+Local by construction: no key, no account, no telemetry. Two named lookups go
+out, only when used — an unknown drug name (RxNorm/RxClass/CPIC, plus a
+translation service for non-Latin spellings) and rsID lookups (Ensembl).
+Besides these, the package asks PyPI at most once a day whether a newer build
+is out. `SCHOLION_OFFLINE=1` disables all outbound traffic; every analysis
 still works.
 
 ## Safety rules
