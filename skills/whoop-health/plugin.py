@@ -251,6 +251,7 @@ def register(api):
             },
         },
         handler=_summary,
+        timeout_sec=90,
     )
 
     # ── whoop_fetch ───────────────────────────────────────────────
@@ -315,4 +316,5 @@ def register(api):
             "required": ["data_type"],
         },
         handler=_fetch,
+        timeout_sec=90,
     )

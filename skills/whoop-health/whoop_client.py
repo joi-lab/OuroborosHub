@@ -1,4 +1,4 @@
-"""WHOOP API v1 client — OAuth2 Authorization Code flow with persistent tokens."""
+"""WHOOP API v2 client — OAuth2 Authorization Code flow with persistent tokens."""
 
 from __future__ import annotations
 
@@ -49,7 +49,9 @@ def save_tokens(state_dir: str, access_token: str,
     }
     path = _token_path(state_dir)
     tmp = path + ".tmp"
-    with open(tmp, "w") as f:
+    # Owner-only file: the refresh token grants access to the owner's health data.
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
         json.dump(data, f)
     os.replace(tmp, path)
 
