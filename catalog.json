@@ -1583,7 +1583,8 @@
       "description": "Bidirectional Slack presence transport for Ouroboros using Socket Mode, durable delivery queues, threaded replies, proactive text messages, and inbound file staging."
     },
     {
-      "description": ">",
+      "author": "kuznetsoffandrey",
+      "description": "Сбор данных со смарт-браслета WHOOP через официальный API v1: сон, recovery, strain, тренировки, HRV, пульс покоя, SpO2. Полный OAuth2 Authorization Code flow для первичной авторизации и автоматическое обновление токенов.",
       "files": [
         {
           "path": "SKILL.md",
@@ -1601,8 +1602,9 @@
           "size": 13496
         }
       ],
-      "id": "whoop-health",
-      "name": "whoop-health",
+      "name": "WHOOP Health",
+      "slug": "whoop-health",
+      "type": "extension",
       "version": "0.3.0"
     }
   ]

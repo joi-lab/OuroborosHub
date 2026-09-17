@@ -160,8 +160,21 @@ def _merged_items() -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     merged.extend(_normalise_item({**item, "origin": "local"}) for item in local_items if isinstance(item, dict))
     for item in merged:
         item_override = overrides.get(item["id"], {}) if isinstance(overrides.get(item["id"]), dict) else {}
-        if item_override.get("status") in _STATUS_VALUES:
-            item["status"] = item_override["status"]
+        override_status = item_override.get("status")
+        # A terminal SOURCE status (done/wont_fix) reflects an actual closing
+        # commit or an audited closure written by the authoritative backlog
+        # pipeline — it must not be masked by a stale, non-terminal overlay
+        # click (open/in_progress/deferred) made before that closure landed.
+        # The overlay carries no per-item timestamp to compare against, so a
+        # status precedence rule stands in for "whichever changed last": once
+        # source reaches a terminal state, only another terminal override can
+        # still move it (e.g. re-triaging a done item to wont_fix). Local-only
+        # items (origin == "local") have no independent source status to race
+        # against, so they keep the original always-apply behavior.
+        if override_status in _STATUS_VALUES:
+            source_is_terminal = item["origin"] == "source" and item["status"] in ("done", "wont_fix")
+            if not source_is_terminal or override_status in ("done", "wont_fix"):
+                item["status"] = override_status
         item_notes = notes.get(item["id"], []) if isinstance(notes.get(item["id"]), list) else []
         item["notes_count"] = len(item_notes)
         item["latest_note"] = str(item_notes[-1].get("text", "")) if item_notes and isinstance(item_notes[-1], dict) else ""

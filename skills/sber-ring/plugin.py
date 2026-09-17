@@ -1,9 +1,8 @@
 """Sber Ring (Life Balance) — Ouroboros extension skill.
 
-Registers three tools:
+Registers two tools:
   • sber_ring_fetch   — universal single-type data fetch
-  • sber_ring_summary — recent data sample across all sensors
-  • sber_ring_check   — connectivity and authentication check
+  • sber_ring_summary — 24-hour health summary across all sensors
 """
 
 from __future__ import annotations
@@ -105,7 +104,7 @@ def register(api: Any) -> None:
     # ── Tool 2: sber_ring_summary ───────────────────────────────────
 
     def tool_summary(args: dict[str, Any] | None = None, **kwargs: Any) -> str:
-        """First-page data sample from the last 24 hours across all sensor types."""
+        """24-hour health summary across all sensor types."""
         token = _get_token()
 
         now = int(time.time())
@@ -128,21 +127,19 @@ def register(api: Any) -> None:
                 )
                 records = result if isinstance(result, list) else result.get("data", result.get("content", []))
                 count = len(records) if isinstance(records, list) else "?"
-                sections.append(f"### {dtype}\nПолучено на первой странице: {count} записей (лимит 20); ниже показаны первые 5.\n```json\n{_json.dumps(records[:5], ensure_ascii=False, indent=2)}\n```")
+                sections.append(f"### {dtype}\nЗаписей за 24ч: {count}\n```json\n{_json.dumps(records[:5], ensure_ascii=False, indent=2)}\n```")
             except Exception as exc:
                 sections.append(f"### {dtype}\n❌ {exc}")
 
         header = f"## 🩺 Сводка здоровья с кольца Сбера\nПериод: последние 24 часа ({time.strftime('%Y-%m-%d %H:%M', time.gmtime(ts_from))} — {time.strftime('%Y-%m-%d %H:%M', time.gmtime(ts_to))} UTC)\n"
-        note = "\nЭто выборка, а не полная статистика за сутки. Для следующих страниц используйте sber_ring_fetch с days_back=1, page_size=20 и параметром page.\n"
-        return header + note + "\n\n".join(sections)
+        return header + "\n\n".join(sections)
 
     api.register_tool(
         name="sber_ring_summary",
         description=(
             "Сводка здоровья с кольца Сбера за последние 24 часа: "
             "пульс, HRV, SpO2, сон, шаги, стресс, температура. "
-            "Возвращает выборку первой страницы каждого типа (до 20 записей, "
-            "показаны первые 5), а не полную статистику за сутки."
+            "Возвращает компактный отчёт по всем типам данных."
         ),
         handler=tool_summary,
         schema={

@@ -1,0 +1,38 @@
+Проанализируй текст лабораторного исследования и извлеки значения для ВСЕХ перечисленных тестов за один раз.
+
+Тесты для извлечения:
+{% for name in test_names %}- {{ name }}
+{% endfor %}
+
+Правила:
+1. Найди все упоминания каждого теста (с учётом опечаток OCR).
+2. Исправь OCR-ошибки в значениях и единицах.
+3. Для каждого теста определи: value, unit, biomaterial, reference (low_value, high_value, description), comment, status.
+4. Поле biomaterial строго из списка: SERUM, BLOOD, ERYTHROCYTES, SALIVA, URINE, BLOOD_PLASMA, FECES, HAIR, LIQUOR, FINGERNAILS, AMNIOTIC_FLUID, UROGENITAL_SCRAPING, NASOPHARYNGEAL_SWAB, PROSTATE_SECRET, EJACULATE, EXHALED_AIR, OTHER.
+5. status: "норма" / "повышен" / "снижен" / "отклонение" / "информационно".
+6. Для числового референса выдели low_value и high_value; для одностороннего (< X) — только high_value.
+7. Если референс не найден — все поля null, description пустой.
+
+Верни результат в виде JSON-массива, по одному объекту на каждый тест, в том же порядке:
+```json
+[
+  {
+    "name": "название теста",
+    "value": "значение",
+    "unit": "единицы",
+    "biomaterial": "SERUM",
+    "reference": {
+      "low_value": null,
+      "high_value": null,
+      "description": "исходная строка референса"
+    },
+    "comment": "",
+    "status": "норма"
+  }
+]
+```
+
+Исходный текст:
+{{ raw_text }}
+
+Выведи ТОЛЬКО JSON-массив без пояснений.
