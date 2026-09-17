@@ -28,6 +28,7 @@ import pytest
 import plugin
 from plugin import (
     DEFAULT_PREFS,
+    FOLD_REASONS,
     MAX_MODEL_ENTRIES,
     clean_prefs,
     read_prefs,
@@ -847,12 +848,17 @@ async function boot(view, postValue) {
   const made = makeDocument();
   const calls = [];
   const windowListeners = {};
+  const disposeHooks = [];
   let intervalCallback = null;
   let intervalCleared = false;
   const window = {
     fetch(url, options = {}) {
       const method = options.method || 'GET';
-      calls.push({ url, method });
+      // The body is recorded only when there is one: a GET call with an extra
+      // undefined field no longer equals the call the older assertions expect.
+      const call = { url, method };
+      if (options.body !== undefined) call.body = options.body;
+      calls.push(call);
       return Promise.resolve(method === 'POST'
         ? response(postValue || { ok: true, quota_updates: [] })
         : response(view));
@@ -860,6 +866,8 @@ async function boot(view, postValue) {
     setInterval(callback) { intervalCallback = callback; return 17; },
     clearInterval(id) { if (id === 17) intervalCleared = true; },
     addEventListener(name, handler) { (windowListeners[name] ||= []).push(handler); },
+    setTimeout: (callback, ms) => setTimeout(callback, ms),
+    __ouroWidgetOnDispose(fn) { disposeHooks.push(fn); },
   };
   const context = vm.createContext({
     window,
@@ -882,6 +890,7 @@ async function boot(view, postValue) {
     document: made.document,
     calls,
     windowListeners,
+    disposeHooks,
     testHooks: window.__quotaTest,
     interval: () => intervalCallback,
     intervalCleared: () => intervalCleared,
@@ -1168,6 +1177,359 @@ function view(accounts) {
   assert.notEqual(popAfter, popBefore);
   assert.equal(popAfter.scrollTop, 64);
 
+  // A spent window's line in the list says once when it comes back. relTime
+  // already answers as a phrase ("in 6d"); the line used to put a second "in"
+  // in front of it, and the reader saw "in in 6d".
+  const sixDays = new Date(Date.now() + 6 * 86400000).toISOString();
+  env = await boot(view([
+    account('p1', quota({
+      state: 'exhausted', label: 'Limit reached', resets_at: sixDays,
+      constraints: [{
+        id: 'weekly', label: 'Weekly', used_pct: 100, resets_at: sixDays,
+        cooldown_until: '', scoped_models: [], window_seconds: 604800,
+      }],
+    })),
+  ]));
+  byFocus(env.root, 'account-btn').listeners.click[0]({ stopPropagation() {} });
+  const backIn = classes(env.root, 'acct-rl-in').map((node) => node.textContent);
+  assert.deepEqual(backIn, ['in 6d']);
+
+  // Codex keeps two pools, and the engine lists their windows in an order that
+  // changes from one reading to the next. The widget keeps none of it: windows
+  // are grouped by pool, the pool's chip stands once in front of its own bars,
+  // and the tiles follow the same order — whichever order came in.
+  const CODEX = {
+    'codex-week': { id: 'cw', label: 'codex primary', used_pct: 100, resets_at: sixDays,
+      cooldown_until: '', scoped_models: [], window_seconds: 604800 },
+    'spark-5h': { id: 's5', label: 'GPT-5.3-Codex-Spark primary', used_pct: 0, resets_at: '',
+      cooldown_until: '', scoped_models: [], window_seconds: 18000 },
+    'spark-week': { id: 'sw', label: 'GPT-5.3-Codex-Spark secondary', used_pct: 0, resets_at: '',
+      cooldown_until: '', scoped_models: [], window_seconds: 604800 },
+  };
+  const openedWith = async (order) => {
+    const e = await boot(view([
+      account('p1', quota({ state: 'exhausted', label: 'Limit reached', resets_at: sixDays,
+        constraints: order.map((key) => CODEX[key]) })),
+    ]));
+    byFocus(e.root, 'account-btn').listeners.click[0]({ stopPropagation() {} });
+    return e;
+  };
+  const groupsOf = (e) => classes(e.root, 'acct-grp').map((node) => node.textContent);
+  const tilesOf = (e) => classes(e.root, 'quota-tile').map((node) => node.title);
+  const linesOf = (e) => classes(e.root, 'acct-rl').map((node) => node.textContent);
+  env = await openedWith(['spark-week', 'codex-week', 'spark-5h']);
+  assert.deepEqual(groupsOf(env), ['codexweek100%', 'GPT-5.3-Codex-Spark5 hours0%week0%']);
+  assert.deepEqual(tilesOf(env), ['codex primary', 'GPT-5.3-Codex-Spark primary', 'GPT-5.3-Codex-Spark secondary']);
+  // The line under the bars names the pool beside the length, so two "week"
+  // lines cannot read as one window twice; the old "windows:" footnote is gone.
+  assert.equal(linesOf(env).length, 2);
+  assert.match(linesOf(env)[0], /^weekcodexspent.*in 6d$/);
+  assert.equal(linesOf(env)[1], '5 hoursGPT-5.3-Codex-Spark0% usedavailable');
+  assert.doesNotMatch(env.root.textContent, /windows:/);
+  const seenOnce = groupsOf(env);
+  env = await openedWith(['spark-5h', 'spark-week', 'codex-week']);
+  assert.deepEqual(groupsOf(env), seenOnce);
+  assert.deepEqual(tilesOf(env), ['codex primary', 'GPT-5.3-Codex-Spark primary', 'GPT-5.3-Codex-Spark secondary']);
+
+  // Two spellings of one pool name are two pools, side by side, in an order of
+  // their own — never the order the engine happened to send them in.
+  // Both spellings carry a 5-hour and a week window, so merging them by
+  // case and then splitting the row by exact name would alternate the two
+  // and print four chips for two pools.
+  CODEX['codex-5h'] = { id: 'c5', label: 'codex secondary', used_pct: 0, resets_at: '',
+    cooldown_until: '', scoped_models: [], window_seconds: 18000 };
+  CODEX['Codex-5h'] = { id: 'C5', label: 'Codex primary', used_pct: 0, resets_at: '',
+    cooldown_until: '', scoped_models: [], window_seconds: 18000 };
+  CODEX['Codex-week'] = { id: 'Cw', label: 'Codex secondary', used_pct: 0, resets_at: '',
+    cooldown_until: '', scoped_models: [], window_seconds: 604800 };
+  const spelled = ['Codex5 hours0%week0%', 'codex5 hours0%week100%'];
+  env = await openedWith(['codex-week', 'Codex-5h', 'codex-5h', 'Codex-week']);
+  assert.deepEqual(groupsOf(env), spelled);
+  env = await openedWith(['Codex-week', 'codex-5h', 'Codex-5h', 'codex-week']);
+  assert.deepEqual(groupsOf(env), spelled);
+
+  // Two windows of one length inside one pool take their role word as well,
+  // and only then: the everyday row keeps "week" on its own.
+  CODEX['codex-week-2'] = { id: 'cw2', label: 'codex secondary', used_pct: 0, resets_at: '',
+    cooldown_until: '', scoped_models: [], window_seconds: 604800 };
+  env = await openedWith(['codex-week-2', 'codex-week']);
+  assert.deepEqual(groupsOf(env), ['codexweek primary100%week secondary0%']);
+  assert.equal(linesOf(env).length, 2);
+  assert.match(linesOf(env)[0], /^week primarycodexspent/);
+  assert.equal(linesOf(env)[1], 'week secondarycodex0% usedavailable');
+
+  // Claude names no pool for its plain windows; those stand first, and the
+  // window scoped to a model follows under that model's chip.
+  env = await boot(view([account('p1', quota({ constraints: [
+    { id: 'f', label: '7 day (Fable)', used_pct: 100, resets_at: sixDays, cooldown_until: '',
+      scoped_models: ['fable', 'claude-fable-5'], window_seconds: 604800 },
+    { id: 'w', label: '7 day', used_pct: 40, resets_at: '', cooldown_until: '', scoped_models: [], window_seconds: 604800 },
+    { id: 'h', label: '5 hour', used_pct: 20, resets_at: '', cooldown_until: '', scoped_models: [], window_seconds: 18000 },
+  ] }))]));
+  byFocus(env.root, 'account-btn').listeners.click[0]({ stopPropagation() {} });
+  assert.deepEqual(groupsOf(env), ['5 hours20%week40%', 'Fableweek100%']);
+  assert.deepEqual(tilesOf(env), ['5 hour', '7 day', '7 day (Fable)']);
+
+  // One word for "spent": a model window cooling until a date the widget
+  // cannot read is spent everywhere at once — the tile's chip, the pool's chip
+  // in the row, the line under the bars, the family mark — the way plugin.py
+  // counts it. Each place used to ask its own way, and the card was red while
+  // the row stayed neutral.
+  env = await boot(view([account('p1', quota({ constraints: [
+    { id: 'f', label: '7 day (Fable)', used_pct: 10, resets_at: '', cooldown_until: 'not-a-date',
+      scoped_models: ['fable'], window_seconds: 604800 },
+    { id: 'w', label: '7 day', used_pct: 40, resets_at: '', cooldown_until: '', scoped_models: [], window_seconds: 604800 },
+  ] }))]));
+  byFocus(env.root, 'account-btn').listeners.click[0]({ stopPropagation() {} });
+  assert.match(String(classes(env.root, 'tile-model')[0].className), /\bspent\b/);
+  assert.match(String(classes(env.root, 'acct-pool')[0].className), /\bexhausted\b/);
+  assert.equal(pipTone(env.root), 'warn');
+  assert.deepEqual(linesOf(env), ['weekFablecooling downno reset time', 'others40% usedavailable']);
+
+  // All three display choices travel in one body. The skill writes what it is
+  // given, so a save that carried only the density would wipe the folds — and
+  // the reader would find them back on after touching an unrelated setting.
+  const folded = view([account('p1', quota())]);
+  folded.prefs = {
+    density: 'normal', models: {},
+    fold: { failed: false, disabled: true, signed_out: true },
+  };
+  env = await boot(folded);
+  byFocus(env.root, 'settings').listeners.click[0]({ stopPropagation() {} });
+  byFocus(env.root, 'density:compact').listeners.click[0]({ stopPropagation() {} });
+  await settle();
+  const savedBody = JSON.parse(
+    env.calls.filter((call) => call.url === PREFIX + 'prefs').at(-1).body);
+  assert.equal(savedBody.density, 'compact');
+  assert.deepEqual(savedBody.fold, { failed: false, disabled: true, signed_out: true });
+
+  // A value that is not a plain yes or no leaves the account folded away. The
+  // skill drops such a value too, so the two ends agree without asking.
+  const junkFold = view([account('p1', quota())]);
+  junkFold.prefs = { density: 'normal', models: {}, fold: { failed: 'no', disabled: null } };
+  env = await boot(junkFold);
+  byFocus(env.root, 'settings').listeners.click[0]({ stopPropagation() {} });
+  byFocus(env.root, 'density:compact').listeners.click[0]({ stopPropagation() {} });
+  await settle();
+  const cleanedBody = JSON.parse(
+    env.calls.filter((call) => call.url === PREFIX + 'prefs').at(-1).body);
+  assert.deepEqual(cleanedBody.fold, { failed: true, disabled: true, signed_out: true });
+
+  // The fold. Accounts that do not work go under one row at the bottom,
+  // gathered by reason; the live ones keep the order the engine sent them in.
+  const mixedAccounts = () => [
+    account('live1', quota(), { label: 'live-one' }),
+    account('out1', quota(), { label: 'out-one', signed_in: false,
+      verification: { tone: 'muted', label: 'Not verified' } }),
+    // A failed check arrives from the engine as tone 'warn' with the check
+    // itself marked failed; 'bad' is never emitted by verification_view.
+    account('broken', quota(), { label: 'broken-one', verification_state: 'failed',
+      verified_live: false, verification: { tone: 'warn', label: 'Verification failed' } }),
+    account('off1', quota(), { label: 'off-one', enabled: false }),
+    account('live2', quota(), { label: 'live-two' }),
+    account('out2', quota(), { label: 'out-two', signed_in: false,
+      verification: { tone: 'muted', label: 'Not verified' } }),
+  ];
+  const namesOf = (root) => classes(root, 'acct-opt-name').map((node) => node.textContent);
+
+  env = await boot(view(mixedAccounts()));
+  byFocus(env.root, 'account-btn').listeners.click[0]({ stopPropagation() {} });
+  assert.deepEqual(namesOf(env.root), ['live-one', 'live-two']);
+  assert.equal(classes(env.root, 'acct-fold-count')[0].textContent, '4');
+  // Shut, the row still carries the colour of what is under it: a failed check
+  // and a switched-off account are red, an account nobody logged into is not.
+  assert.deepEqual(
+    classes(env.root, 'acct-fold-dots')[0].childNodes.map((dot) => String(dot.className)),
+    ['state-dot bad', 'state-dot bad', 'state-dot muted']);
+
+  byFocus(env.root, 'fold').listeners.click[0]({ stopPropagation() {} });
+  assert.deepEqual(classes(env.root, 'acct-sec-title').map((node) => node.textContent),
+    ['Verification failed', 'Disabled', 'Not signed in']);
+  assert.deepEqual(classes(env.root, 'acct-sec-count').map((node) => node.textContent),
+    ['1', '1', '2']);
+  assert.deepEqual(namesOf(env.root),
+    ['live-one', 'live-two', 'broken-one', 'off-one', 'out-one', 'out-two']);
+  assert.match(String(classes(env.root, 'acct-sec')[0].className), /\bbroken\b/);
+  assert.doesNotMatch(String(classes(env.root, 'acct-sec')[1].className), /\bbroken\b/);
+
+  // A reason switched off is not a reason here: those accounts stand upstairs
+  // again, in the engine's own order, and the fold counts what is left.
+  const partly = view(mixedAccounts());
+  partly.prefs = { density: 'normal', models: {},
+    fold: { failed: true, disabled: true, signed_out: false } };
+  env = await boot(partly);
+  byFocus(env.root, 'account-btn').listeners.click[0]({ stopPropagation() {} });
+  assert.deepEqual(namesOf(env.root), ['live-one', 'out-one', 'live-two', 'out-two']);
+  assert.equal(classes(env.root, 'acct-fold-count')[0].textContent, '2');
+
+  // Nothing works in this family: there is nothing to fold under, so the
+  // sections stand on their own and say why the list looks empty.
+  env = await boot(view([
+    account('out1', quota(), { label: 'out-one', signed_in: false,
+      verification: { tone: 'muted', label: 'Not verified' } }),
+    account('out2', quota(), { label: 'out-two', signed_in: false,
+      verification: { tone: 'muted', label: 'Not verified' } }),
+  ]));
+  byFocus(env.root, 'account-btn').listeners.click[0]({ stopPropagation() {} });
+  assert.equal(classes(env.root, 'acct-fold').length, 0);
+  assert.deepEqual(classes(env.root, 'acct-sec-title').map((node) => node.textContent),
+    ['Not signed in']);
+  assert.deepEqual(namesOf(env.root), ['out-one', 'out-two']);
+
+  // The account on screen is inside the fold: the list opens with it open,
+  // because a shut fold would hide the very row that is selected.
+  env = await boot(view(mixedAccounts()));
+  byFocus(env.root, 'account-btn').listeners.click[0]({ stopPropagation() {} });
+  byFocus(env.root, 'fold').listeners.click[0]({ stopPropagation() {} });
+  byFocus(env.root, 'opt:claude:out2').listeners.click[0]({ stopPropagation() {} });
+  byFocus(env.root, 'account-btn').listeners.click[0]({ stopPropagation() {} });
+  assert.equal(byFocus(env.root, 'fold').getAttribute('aria-expanded'), 'true');
+  assert.equal(classes(env.root, 'acct-sec-title').length, 3);
+
+  // Two reasons at once is a shape the engine really produces: plugin.py
+  // answers a failed check with signed_in false. foldReason takes the first of
+  // them, and the account is hidden for the missing login — pinned here because
+  // every order of those checks passed until this test existed.
+  env = await boot(view([
+    account('live1', quota(), { label: 'live-one' }),
+    account('both', quota(), { label: 'both-one', signed_in: false,
+      verification_state: 'failed', verified_live: false,
+      verification: { tone: 'warn', label: 'Verification failed' } }),
+  ]));
+  byFocus(env.root, 'account-btn').listeners.click[0]({ stopPropagation() {} });
+  byFocus(env.root, 'fold').listeners.click[0]({ stopPropagation() {} });
+  assert.deepEqual(classes(env.root, 'acct-sec-title').map((node) => node.textContent),
+    ['Not signed in']);
+  assert.match(allSpoken(env.root), /both-one — not signed in/);
+  // Its dot still says alert: what hides it is the missing login, what colours
+  // it is the check that failed. Two different questions, two answers.
+  assert.equal(String(classes(env.root, 'acct-opt')[1].childNodes[0].className),
+    'state-dot bad');
+
+  // 'bad' never comes from the engine, but the widget takes it as a failed
+  // check all the same. This is the test that keeps that half of the condition
+  // honest now that the fixture above stands on 'warn'.
+  env = await boot(view([
+    account('live1', quota(), { label: 'live-one' }),
+    account('odd', quota(), { label: 'odd-one',
+      verification: { tone: 'bad', label: 'Verification failed' } }),
+  ]));
+  byFocus(env.root, 'account-btn').listeners.click[0]({ stopPropagation() {} });
+  byFocus(env.root, 'fold').listeners.click[0]({ stopPropagation() {} });
+  assert.deepEqual(classes(env.root, 'acct-sec-title').map((node) => node.textContent),
+    ['Verification failed']);
+
+  // The button counts the accounts in trouble apart from the one on screen, and
+  // the fold counts those same accounts among the ones it hides — in the same
+  // pill the button wears. It does not open itself: an account switched off on
+  // purpose would then hold the fold open for good.
+  env = await boot(view(mixedAccounts()));
+  byFocus(env.root, 'account-btn').listeners.click[0]({ stopPropagation() {} });
+  assert.deepEqual(classes(env.root, 'acct-alarm').map((node) => node.textContent),
+    ['2 need attention', '2 need attention']);
+  assert.equal(byFocus(env.root, 'fold').getAttribute('aria-expanded'), 'false');
+  assert.equal(byFocus(env.root, 'fold').title,
+    byFocus(env.root, 'fold').getAttribute('aria-label'));
+  assert.match(byFocus(env.root, 'fold').title, /4 hidden — 1 verification failed, 1 disabled, 2 not signed in · 2 need attention$/);
+  // Open or shut is said by aria-expanded alone: "shown" in this list names the
+  // account on screen.
+  assert.doesNotMatch(byFocus(env.root, 'fold').getAttribute('aria-label'), /shown|folded/);
+  // The words are a piece of their own: a list too narrow for the phrase drops
+  // them and keeps the number.
+  assert.deepEqual(classes(byFocus(env.root, 'fold'), 'acct-alarm-words').map((node) => node.textContent),
+    [' need attention']);
+
+  // The account on screen is one of the hidden: the button leaves it out of its
+  // count, and so does the fold — the same number twice, not two numbers.
+  byFocus(env.root, 'fold').listeners.click[0]({ stopPropagation() {} });
+  byFocus(env.root, 'opt:claude:off1').listeners.click[0]({ stopPropagation() {} });
+  byFocus(env.root, 'account-btn').listeners.click[0]({ stopPropagation() {} });
+  assert.equal(byFocus(env.root, 'fold').getAttribute('aria-expanded'), 'true');
+  assert.deepEqual(classes(env.root, 'acct-alarm').map((node) => node.textContent),
+    ['1 needs attention', '1 needs attention']);
+
+  // A spent account does not fold: it stands upstairs with its red dot in plain
+  // sight, so the button counts it and the fold does not.
+  env = await boot(view([
+    account('live1', quota(), { label: 'live-one' }),
+    account('spent', quota({ state: 'exhausted', label: 'Limit reached' }), { label: 'spent-one' }),
+    account('off1', quota(), { label: 'off-one', enabled: false }),
+  ]));
+  byFocus(env.root, 'account-btn').listeners.click[0]({ stopPropagation() {} });
+  assert.deepEqual(classes(env.root, 'acct-alarm').map((node) => node.textContent),
+    ['2 need attention', '1 needs attention']);
+
+  // Nothing but accounts nobody logged into: there is nothing to attend to, so
+  // the row carries no pill.
+  env = await boot(view([
+    account('live1', quota(), { label: 'live-one' }),
+    account('out1', quota(), { label: 'out-one', signed_in: false,
+      verification: { tone: 'muted', label: 'Not verified' } }),
+  ]));
+  byFocus(env.root, 'account-btn').listeners.click[0]({ stopPropagation() {} });
+  assert.equal(classes(env.root, 'acct-alarm').length, 0);
+
+  // The accounts facet did not answer: every state on screen is last known, and
+  // the engine answers a failed check with a muted tone then. Folding some
+  // reasons and not others under one "last known" banner is the contradiction;
+  // nothing folds at all until the facet answers.
+  const unread = view(mixedAccounts());
+  unread.facets = { catalog: 'ok', accounts: 'not_read', quota: 'ok' };
+  unread.facet_note = 'accounts: not_read';
+  env = await boot(unread);
+  byFocus(env.root, 'account-btn').listeners.click[0]({ stopPropagation() {} });
+  assert.equal(classes(env.root, 'acct-fold').length, 0);
+  assert.deepEqual(namesOf(env.root),
+    ['live-one', 'out-one', 'broken-one', 'off-one', 'live-two', 'out-two']);
+  // The Accounts tab says so too: its switches change nothing until the facet
+  // answers, the way the Models tab says when its choice changes nothing yet.
+  byFocus(env.root, 'settings').listeners.click[0]({ stopPropagation() {} });
+  byFocus(env.root, 'settings-tab:accounts').listeners.click[0]({ stopPropagation() {} });
+  assert.match(classes(env.root, 'settings-note').map((node) => node.textContent).join(' '),
+    /changes nothing yet: nothing folds until they are/);
+
+  // The three switches. Each folds its own reason away, the choice travels to
+  // the skill with the other two, and the list obeys without a second reading.
+  env = await boot(view(mixedAccounts()));
+  byFocus(env.root, 'settings').listeners.click[0]({ stopPropagation() {} });
+  byFocus(env.root, 'settings-tab:accounts').listeners.click[0]({ stopPropagation() {} });
+  assert.deepEqual(classes(env.root, 'fold-name').map((node) => node.textContent),
+    ['Verification failed', 'Disabled', 'Not signed in']);
+  assert.deepEqual(classes(env.root, 'switch').map((node) => node.getAttribute('aria-checked')),
+    ['true', 'true', 'true']);
+  // A tab in a narrow frame can be only its icon, so every tab names itself.
+  assert.deepEqual(classes(env.root, 'settings-tab').map((node) => node.title),
+    ['Row detail', 'Models', 'Accounts', 'System state']);
+  // Read accounts: the switches work, and the tab has nothing to excuse.
+  assert.doesNotMatch(classes(env.root, 'settings-note').map((node) => node.textContent).join(' '),
+    /changes nothing yet/);
+
+  byFocus(env.root, 'fold-pref:signed_out').listeners.click[0]({ stopPropagation() {} });
+  await settle();
+  assert.equal(byFocus(env.root, 'fold-pref:signed_out').getAttribute('aria-checked'), 'false');
+  const switched = JSON.parse(
+    env.calls.filter((call) => call.url === PREFIX + 'prefs').at(-1).body);
+  assert.deepEqual(switched.fold, { failed: true, disabled: true, signed_out: false });
+
+  byFocus(env.root, 'account-btn').listeners.click[0]({ stopPropagation() {} });
+  assert.deepEqual(namesOf(env.root), ['live-one', 'out-one', 'live-two', 'out-two']);
+  assert.equal(classes(env.root, 'acct-fold-count')[0].textContent, '2');
+
+  // The frame is disposable. The widget registers one dispose hook; with no
+  // save in the air it has nothing to wait for, and with one it hands the host
+  // a promise that settles once the save has landed.
+  env = await boot(view([account('p1', quota())]));
+  assert.equal(env.disposeHooks.length, 1);
+  assert.equal(env.disposeHooks[0](), undefined);
+  byFocus(env.root, 'settings').listeners.click[0]({ stopPropagation() {} });
+  byFocus(env.root, 'density:compact').listeners.click[0]({ stopPropagation() {} });
+  const flushed = env.disposeHooks[0]();
+  assert.equal(typeof (flushed && flushed.then), 'function');
+  await flushed;
+  assert.equal(env.calls.filter((call) => call.url === PREFIX + 'prefs').length, 1);
+  await settle();
+  assert.equal(env.disposeHooks[0](), undefined);
+
   // Teardown owns the one poll timer and removes the named action listeners.
   env.windowListeners.pagehide[0]();
   assert.equal(env.intervalCleared(), true);
@@ -1236,6 +1598,9 @@ class _Api:
         self.logged.append((level, message))
 
 
+ALL_FOLDED = {reason: True for reason in FOLD_REASONS}
+
+
 class TestPrefs:
     def test_clean_prefs_defaults_on_junk(self):
         for junk in (None, "", 0, [], "density", {"density": "huge"}):
@@ -1243,18 +1608,22 @@ class TestPrefs:
 
     def test_clean_prefs_keeps_known_values(self):
         cleaned = clean_prefs({"density": "detailed", "models": {"claude": "models"}})
-        assert cleaned == {"density": "detailed", "models": {"claude": "models"}}
+        assert cleaned == {
+            "density": "detailed", "models": {"claude": "models"}, "fold": ALL_FOLDED,
+        }
 
     def test_clean_prefs_drops_unknown_choice_but_keeps_the_rest(self):
         cleaned = clean_prefs({
             "density": "compact",
             "models": {"claude": "models", "codex": "everything", "": "all"},
         })
-        assert cleaned == {"density": "compact", "models": {"claude": "models"}}
+        assert cleaned == {
+            "density": "compact", "models": {"claude": "models"}, "fold": ALL_FOLDED,
+        }
 
     def test_clean_prefs_ignores_a_models_value_that_is_not_a_map(self):
         assert clean_prefs({"density": "compact", "models": ["claude"]}) == {
-            "density": "compact", "models": {},
+            "density": "compact", "models": {}, "fold": ALL_FOLDED,
         }
 
     def test_clean_prefs_caps_the_number_of_families(self):
@@ -1266,7 +1635,9 @@ class TestPrefs:
         api = _Api(tmp_path)
         stored, error = write_prefs(api, {"density": "compact", "models": {"claude": "shared"}})
         assert error == ""
-        assert stored == {"density": "compact", "models": {"claude": "shared"}}
+        assert stored == {
+            "density": "compact", "models": {"claude": "shared"}, "fold": ALL_FOLDED,
+        }
         assert read_prefs(api) == stored
 
     def test_read_returns_defaults_when_nothing_was_written(self, tmp_path):
@@ -1277,10 +1648,25 @@ class TestPrefs:
         (tmp_path / "prefs.json").write_text("{not json", encoding="utf-8")
         assert read_prefs(api) == DEFAULT_PREFS
 
+    def test_a_failed_write_leaves_the_last_choice_readable(self, tmp_path, monkeypatch):
+        api = _Api(tmp_path)
+        write_prefs(api, {"density": "detailed", "models": {"claude": "models"}})
+
+        def refuse(src, dst):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(plugin.os, "replace", refuse)
+        stored, error = write_prefs(api, {"density": "compact"})
+        assert error.startswith("OSError")
+        # The file the widget reads is the one it read before, not a half of the
+        # new one; and the temporary file does not stay behind.
+        assert read_prefs(api)["density"] == "detailed"
+        assert [item.name for item in tmp_path.iterdir()] == ["prefs.json"]
+
     def test_no_state_directory_is_reported_not_raised(self, tmp_path):
         api = _Api(tmp_path, broken=True)
         stored, error = write_prefs(api, {"density": "detailed"})
-        assert stored == {"density": "detailed", "models": {}}
+        assert stored == {"density": "detailed", "models": {}, "fold": ALL_FOLDED}
         assert error == "no state directory"
         assert read_prefs(api) == DEFAULT_PREFS
 
@@ -1288,4 +1674,25 @@ class TestPrefs:
         api = _Api(tmp_path)
         write_prefs(api, {"density": "detailed", "models": {"claude": "models"}, "token": "secret"})
         written = json.loads((tmp_path / "prefs.json").read_text(encoding="utf-8"))
-        assert written == {"density": "detailed", "models": {"claude": "models"}}
+        assert written == {
+            "density": "detailed", "models": {"claude": "models"}, "fold": ALL_FOLDED,
+        }
+
+    def test_fold_folds_every_reason_until_the_reader_says_otherwise(self):
+        assert clean_prefs({"density": "normal"})["fold"] == ALL_FOLDED
+
+    def test_fold_keeps_a_reason_switched_off(self):
+        cleaned = clean_prefs({"fold": {"failed": False}})
+        assert cleaned["fold"] == {"failed": False, "disabled": True, "signed_out": True}
+
+    def test_fold_ignores_a_value_that_is_not_a_boolean(self):
+        cleaned = clean_prefs({"fold": {"failed": "no", "disabled": 0, "signed_out": None}})
+        assert cleaned["fold"] == ALL_FOLDED
+
+    def test_fold_drops_a_reason_this_skill_does_not_know(self):
+        cleaned = clean_prefs({"fold": {"exhausted": False, "disabled": False}})
+        assert cleaned["fold"] == {"failed": True, "disabled": False, "signed_out": True}
+
+    def test_fold_that_is_not_a_map_leaves_every_reason_folded(self):
+        for junk in (["failed"], "failed", 0, None, True):
+            assert clean_prefs({"fold": junk})["fold"] == ALL_FOLDED

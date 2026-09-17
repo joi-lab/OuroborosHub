@@ -226,29 +226,29 @@
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "fdfd0d679ea5f32f165031fda917104edb21334e627603d694af0c279a9942fd",
-          "size": 3544
+          "sha256": "19d269f9a98cf4f54d2dca570cdec32e79d959dc735ff90e5516e6ff45ef9b9f",
+          "size": 4475
         },
         {
           "path": "plugin.py",
-          "sha256": "7e7cb9dbd5107eb7e06e6570cefad2a84882f9afc54a9e5b64d5f2f61fb51e2b",
-          "size": 16460
+          "sha256": "f4a0c3d06c1dae879dc1c3bb6308c1d9b8276ab39b0efb3e80a07df41bb7c5da",
+          "size": 26119
         },
         {
           "path": "test_cache_efficiency.py",
-          "sha256": "e8be2a091b59115a80121eb1ea86f9ed14435ec5cdca7ca187914ffbd27b3be8",
-          "size": 19259
+          "sha256": "d2b3f2ea442be68e1a247bc8b681b93696e08b77384aeb7de4918fcef7f6c698",
+          "size": 27246
         },
         {
           "path": "widget.js",
-          "sha256": "016a1806412e6e35039205456b7daa06e76d7478c797c93408f4f15a9c8aa297",
-          "size": 34492
+          "sha256": "62a1637e945367f3215c312176f059440cfbda117f61b3197bfa46f3bdf41109",
+          "size": 34628
         }
       ],
       "name": "cache_efficiency_snapshot",
       "slug": "cache_efficiency_snapshot",
       "type": "extension",
-      "version": "0.4.0"
+      "version": "0.5.0"
     },
     {
       "description": "Fully playable Classic Doom (1993) standalone 2.5D FPS raycaster extension widget with textured walls, procedural sprite enemies, authentic weapons, levels, HUD, Web Audio sound and heavy metal music synthesizer.",
@@ -280,29 +280,29 @@
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "40bc30bfd7c5d3e175495f9307b2b03661ee2fb1e1498105ad587752b54698e2",
-          "size": 8590
+          "sha256": "0b319175c73a71181785fb39d3eb024481f625543f310b0265f1e9cf0b1f33a4",
+          "size": 9268
         },
         {
           "path": "plugin.py",
-          "sha256": "ccb735a3af1a1d8c096a977a17249a4f9ccf70270b5cbd1f55a177dea344681b",
-          "size": 30178
+          "sha256": "7ddbfd388cdffcfc8992c78fde00ad301e13df9bc523ebc00ea4abd95dd4d77b",
+          "size": 31753
         },
         {
           "path": "test_quotas.py",
-          "sha256": "ac283b45d048415da0150fba9e52e4d3f97834fab383002044b3ee89fb9583a7",
-          "size": 52027
+          "sha256": "91f4bad8efa803db9e8d884a78d501044271e2068323c7af17837c6a4e585b1a",
+          "size": 75668
         },
         {
           "path": "widget.js",
-          "sha256": "5d3b81808dab254923cf98b924c8d00f95a771aaee03134c1dd542dba5bae574",
-          "size": 143332
+          "sha256": "14d0ff6b3e5eeb6cc3be1887788fb5cacdbf87b6d1b26490af0f1aafa2f3b486",
+          "size": 169896
         }
       ],
       "name": "claudexor_quotas",
       "slug": "claudexor_quotas",
       "type": "extension",
-      "version": "0.4.1",
+      "version": "0.5.0",
       "when_to_use": "The owner wants to see, at a glance, the quota windows, limits and reset times of every authorized Claudexor account, including which facets could not be read."
     },
     {
@@ -407,8 +407,8 @@
         },
         {
           "path": "SKILL.md",
-          "sha256": "e909c8d99f32019e0b170477de14b6ed8a3d168c4b394baa65f249bb22179c1a",
-          "size": 8081
+          "sha256": "c0ed33d53a6b2cd9e29d79a89cd3134060e4599ac2e04d72c684967d65fea0c3",
+          "size": 8099
         },
         {
           "path": "client.py",
@@ -429,7 +429,7 @@
       "name": "email",
       "slug": "email",
       "type": "extension",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "when_to_use": "When the user wants to list unread emails, read email message contents, compose and send emails via standard IMAP/SMTP protocols, or test email server connectivity."
     },
     {
@@ -457,12 +457,12 @@
       "files": [
         {
           "path": "README.md",
-          "sha256": "c31f41c3479a06cadadf558e75e841c0cbf59dd32522d65083d02bd7e29b449b",
-          "size": 6180
+          "sha256": "e7b4a7be7be06cce69d54312e3a6d7acbb928ea15b73acc07d2ff10922b5605c",
+          "size": 6757
         },
         {
           "path": "SKILL.md",
-          "sha256": "dc85863a357ab072821c310bef7940099e9cd51226a4ebbbbe703db854b060c3",
+          "sha256": "d82ab5375e5689d6a94f17b53ef14e08272c91bf9e5cf07af18d8f8d56e28692",
           "size": 1182
         },
         {
@@ -472,8 +472,8 @@
         },
         {
           "path": "auth.py",
-          "sha256": "5d209ddb9122c2ec26f6129cf492854bf7269bb238e493521bfb64a1fd5afd80",
-          "size": 7244
+          "sha256": "0cf87c3fc749e787c76f3d45b25de97d8bd2f117ca8b23f766e279c4e191ed3f",
+          "size": 7488
         },
         {
           "path": "client.py",
@@ -491,9 +491,19 @@
           "size": 43
         },
         {
+          "path": "tests/isolated_signing_probe.py",
+          "sha256": "bddf8cb6b6a549299ffb34bffaa61b6255cb955344544bbca3d8d257a820e276",
+          "size": 5747
+        },
+        {
           "path": "tests/test_google_workspace.py",
           "sha256": "6b02a3e810f8d861b34f1e8745a582947cdf2348ab6be7f1c87460151f4e65b1",
           "size": 18216
+        },
+        {
+          "path": "tests/test_isolated_signing.py",
+          "sha256": "424fb2d92849963bb66afd4c8a188ae496ef3ecde9cd9c43f6c93597d8845369",
+          "size": 1890
         }
       ],
       "install_specs": [
@@ -503,7 +513,7 @@
       "name": "google-workspace",
       "slug": "google-workspace",
       "type": "extension",
-      "version": "0.1.0"
+      "version": "0.1.1"
     },
     {
       "description": "Comprehensive, charming, and fully playable Happy Farm game widget with crops, livestock, economy, orders, day-night/weather cycles, and audio.",
@@ -645,13 +655,13 @@
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "488e2fdcb41bf6cf24017c2dae02bada7ceaf9228b5f9485b4a3f7fbc50091e4",
+          "sha256": "05838d76198720a4854a8ab202a95c533725c463050fd3c4e548d4ed4590d6f3",
           "size": 3405
         },
         {
           "path": "analyzer.py",
-          "sha256": "4fcc72c52a58f09eca94fed6410a62136961ac809f0563149a6b195fe8d3613c",
-          "size": 13093
+          "sha256": "2442ae8d5b0ca05d20cbdc7c98809c899236d91df9021fc07f30441b04bc8cba",
+          "size": 12727
         },
         {
           "path": "models.py",
@@ -664,11 +674,6 @@
           "size": 9098
         },
         {
-          "path": "prompts/extract_sex_age.jinja2",
-          "sha256": "cb94ba314ecd76dfeab5450b8fccbc193800904a0ff37dc1e4ff8badef4699fb",
-          "size": 1984
-        },
-        {
           "path": "prompts/lab_test_single_interpretation.jinja2",
           "sha256": "fb0d0169a462a00d607bde53d3c75edf300622112f2ab0cb52c8675839ded4e9",
           "size": 5333
@@ -677,11 +682,6 @@
           "path": "prompts/lab_tests_batch_interpretation.jinja2",
           "sha256": "10df51e119f1469172524e88c0efdf04577df8f11a22cd9ffab2d85bd06ee9cd",
           "size": 2173
-        },
-        {
-          "path": "prompts/lab_tests_name_extraction.jinja2",
-          "sha256": "ae8b6e1de4cd779e69a6c98630fbe47f4e7bc559cad2651adab90a03d2180eb1",
-          "size": 1752
         },
         {
           "path": "prompts/lab_tests_values_batch.jinja2",
@@ -694,15 +694,15 @@
           "size": 7845
         },
         {
-          "path": "prompts/text_classification.jinja2",
-          "sha256": "540b2fec3750008da317669aa498f492519d65f1859e0f1a01765d6f0933592c",
-          "size": 2176
+          "path": "prompts/report_info.jinja2",
+          "sha256": "1738b0b3e1092f81bdeebebb85557aea1b4d661a8dc5e8dcd6204dc2fd7bfb7e",
+          "size": 3263
         }
       ],
       "name": "medical-lab-analyzer",
       "slug": "medical-lab-analyzer",
       "type": "extension",
-      "version": "0.2.1"
+      "version": "0.2.2"
     },
     {
       "description": "Read-only atlas, document reader, authentic history browser, literal search, and evidence graph for allowlisted Ouroboros core memory, consolidated dialogue chronicles, and project knowledge. Opens on global memory; every link it draws is proven from stored bytes, with no model calls at runtime. Use to inspect memory provenance without modifying serving-process data.",
@@ -957,8 +957,8 @@
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "bb7d46445e49391fe9916f41d8822def0d3b58aacc6a730e8fccf1b066621099",
-          "size": 2525
+          "sha256": "ca5823034edac89317fe66ce991e384ea019f54ed4ecf67e1b9bed7e0f8421ba",
+          "size": 2543
         },
         {
           "path": "client.py",
@@ -974,7 +974,7 @@
       "name": "sber-ring",
       "slug": "sber-ring",
       "type": "extension",
-      "version": "1.0.0"
+      "version": "1.0.1"
     },
     {
       "description": "Local second-opinion layer over the owner's own medical data — genome (VCF), laboratory history, prescriptions, wearables. 30 tools; answers carry provenance and say what the data cannot support. Not a medical device.",
@@ -1210,8 +1210,8 @@
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "4ae59c405524536c96d9681c9daac656a7ea9f14e7203c9b7d00d7a57b138a15",
-          "size": 2236
+          "sha256": "0e34ec8366f5eba4680031d195fe3bf791e0829a94df32bb911afae2e36422c0",
+          "size": 2254
         },
         {
           "path": "client.py",
@@ -1227,7 +1227,7 @@
       "name": "vkusvill",
       "slug": "vkusvill",
       "type": "extension",
-      "version": "1.0.0"
+      "version": "1.0.1"
     },
     {
       "description": "Wide polished weather widget — current conditions, compact forecast, astronomy, and resilient wttr.in cache (no API key).",
@@ -1289,6 +1289,324 @@
       "type": "script",
       "version": "0.1.0",
       "when_to_use": "The user attached a Word document and asks to read, summarize, search, compare, or revise its contents, or asks to create a Word or DOCX file."
+    },
+    {
+      "slug": "email-presence",
+      "name": "email-presence",
+      "version": "0.1.0",
+      "type": "extension",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "sha256": "9cccd3173d5c095f66ad47286ecf1ba3c348ed435ae21da5c8f11bd12173ee6b",
+          "size": 5834
+        },
+        {
+          "path": "lib/client.py",
+          "sha256": "8195a393cf76ce8e65e2c3dbbad97a003a5b2679dc7e5fa4170dbefc72a68bad",
+          "size": 10018
+        },
+        {
+          "path": "lib/host_adapter.py",
+          "sha256": "39f2541075fddf72a2484f236274f98dc2cd8ac9a2a4a972eb0bf4f9042364b5",
+          "size": 8093
+        },
+        {
+          "path": "lib/mime.py",
+          "sha256": "a8d93490534ee68c25d025ad2794c5d23cc8a4946594ca01f5da1ce0feaa1a8b",
+          "size": 4245
+        },
+        {
+          "path": "lib/runtime.py",
+          "sha256": "49b424025bd89593e80390e34fa61d57f9b97a9f1e4c85f5eeb5edfd56fc7b42",
+          "size": 7243
+        },
+        {
+          "path": "lib/store.py",
+          "sha256": "c958267a2830ee9eea0e9b251a1e1ea0d34cca539e583190c432905c55dd636a",
+          "size": 12826
+        },
+        {
+          "path": "plugin.py",
+          "sha256": "d4e3f2cfb07e93657925b4680a5753051b32f7a6561685c2839d9abcf9165ef1",
+          "size": 7625
+        },
+        {
+          "path": "scripts/email_daemon.py",
+          "sha256": "803b54f7b19a03d86db5e1e40b930ed67efbc9f002274b3d665fa3df6a978b82",
+          "size": 1486
+        },
+        {
+          "path": "tests/test_auth.py",
+          "sha256": "421dc29db26086515ad15116d2bde0be88e1b4148845079ea40ed5712b057d0d",
+          "size": 2066
+        },
+        {
+          "path": "tests/test_host_adapter.py",
+          "sha256": "c6cf80c86a7c5528572bb244eb44bb73d675121b1cc6e0f7d50bd3fdeea74f36",
+          "size": 1877
+        },
+        {
+          "path": "tests/test_mime.py",
+          "sha256": "658c33bc058ff1b2e703a336dbe37d71654d66c6fc64962ef7a5190c41368417",
+          "size": 1310
+        },
+        {
+          "path": "tests/test_plugin.py",
+          "sha256": "b178f0f4d9ce53d504c98878060577a686451b2fb32eca984da5e311bbe764a7",
+          "size": 1793
+        },
+        {
+          "path": "tests/test_store.py",
+          "sha256": "d395d4073f4412682be41bf2c686b989dc3ffca20de66be83fb6c97126204ec8",
+          "size": 914
+        },
+        {
+          "path": "tests/test_transport.py",
+          "sha256": "141720adb1e99ec0711163d55dbf4df299da836438e8a754e27a064c70c93261",
+          "size": 10855
+        }
+      ],
+      "description": "Bidirectional email Presence transport with IMAP polling, durable delivery, and RFC 5322 reply threading."
+    },
+    {
+      "slug": "telegram-bot",
+      "name": "telegram-bot",
+      "version": "0.2.1",
+      "type": "extension",
+      "files": [
+        {
+          "path": "FORMATTER_PROVENANCE.md",
+          "sha256": "c8813153c8dc88e4785acd6de68aeec30a877d4af3e632037232f5371de51f77",
+          "size": 1162
+        },
+        {
+          "path": "LICENSE.formatting",
+          "sha256": "471f75bc6ef38333696dd6549c4355adef05291a74135649131f0a5728f5a45c",
+          "size": 1073
+        },
+        {
+          "path": "SKILL.md",
+          "sha256": "1f933ae112bdbe32dcc1a5a7146014a9799a82bbfa9fa27cc08a1fa56f1dd231",
+          "size": 8110
+        },
+        {
+          "path": "plugin.py",
+          "sha256": "acc476c4bf9e4f8aec4ae6979162343d2ec40b756327eb663cc12f9925bf042e",
+          "size": 15385
+        },
+        {
+          "path": "telegram_bot/__init__.py",
+          "sha256": "9fc56903a2bc6198e49b95d019175d2739f08c82f28d4465fcfc6e5ca7e57f99",
+          "size": 205
+        },
+        {
+          "path": "telegram_bot/api.py",
+          "sha256": "c92b5d71a37808416930fc72338accd7d17a476b3f960fda55361acc36ac30ec",
+          "size": 15895
+        },
+        {
+          "path": "telegram_bot/custody.py",
+          "sha256": "7a32eba5ac690d507f9dfaf9fb90c1aec09b649f98de99fccb73e850c88b0d76",
+          "size": 23566
+        },
+        {
+          "path": "telegram_bot/events.py",
+          "sha256": "0b64a390f654fd19acbad8ab112b7adebc944d35a14a00d6d2884d0cd8b4c601",
+          "size": 5368
+        },
+        {
+          "path": "telegram_bot/formatting.py",
+          "sha256": "92d054215be5e69a9e247930e675894706aa38465af8890f9dad46cf609447b4",
+          "size": 19417
+        },
+        {
+          "path": "telegram_bot/host.py",
+          "sha256": "8995a34de5b4edcdf1ab76217fb54bf290fb116687da96de0501e5b0066bb2a0",
+          "size": 8798
+        },
+        {
+          "path": "telegram_bot/runtime.py",
+          "sha256": "a2c221d95eac7ed503d06c150da4f4f84eeeed1a93babee1a2bc2311334fdda6",
+          "size": 16686
+        },
+        {
+          "path": "telegram_bot/tools.py",
+          "sha256": "a5c80fe2b1f23db24ebd202a7055b62802210bdb0add8195101eef02eccf7263",
+          "size": 5569
+        },
+        {
+          "path": "tests/conftest.py",
+          "sha256": "8078258e03839bb1d325f812bb83839aa3b905c12ebcabe35945a13eb736b0af",
+          "size": 236
+        },
+        {
+          "path": "tests/test_api.py",
+          "sha256": "38713ae68ee4bb4d9de3b57b619604d88ad8f7fde580c15850356ec56bb6ac70",
+          "size": 2628
+        },
+        {
+          "path": "tests/test_custody.py",
+          "sha256": "f1eb717a0b5058945702f8648a67f741c27076a246e5bbdc259d79cb28950b20",
+          "size": 7472
+        },
+        {
+          "path": "tests/test_events.py",
+          "sha256": "514aca0bf5689441a76dbc681fe3c6d0b8f2893e51c12e125afb819a6bf61e07",
+          "size": 3923
+        },
+        {
+          "path": "tests/test_formatted_delivery.py",
+          "sha256": "d2976fd2de849818074d6f3418def7aea08a0e311c6bff1e51010f63294c195d",
+          "size": 11664
+        },
+        {
+          "path": "tests/test_formatting.py",
+          "sha256": "125b168b28a88acff3eca354af45f900ec8091a673d55e8e17a07df13bee4525",
+          "size": 3067
+        },
+        {
+          "path": "tests/test_host.py",
+          "sha256": "b3c39e4071d1af222fd2ce4ee72175207189f0321a2e4c90f226fbf665371ebd",
+          "size": 4880
+        },
+        {
+          "path": "tests/test_moderation.py",
+          "sha256": "9e2bfdb1f32deb871d4ecd80925ba31cd7334170db7344be7ba4bd196cfbeb77",
+          "size": 4047
+        },
+        {
+          "path": "tests/test_plugin.py",
+          "sha256": "3af2ee40e26d24f75a1bd358f1b45f63a5f55a9104fc09b7203a10ba4cb9132c",
+          "size": 5793
+        },
+        {
+          "path": "tests/test_runtime.py",
+          "sha256": "03425c0cc62024a009469cf9edd2d6b3e0b5ac6ea684378df860ec975d2339b4",
+          "size": 15203
+        }
+      ],
+      "description": "Durable Telegram transport for generic Ouroboros presences, with exact actor and conversation provenance, media staging, and provider receipts."
+    },
+    {
+      "slug": "slack-bridge",
+      "name": "slack-bridge",
+      "version": "1.0.0",
+      "type": "extension",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "sha256": "42a6ea798df1451f06c9c03d69b7768d4355ecacc00f195c07eadc8dd4c51e3a",
+          "size": 4087
+        },
+        {
+          "path": "lib/__init__.py",
+          "sha256": "95757c652f0f319e24740726c9e9373be69b4a60e4c935ef905523b5c9718ba2",
+          "size": 70
+        },
+        {
+          "path": "lib/events.py",
+          "sha256": "543c43946c0c3c60d890033569c0b858c1aa0867a46449fe74775975fce43f4f",
+          "size": 5013
+        },
+        {
+          "path": "lib/host_adapter.py",
+          "sha256": "13e01ee1190eb41484499357f7eb2de671641930bc835125cd3b89f6fceffa4b",
+          "size": 13288
+        },
+        {
+          "path": "lib/runtime.py",
+          "sha256": "79632d30c3a293f5c8f13c26fbe85e5bc9f31eee8c25672b1b2a4cc97409fa23",
+          "size": 10029
+        },
+        {
+          "path": "lib/slack_api.py",
+          "sha256": "e61e197932a29f7d9d54e3f9ea22e841d0e1301ec545902dc133ce7a568d76a1",
+          "size": 9610
+        },
+        {
+          "path": "lib/socket_mode.py",
+          "sha256": "b2e7a7e37d5187244c562f16d056f5ad78544a67101b92e2b785a3737ea99cc9",
+          "size": 5220
+        },
+        {
+          "path": "lib/store.py",
+          "sha256": "e6c0756841b6267905ac7640c8222d20b80f3eee317fbea2ca426004daf98a9b",
+          "size": 23268
+        },
+        {
+          "path": "manifest.json",
+          "sha256": "86eee8ec8839bc454ec420c2ee29b86a4f76be513edfaf6aef1fa8ef7ebd3cd3",
+          "size": 820
+        },
+        {
+          "path": "plugin.py",
+          "sha256": "f9e09abe0ba0421e7cb6834a310a277df4ca4008a500b754a9df04f3c8193e75",
+          "size": 12615
+        },
+        {
+          "path": "scripts/slack_daemon.py",
+          "sha256": "d31e7d77b2202b58baf2c066f77252c73c4d9aab706ec555576cb870f11f3d32",
+          "size": 4099
+        },
+        {
+          "path": "tests/conftest.py",
+          "sha256": "91819639c2342bc9cc84fc7b8045863d3c61128999333d27922b3501b2d040f0",
+          "size": 198
+        },
+        {
+          "path": "tests/test_events_store.py",
+          "sha256": "60fa2939ea793fb63602c5ddc821dc2484ba2fe22fe283895bd050bc47393a17",
+          "size": 8092
+        },
+        {
+          "path": "tests/test_host_adapter.py",
+          "sha256": "ac61047660781ae49cf1f24fd24a41511c2989e8411c99dd5d0bd9ce784dc2ef",
+          "size": 8625
+        },
+        {
+          "path": "tests/test_slack_api.py",
+          "sha256": "0c9517a8443cc04b4c5ccf980581f4aa382bd910bba837fa6c1dde91e9997e60",
+          "size": 2145
+        },
+        {
+          "path": "tests/test_socket_mode.py",
+          "sha256": "f2bd398507ec7f4d4b28acd01590e34b5524d4c7cdfd120074f0cee15b582b5d",
+          "size": 2150
+        },
+        {
+          "path": "tests/test_workers_plugin.py",
+          "sha256": "689c4b7240c194ab2c3cf33b7ff00f6530812e22112ceaf1d2a29c727a4b252a",
+          "size": 12425
+        }
+      ],
+      "description": "Bidirectional Slack presence transport for Ouroboros using Socket Mode, durable delivery queues, threaded replies, proactive text messages, and inbound file staging."
+    },
+    {
+      "author": "kuznetsoffandrey",
+      "description": "Сбор данных со смарт-браслета WHOOP через официальный API v2: сон, recovery, strain, тренировки, HRV, пульс покоя, SpO2. Полный OAuth2 Authorization Code flow для первичной авторизации и автоматическое обновление токенов.",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "sha256": "62369957ca5b2e5b40deae99aec2a7f242c0a37e877491b299ad35a03904a860",
+          "size": 3820
+        },
+        {
+          "path": "plugin.py",
+          "sha256": "73cc912aadf3cd0cce95f9d8de338c651c91607a052c9b2fb8a3060347dd8c95",
+          "size": 11895
+        },
+        {
+          "path": "whoop_client.py",
+          "sha256": "6213b81c775c4132333b287ca6f160effa55b472cda2c9a4ae150ff1fece9c34",
+          "size": 13651
+        }
+      ],
+      "name": "whoop-health",
+      "slug": "whoop-health",
+      "type": "extension",
+      "version": "0.3.0",
+      "when_to_use": "Пользователь спрашивает о данных с WHOOP: сон, восстановление, нагрузка (strain), тренировки, HRV, пульс, SpO2. Примеры: «покажи recovery с WHOOP», «как я спал по WHOOP?», «сводка здоровья WHOOP», «авторизуй WHOOP»."
     }
   ]
 }

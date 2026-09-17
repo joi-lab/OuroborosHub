@@ -8,9 +8,6 @@ import time
 from typing import Any, Dict, Optional
 from urllib.parse import urlparse
 import httpx
-from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import padding
-from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
 
 # Standard Google OAuth 2.0 Token Endpoint
 GOOGLE_TOKEN_URI = "https://oauth2.googleapis.com/token"
@@ -88,6 +85,13 @@ def parse_service_account_info(raw_info: Optional[str]) -> Dict[str, Any]:
 
 def create_signed_jwt(sa_info: Dict[str, Any], subject: Optional[str] = None) -> str:
     """Create a signed RS256 JWT assertion for Google OAuth2 token exchange."""
+    # Registration and execution have separate isolated-dependency scopes.
+    # Load native crypto only in the tool child that performs the signing;
+    # retaining its classes across registration cleanup breaks Rust type checks.
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import padding
+    from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
+
     client_email = sa_info["client_email"]
     private_key_pem = sa_info["private_key"]
     token_uri = sa_info.get("token_uri", GOOGLE_TOKEN_URI)

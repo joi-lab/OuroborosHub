@@ -565,7 +565,7 @@
           </summary>
           <div class="ces-drawer-content" id="diagnosticsContent">
             <div class="ces-diag-item">Window Samples: <b id="diagWindow">--</b></div>
-            <div class="ces-diag-item">Retained Settled Records: <b id="diagTotal">--</b></div>
+            <div class="ces-diag-item">Retained Records: <b id="diagTotal">--</b></div>
             <div class="ces-diag-item">Window Span: <b id="diagSpan">--</b></div>
             <div class="ces-diag-item">Omitted Rows / Buckets: <b id="diagOmitted">--</b></div>
           </div>
@@ -815,7 +815,7 @@
     if (state.data.status === 'degraded' || q.read_error) {
       if (errorBanner) {
         errorBanner.style.display = 'flex';
-        if (errorText) errorText.textContent = `Warning: Ledger state degraded (${q.read_error || 'partial read'}). Data may be incomplete.`;
+        if (errorText) errorText.textContent = `Warning: Usage log read degraded (${q.read_error || 'partial read'}). Data may be incomplete.`;
       }
       if (pulse) pulse.classList.add('error');
     }
@@ -838,7 +838,7 @@
     document.getElementById('diagTotal').textContent = `${q.settled_records_total || 0} records`;
     document.getElementById('diagOmitted').textContent = `${q.models_omitted || 0} rows / ${q.buckets_omitted || 0} buckets`;
     document.getElementById('diagSpan').textContent = q.oldest_ts && q.newest_ts ? `${q.oldest_ts.slice(0,10)} → ${q.newest_ts.slice(0,10)}` : 'No activity';
-    document.getElementById('retainedCoverage').textContent = `${q.coverage || ''} Compacted summaries skipped: ${q.raw_stats?.compacted_records_skipped || 0}.`;
+    document.getElementById('retainedCoverage').textContent = `${q.coverage || ''} Archives read: ${q.raw_stats?.archives_read || 0} · duplicate events skipped: ${q.raw_stats?.duplicate_events_skipped || 0} · compacted ledger summaries skipped: ${q.raw_stats?.ledger_compacted_records_skipped || 0}.`;
 
     // A poll keeps the selected point; renderChart re-inspects the nearest bin.
     renderTable();
