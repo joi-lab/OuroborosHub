@@ -1621,6 +1621,65 @@
         }
       ],
       "description": "Read-only observer for a YYLO-orchestrated coding workspace. Explains the typed task and merge lifecycle and how to answer status questions with the yylo CLI's read-only commands (info, task doctor, task status, merge status, wiki). Never mutates task, merge, Kanban, or Git state."
+    },
+    {
+      "slug": "sber_operational_director",
+      "name": "sber_operational_director",
+      "version": "0.2.10",
+      "type": "extension",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "sha256": "4a1b35375032607266dd842fa0b7a2f812bd6cec5889bafc06401dfd6b32a87b",
+          "size": 16969
+        },
+        {
+          "path": "certs/README.md",
+          "sha256": "107f55859a3c8f21a9b8c5289bc2f1e0a609a948832cb11632126c743111cd3f",
+          "size": 2273
+        },
+        {
+          "path": "certs/SberCA_Root_Ext.crt",
+          "sha256": "7b02a6b72358264b3652c40b69ace9fef7a68d88c60d95ca826c2af5ed186e30",
+          "size": 2057
+        },
+        {
+          "path": "lib/__init__.py",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "size": 0
+        },
+        {
+          "path": "lib/mcp_client.py",
+          "sha256": "67badc0b9ee4e706ba05da53b48ad6f7ab071312204a19f489df1f9c5ec51717",
+          "size": 14749
+        },
+        {
+          "path": "lib/tls_store.py",
+          "sha256": "d95e34b801fa30fda2ec9eb506bf3d33b0ec71a22d8d8b7894f6c92e8169ee4a",
+          "size": 7169
+        },
+        {
+          "path": "plugin.py",
+          "sha256": "c269a58677bc57522161209c579ad02412ad34defc5b6a6f010a4b37f0742a9d",
+          "size": 38404
+        }
+      ],
+      "description": "ИИ-агент «Операционный директор» Сбербанка через MCP — сбор клиентских данных и ответы на бизнес-вопросы (ограничения, задолженность, справки, карты, профиль и т.п.).",
+      "when_to_use": "Пользователь просит у «Операционного директора» Сбера бизнес-сведения — есть ли ограничения на счетах, задолженность, готовые справки, бизнес-карты, профиль организации, доверенности, операции, балансы, обороты, сводку по банку и т.п. (без технических кодов разделов).",
+      "install_specs": [
+        {
+          "kind": "pip",
+          "package": "httpx"
+        },
+        {
+          "kind": "pip",
+          "package": "cryptography"
+        },
+        {
+          "kind": "pip",
+          "package": "starlette"
+        }
+      ]
     }
   ]
 }
