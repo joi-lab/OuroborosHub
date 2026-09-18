@@ -54,16 +54,24 @@ class _DeferredHost:
 class _Slack:
     def __init__(self) -> None:
         self.posts = []
+        self.formats = []
 
     async def stage_private_files(self, files, *, destination):
         del files, destination
         return ()
 
+    async def user_info(self, user_id):
+        return {"id": user_id, "name": "reader", "profile": {"display_name": "Reader"}}
+
+    async def conversation_info(self, channel_id):
+        return {"id": channel_id, "is_im": True}
+
     async def resolve_target(self, target):
         return target
 
-    async def post_message(self, *, channel, text, thread_ts=""):
+    async def post_message(self, *, channel, text, thread_ts="", text_format="markdown"):
         self.posts.append((channel, text, thread_ts))
+        self.formats.append(text_format)
         return {"ok": True, "ts": "2.2"}
 
 
@@ -77,8 +85,8 @@ class _RejectedHost:
 
 
 class _FailingSlack(_Slack):
-    async def post_message(self, *, channel, text, thread_ts=""):
-        del channel, text, thread_ts
+    async def post_message(self, *, channel, text, thread_ts="", text_format="markdown"):
+        del channel, text, thread_ts, text_format
         raise SlackApiError("temporary_failure")
 
 
@@ -139,6 +147,7 @@ async def _host_adapter_flow_preserves_text_and_queues_threaded_reply(tmp_path) 
     outbound = OutboundWorker(store, slack)
     assert await outbound.process_once() is True
     assert slack.posts == [("D1", "response", "1.1")]
+    assert slack.formats == ["markdown"]
     assert store.status()["outbox_delivered"] == 1
 
 
@@ -286,6 +295,9 @@ def test_plugin_registers_companion_operational_widget_and_durable_send(
 
     assert api.companions == ["slack_socket_mode"]
     assert "slack_send" in api.tools
+    format_schema = api.tools["slack_send"][1]["schema"]["properties"]["text_format"]
+    assert format_schema["enum"] == ["markdown", "mrkdwn", "plain"]
+    assert format_schema["default"] == "markdown"
     assert "status" in api.routes
     assert api.tabs["slack_presence"][1]["render"]["kind"] == "declarative"
     metrics = api.tabs["slack_presence"][1]["render"]["components"][2]["components"]
@@ -304,6 +316,17 @@ def test_plugin_registers_companion_operational_widget_and_durable_send(
     assert result["state"] == "queued"
     assert repeated["chunks_queued"] == 1
     assert BridgeStore(tmp_path).status()["outbox_pending"] == 1
+
+
+def test_slack_send_explicit_plain_format_is_persisted(tmp_path):
+    module = _load_plugin()
+    api = _Api(tmp_path)
+    module.register(api)
+    handler, _metadata = api.tools["slack_send"]
+    result = handler(channel_or_user="D1", text="**literal**", text_format="plain", request_id="literal")
+    assert result["state"] == "queued"
+    item = BridgeStore(tmp_path).claim_outbox()
+    assert item.text_format == "plain" and item.text == "**literal**"
 
 
 def test_settings_accept_only_canonical_binding_ids(tmp_path) -> None:

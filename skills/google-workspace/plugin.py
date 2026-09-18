@@ -18,10 +18,10 @@ except ImportError:
 
 try:
     from .auth import parse_service_account_info, get_access_token
-    from .client import GoogleWorkspaceClient
+    from .client import GoogleWorkspaceClient, VALUE_RENDER_OPTIONS
 except ImportError:
     from auth import parse_service_account_info, get_access_token
-    from client import GoogleWorkspaceClient
+    from client import GoogleWorkspaceClient, VALUE_RENDER_OPTIONS
 
 if TYPE_CHECKING:
     from contracts.plugin_api import PluginAPI
@@ -130,13 +130,24 @@ def _make_workspace_auth_status(api: PluginAPI):
     return workspace_auth_status
 
 
+def _make_sheets_info(api: PluginAPI):
+    def sheets_info(spreadsheet_id: str) -> str:
+        sa_json = _get_client_sa_json(api)
+        with GoogleWorkspaceClient(raw_sa_info=sa_json) as client:
+            return _format_json(client.sheets_info(spreadsheet_id=spreadsheet_id))
+
+    return sheets_info
+
+
 def _make_sheets_read(api: PluginAPI):
-    def sheets_read(spreadsheet_id: str, range: str, max_rows: int = 5000) -> str:
+    def sheets_read(spreadsheet_id: str, range: str, max_rows: int = 5000,
+                    value_render_option: str = "FORMATTED_VALUE") -> str:
         """Read cell values from a rectangular range in a Google Sheet."""
         sa_json = _get_client_sa_json(api)
         try:
             with GoogleWorkspaceClient(raw_sa_info=sa_json) as client:
-                res = client.sheets_read(spreadsheet_id=spreadsheet_id, range_name=range, max_rows=max_rows)
+                res = client.sheets_read(spreadsheet_id=spreadsheet_id, range_name=range,
+                                         max_rows=max_rows, value_render_option=value_render_option)
                 return _format_json(res)
         except Exception as exc:
             raise RuntimeError(f"sheets_read failed: {exc}") from exc
@@ -298,6 +309,18 @@ def register(api: PluginAPI) -> None:
     )
 
     api.register_tool(
+        name="sheets_info",
+        handler=_make_sheets_info(api),
+        description="Discover spreadsheet title, locale, timezone and tabs (IDs, names and grid dimensions) without reading cells. Use tab names in sheets_read ranges.",
+        schema={
+            "type": "object",
+            "properties": {"spreadsheet_id": {"type": "string", "description": "Google Spreadsheet ID."}},
+            "required": ["spreadsheet_id"],
+        },
+        timeout_sec=60,
+    )
+
+    api.register_tool(
         name="sheets_read",
         handler=_make_sheets_read(api),
         description="Read rectangular cell values from a Google Spreadsheet range (e.g. 'Sheet1!A1:D10' or 'A1:C').",
@@ -316,6 +339,12 @@ def register(api: PluginAPI) -> None:
                     "type": "integer",
                     "description": "Maximum rows to return (default 5000).",
                     "default": 5000,
+                },
+                "value_render_option": {
+                    "type": "string",
+                    "enum": list(VALUE_RENDER_OPTIONS),
+                    "default": "FORMATTED_VALUE",
+                    "description": "FORMATTED_VALUE returns displayed values; UNFORMATTED_VALUE returns calculated values without formatting; FORMULA returns formulas instead of their calculated results.",
                 },
             },
             "required": ["spreadsheet_id", "range"],
@@ -383,7 +412,7 @@ def register(api: PluginAPI) -> None:
     api.register_tool(
         name="drive_list",
         handler=_make_drive_list(api),
-        description="List files and folders shared with the Google Service Account, or inside a specific parent folder.",
+        description="List accessible files and folders, including owners, last modifier, version and capabilities when Google provides them. Follow next_page_token for more files.",
         schema={
             "type": "object",
             "properties": {
@@ -408,7 +437,7 @@ def register(api: PluginAPI) -> None:
     api.register_tool(
         name="drive_read_text",
         handler=_make_drive_read_text(api),
-        description="Read or export plain text content from a Google Doc, Google Sheet (as CSV), or text file on Google Drive.",
+        description="Read plain text from a Google Doc or text file with available owner/version metadata. Google Sheets CSV includes only the first tab; use sheets_info and sheets_read for others. truncated reports character clipping, not workbook coverage.",
         schema={
             "type": "object",
             "properties": {
@@ -508,7 +537,8 @@ def register(api: PluginAPI) -> None:
                         {
                             "type": "markdown",
                             "text": (
-                                "- `sheets_read(spreadsheet_id, range, max_rows=5000)`: Read tabular data from Google Sheets.\n"
+                                "- `sheets_info(spreadsheet_id)`: Discover spreadsheet metadata and tabs without reading cells.\n"
+                                "- `sheets_read(spreadsheet_id, range, max_rows=5000, value_render_option='FORMATTED_VALUE')`: Read values or formulas from a selected range.\n"
                                 "- `sheets_append(spreadsheet_id, range, rows)`: Append rows to Google Sheets.\n"
                                 "- `docs_create(title, folder_id, template_id)`: Create or duplicate Google Docs.\n"
                                 "- `drive_list(folder_id)`: List files in shared folders.\n"

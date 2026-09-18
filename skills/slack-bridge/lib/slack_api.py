@@ -14,6 +14,15 @@ class SlackConfigurationError(RuntimeError):
     pass
 
 
+TEXT_FORMATS = ("markdown", "mrkdwn", "plain")
+
+
+def normalize_text_format(value: str) -> str:
+    if value not in TEXT_FORMATS:
+        raise SlackConfigurationError("text_format must be markdown, mrkdwn, or plain")
+    return value
+
+
 class SlackApiError(RuntimeError):
     def __init__(
         self,
@@ -151,10 +160,16 @@ class SlackClient:
         except ValueError:
             retry_after = 0.0
         if response.status_code != 200:
+            try:
+                details = response.json()
+            except ValueError:
+                details = {}
+            details = details if isinstance(details, dict) else {}
             raise SlackApiError(
-                f"http_{response.status_code}",
+                str(details.get("error") or f"http_{response.status_code}"),
                 status_code=response.status_code,
                 retry_after=retry_after,
+                details=details,
             )
         try:
             data = response.json()
@@ -179,6 +194,69 @@ class SlackClient:
     async def auth_test(self) -> dict[str, Any]:
         return await self._post("auth.test", {}, token=self.bot_token)
 
+    async def user_info(self, user_id: str) -> dict[str, Any]:
+        user_id = str(user_id or "").strip()
+        if not user_id:
+            raise SlackConfigurationError("user_id is required")
+        response = await self._post(
+            "users.info", {"user": user_id, "include_locale": True}, token=self.bot_token
+        )
+        user = response.get("user")
+        if not isinstance(user, dict) or user.get("id") != user_id:
+            raise SlackApiError("user_identity_mismatch")
+        return user
+
+    async def conversation_info(self, channel_id: str) -> dict[str, Any]:
+        channel_id = str(channel_id or "").strip()
+        if not channel_id:
+            raise SlackConfigurationError("channel_id is required")
+        response = await self._post(
+            "conversations.info", {"channel": channel_id, "include_locale": True},
+            token=self.bot_token,
+        )
+        conversation = response.get("channel")
+        if not isinstance(conversation, dict) or conversation.get("id") != channel_id:
+            raise SlackApiError("conversation_identity_mismatch")
+        return conversation
+
+    async def read_messages(
+        self, channel_id: str, *, thread_ts: str = "", cursor: str = "",
+        limit: int = 50, oldest: str = "", latest: str = "", inclusive: bool = False,
+    ) -> dict[str, Any]:
+        """One provider page, retaining all message text and continuation facts."""
+        channel_id = str(channel_id or "").strip()
+        if not channel_id:
+            raise SlackConfigurationError("channel_id is required")
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 200:
+            raise SlackConfigurationError("limit must be an integer between 1 and 200")
+        payload: dict[str, Any] = {"channel": channel_id, "limit": limit, "inclusive": bool(inclusive)}
+        for key, value in (("cursor", cursor), ("oldest", oldest), ("latest", latest)):
+            if value:
+                payload[key] = str(value)
+        endpoint = "conversations.replies" if thread_ts else "conversations.history"
+        if thread_ts:
+            payload["ts"] = str(thread_ts)
+        response = await self._post(endpoint, payload, token=self.bot_token)
+        messages = response.get("messages")
+        if not isinstance(messages, list):
+            raise SlackApiError("missing_messages")
+        metadata = response.get("response_metadata") or {}
+        next_cursor = str(metadata.get("next_cursor") or "").strip()
+        has_more = bool(response.get("has_more") or next_cursor)
+        result = {
+            **response, "source": endpoint, "channel_id": channel_id,
+            "thread_ts": thread_ts, "has_more": has_more,
+            "next_cursor": next_cursor or None, "complete": not has_more,
+        }
+        if has_more and not next_cursor:
+            # Slack also exposes time-range pagination. Retain its raw response
+            # and disclose the missing cursor instead of claiming completeness.
+            result["continuation_note"] = (
+                "Slack reported more results without a cursor. Continue with an explicit "
+                "oldest/latest range using the returned timestamps; this page is incomplete."
+            )
+        return result
+
     async def open_socket_url(self) -> str:
         data = await self._post("apps.connections.open", {}, token=self.app_token)
         url = str(data.get("url") or "").strip()
@@ -202,8 +280,14 @@ class SlackClient:
         channel: str,
         text: str,
         thread_ts: str = "",
+        text_format: str = "markdown",
     ) -> dict[str, Any]:
-        payload: dict[str, Any] = {"channel": str(channel), "text": str(text)}
+        selected = normalize_text_format(text_format)
+        payload: dict[str, Any] = {"channel": str(channel)}
+        if selected == "markdown":
+            payload["markdown_text"] = str(text)
+        else:
+            payload.update(text=str(text), mrkdwn=selected == "mrkdwn")
         if thread_ts:
             payload["thread_ts"] = str(thread_ts)
         return await self._post("chat.postMessage", payload, token=self.bot_token)

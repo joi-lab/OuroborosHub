@@ -9,8 +9,9 @@ from typing import Any
 from starlette.responses import JSONResponse
 
 from .lib.host_adapter import HostContractError, normalize_binding_id
-from .lib.slack_api import SlackConfigurationError, chunk_message
+from .lib.slack_api import SlackConfigurationError, TEXT_FORMATS, chunk_message, normalize_text_format
 from .lib.store import BridgeStore
+from .lib.read_tools import register_read_tools
 
 
 def _state_dir(api: Any) -> pathlib.Path:
@@ -61,8 +62,10 @@ def _make_slack_send(api: Any):
         text: str = "",
         thread_ts: str = "",
         request_id: str = "",
+        text_format: str = "markdown",
     ) -> dict[str, Any]:
         target = _validate_target(channel_or_user)
+        text_format = normalize_text_format(text_format)
         chunks = chunk_message(text)
         if not chunks:
             return {"ok": False, "error": "text is required"}
@@ -72,6 +75,7 @@ def _make_slack_send(api: Any):
             target=target,
             thread_ts=str(thread_ts or "").strip(),
             chunks=chunks,
+            text_format=text_format,
         )
         return {
             "ok": True,
@@ -160,12 +164,14 @@ def _make_settings_save(api: Any):
 
 def register(api: Any) -> None:
     api.register_companion_process("slack_socket_mode")
+    register_read_tools(api)
     api.register_tool(
         "slack_send",
         _make_slack_send(api),
         description=(
             "Durably queue a proactive Slack text message or thread reply. "
-            "Use a stable channel ID (C/G/D...) or member ID (U/W...), not a display name."
+            "Use a stable channel ID (C/G/D...) or member ID (U/W...), not a display name. "
+            "Standard Markdown is the default; choose mrkdwn for Slack-native syntax or plain for literal markup."
         ),
         schema={
             "type": "object",
@@ -175,6 +181,10 @@ def register(api: Any) -> None:
                     "description": "Slack channel ID or member ID.",
                 },
                 "text": {"type": "string", "description": "Text to send."},
+                "text_format": {
+                    "type": "string", "enum": list(TEXT_FORMATS), "default": "markdown",
+                    "description": "markdown: standard Markdown via Slack markdown_text; mrkdwn: Slack-native syntax; plain: literal markup.",
+                },
                 "thread_ts": {
                     "type": "string",
                     "description": "Optional Slack thread timestamp.",

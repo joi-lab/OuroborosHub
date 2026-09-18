@@ -1,7 +1,7 @@
 ---
 name: slack-bridge
-description: Bidirectional Slack presence transport for Ouroboros using Socket Mode, durable delivery queues, threaded replies, proactive text messages, and inbound file staging.
-version: 1.0.0
+description: Slack presence transport with durable delivery, provider author and conversation context, profile/history/thread reads, proactive text messages, and inbound file staging.
+version: 1.1.0
 type: extension
 entry: plugin.py
 plugin_api: "2.0"
@@ -19,7 +19,15 @@ companion_processes:
     max_restarts: 10
 tools:
   - name: slack_send
-    description: Queue a proactive Slack text message or threaded reply for durable delivery.
+    description: Queue a proactive Slack message or threaded reply with explicit Markdown, Slack mrkdwn, or plain text format.
+  - name: slack_user_info
+    description: Read one user's available Slack profile facts by exact user ID.
+  - name: slack_conversation_info
+    description: Read one conversation's provider metadata by exact channel ID.
+  - name: slack_history
+    description: Read one explicit page of conversation history without trimming message text.
+  - name: slack_thread
+    description: Read one explicit page of a thread using its root timestamp.
 ---
 
 # Slack Bridge
@@ -63,6 +71,53 @@ locations into the skill state directory before the host adapter sees them.
 Outbound file upload is intentionally not part of this version; the Slack app
 does not request `files:write`.
 
+## Provider context and on-demand reads
+
+After the Socket envelope is durably accepted, the inbound worker looks up its
+exact author with `users.info` and room with `conversations.info`. These two
+bounded calls run concurrently outside the Socket acknowledgement handler. The
+worker saves their results, sources and observation times in the existing inbox
+before submitting to Host. A retry or restart reuses that event's snapshot rather
+than silently substituting a later profile. A subsequent event gets a fresh
+snapshot. Existing submitted rows retain their original Host reference.
+
+The model sees available display/real names, Slack username, profile fields
+(including email and title when returned), timezone, channel name/type/topic/
+purpose, and the workspace name already supplied by `auth.test`. Exact actor,
+workspace, channel and thread IDs remain unchanged. Missing scopes, rate limits
+or failed lookups appear as explicit `unavailable` observations; the original
+message still reaches Presence. Empty or absent fields are not invented. A
+stored observation describes the recorded moment, not a claim that the profile
+is still current. `slack_user_info` and `slack_conversation_info` can obtain fresh
+provider data on demand. Provider profile facts do not link people, infer roles
+or grant system ownership; those judgments stay with the model.
+
+`slack_history` and `slack_thread` fetch one page per call and preserve full
+provider message text, timestamps, author IDs and thread fields. They never
+automatically retrieve a directory or bulk history, feed historical messages
+into Presence, or change the transport's intake cursor. Use `slack_user_info` to
+resolve an author ID. `slack_thread` needs the root message's timestamp and also
+returns the root when Slack includes it. Follow `next_cursor` with the same
+filters until `complete=true`; `has_more=true` without a cursor remains explicitly
+incomplete and requires an explicit timestamp-range continuation. `oldest`,
+`latest`, and `inclusive` expose Slack's normal time filters. Requested page size
+is not a completeness guarantee; Slack's app classification may reduce it.
+
+The app manifest declares `users:read` for profiles, `users:read.email` for email,
+and `channels:read`, `groups:read`, `im:read`, `mpim:read` for room metadata.
+History uses the corresponding existing `*:history` scopes. Existing apps need
+the corresponding granted scopes; merely editing this file does not grant them.
+All reads use the existing bot token. Method-specific bot-token restrictions,
+conversation membership, scopes and rate limits remain provider facts: a refusal
+returns its error code, HTTP status, required scopes when supplied, and retry
+delay instead of pretending the result was empty. No automatic account login or
+HTTP retry is introduced.
+
+References: [users.info](https://docs.slack.dev/reference/methods/users.info/),
+[conversations.info](https://docs.slack.dev/reference/methods/conversations.info/),
+[conversations.history](https://docs.slack.dev/reference/methods/conversations.history/),
+[conversations.replies](https://docs.slack.dev/reference/methods/conversations.replies/).
+
 ## Delivery behavior
 
 - Socket envelopes are acknowledged only after their durable SQLite transaction
@@ -83,3 +138,26 @@ Save settings before enabling the skill, or toggle it after a settings change.
 Delivery is durable and retries are bounded. A network interruption after Slack
 accepts a send but before the receipt is stored can still cause a repeated send;
 the transport does not claim provider-side exactly-once delivery.
+
+## Message formatting
+
+New automatic replies and `slack_send` calls default to `text_format="markdown"`.
+Standard Markdown such as `**bold**`, `*italic*`, fenced code, lists and
+`[label](https://example.org)` is sent through Slack's native `markdown_text`
+field. The skill does not rewrite markup or maintain a Markdown parser.
+
+Choose `text_format="mrkdwn"` for Slack-native `*bold*` and `<url|label>` syntax,
+or `text_format="plain"` to show punctuation/markup literally. These modes use
+the ordinary `text` field with `mrkdwn=true` or `false`; Markdown sends never
+combine `markdown_text` with `text` or `blocks`. The outbox stores the selected
+format with each chunk. Existing rows keep their original Slack-native mrkdwn
+interpretation; retries retain the same text, chunks, target, thread and format.
+An ambiguous provider error never triggers a second send in another format;
+the existing bounded outbox retry policy remains unchanged.
+
+The existing lossless 3,900-character chunker stays in use. Very long code fences
+or other markup spanning a chunk boundary may render separately; keep formatted
+sections within a chunk or use plain text when exact literal presentation matters.
+No message characters are silently dropped.
+
+Reference: [chat.postMessage formatting fields](https://docs.slack.dev/reference/methods/chat.postMessage/).

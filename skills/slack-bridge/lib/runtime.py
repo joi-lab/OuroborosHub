@@ -9,6 +9,7 @@ import re
 from typing import Any
 
 from .host_adapter import HostBindingTerminalError, PresenceHostAdapter
+from .provider_context import capture_context
 from .slack_api import SlackApiError, SlackClient, chunk_message
 from .socket_mode import SocketModeClient
 from .store import BridgeStore, InboxItem
@@ -46,6 +47,10 @@ class InboundWorker:
         if item is None:
             return False
         try:
+            if not item.host_reference and item.provider_context is None:
+                snapshot = await capture_context(self.slack, item, self.store.workspace_name())
+                self.store.set_provider_context(item.row_id, item.lease_token, snapshot)
+                item = dataclasses.replace(item, provider_context=snapshot)
             if item.files and not item.staged_files:
                 staged = await self.slack.stage_private_files(
                     item.files,
@@ -140,6 +145,7 @@ class OutboundWorker:
                 channel=channel,
                 text=item.text,
                 thread_ts=item.thread_ts,
+                text_format=item.text_format,
             )
             self.store.complete_outbox(
                 item.row_id,

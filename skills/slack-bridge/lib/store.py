@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing import Any, Iterable, Mapping, Sequence
 
 from .events import ParsedEnvelope
+from .slack_api import normalize_text_format
 
 
 @dataclass(frozen=True)
@@ -35,6 +36,7 @@ class InboxItem:
     staged_files: tuple[dict[str, Any], ...]
     host_reference: str
     attempts: int
+    provider_context: dict[str, Any] | None = None
 
     @property
     def reply_thread_ts(self) -> str:
@@ -59,6 +61,7 @@ class OutboxItem:
     text: str
     ordering_key: str
     attempts: int
+    text_format: str = "mrkdwn"
 
 
 class BridgeStore:
@@ -157,6 +160,18 @@ class BridgeStore:
                 );
                 """
             )
+            # One durable snapshot beside the existing inbox row. Serialize the
+            # additive migration because plugin and companion may start together.
+            db.execute("BEGIN IMMEDIATE")
+            columns = {str(row["name"]) for row in db.execute("PRAGMA table_info(inbox)")}
+            if "provider_context_json" not in columns:
+                db.execute("ALTER TABLE inbox ADD COLUMN provider_context_json TEXT NOT NULL DEFAULT ''")
+            outbox_columns = {str(row["name"]) for row in db.execute("PRAGMA table_info(outbox)")}
+            if "text_format" not in outbox_columns:
+                # Pending rows were authored for Slack's native mrkdwn. Their
+                # original interpretation survives deployment and retry.
+                db.execute("ALTER TABLE outbox ADD COLUMN text_format TEXT NOT NULL DEFAULT 'mrkdwn'")
+            db.commit()
 
     def ingest_envelope(
         self,
@@ -301,7 +316,19 @@ class BridgeStore:
             staged_files=tuple(dict(item) for item in staged if isinstance(item, dict)),
             host_reference=str(row["host_reference"]),
             attempts=int(row["attempts"]),
+            provider_context=json.loads(row["provider_context_json"]) if row["provider_context_json"] else None,
         )
+
+    def set_provider_context(self, row_id: int, lease_token: str, value: Mapping[str, Any]) -> None:
+        self._leased_update(
+            "inbox", row_id, lease_token, "provider_context_json=?",
+            (json.dumps(value, ensure_ascii=False, separators=(",", ":")),),
+        )
+
+    def workspace_name(self) -> str:
+        with self._connect() as db:
+            row = db.execute("SELECT value_json FROM runtime_state WHERE key='workspace_name'").fetchone()
+        return str(json.loads(row["value_json"]) or "") if row else ""
 
     def set_staged_files(
         self,
@@ -363,7 +390,9 @@ class BridgeStore:
         target: str,
         thread_ts: str,
         chunks: Sequence[str],
+        text_format: str = "markdown",
     ) -> int:
+        text_format = normalize_text_format(text_format)
         request_id = str(request_id or uuid.uuid4().hex)
         target = str(target or "").strip()
         if not target:
@@ -389,8 +418,8 @@ class BridgeStore:
                     """
                     INSERT OR IGNORE INTO outbox (
                         request_id, chunk_index, chunk_count, target, thread_ts,
-                        text, ordering_key, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        text, ordering_key, created_at, updated_at, text_format
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         request_id,
@@ -402,6 +431,7 @@ class BridgeStore:
                         ordering_key,
                         now,
                         now,
+                        text_format,
                     ),
                 )
             db.commit()
@@ -444,6 +474,7 @@ class BridgeStore:
             text=str(claimed["text"]),
             ordering_key=str(claimed["ordering_key"]),
             attempts=int(claimed["attempts"]),
+            text_format=str(claimed["text_format"]),
         )
 
     def complete_outbox(

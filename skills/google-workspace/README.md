@@ -6,9 +6,9 @@ A universal, standalone, public extension skill for Ouroboros providing Google S
 
 ## Features
 
-- **Google Sheets (`sheets_read`, `sheets_append`)**: Read rectangular cell ranges with row-count bounding; append rows to tables with automatic cell-type parsing.
+- **Google Sheets (`sheets_info`, `sheets_read`, `sheets_append`)**: Discover workbook and tab metadata without reading cells; read displayed values, calculated values or formulas from selected ranges; append rows to tables.
 - **Google Docs (`docs_create`)**: Create new blank documents or duplicate from template Google Docs into specified Drive folders.
-- **Google Drive (`drive_list`, `drive_read_text`)**: List shared files and folders; export text from Google Docs (`text/plain`), Google Sheets (`text/csv`), and supported plain-text files with bounded stream reading.
+- **Google Drive (`drive_list`, `drive_read_text`)**: List shared files and folders; export text from Google Docs (`text/plain`), the first tab of Google Sheets (`text/csv`), and supported plain-text files with bounded stream reading. Preserve available owners, last modifier, version, modified time, browser URL and capabilities.
 - **Preflight Check (`workspace_auth_status`)**: Validate service account credentials and OAuth2 connectivity without side effects or leaking token material.
 - **Settings & UI Tab**: Configure default working folders and template name mappings.
 
@@ -48,12 +48,18 @@ This skill uses **pure REST via `httpx` and `cryptography`** rather than the off
 - **Description**: Verifies credential structure and performs a test OAuth2 token exchange with Google.
 - **Returns**: `{"status": "ready", "client_email": "...", "project_id": "..."}`.
 
-### `sheets_read(spreadsheet_id, range, max_rows=5000)`
+### `sheets_info(spreadsheet_id)`
+- **Description**: Read spreadsheet title, locale, timezone, URL, and tab IDs, titles, order, type, visibility and grid properties. Does not fetch cell values or formatting.
+- **Returns**: `spreadsheet_id`, `title`, `locale`, `time_zone`, `url`, and `sheets`. Each tab preserves the properties Google returned; non-grid tabs may omit `grid_properties`.
+- **Use**: Choose a returned tab title for `sheets_read`. Grid dimensions are allocated rows/columns, not the count of populated records; frozen rows are provider facts, not an inferred header schema.
+
+### `sheets_read(spreadsheet_id, range, max_rows=5000, value_render_option="FORMATTED_VALUE")`
 - **Parameters**:
   - `spreadsheet_id` (string, required): Google Spreadsheet ID from URL.
   - `range` (string, required): A1 notation (e.g. `'Sheet1!A1:D50'`, `'Summary!A:C'`).
   - `max_rows` (integer, optional): Maximum rows to return (default: 5000).
-- **Returns**: JSON object with `range`, `major_dimension`, `values`, `row_count`, `original_row_count`, `truncated`.
+  - `value_render_option` (string, optional): `FORMATTED_VALUE` (default, displayed calculated values), `UNFORMATTED_VALUE` (calculated values without display formatting), or `FORMULA` (formulas instead of calculated results).
+- **Returns**: JSON object with `range`, `major_dimension`, `value_render_option`, `values`, `row_count`, `original_row_count`, `truncated`.
 
 ### `sheets_append(spreadsheet_id, range, rows, value_input_option="USER_ENTERED")`
 - **Parameters**:
@@ -76,12 +82,21 @@ This skill uses **pure REST via `httpx` and `cryptography`** rather than the off
   - `page_size` (integer, optional): Number of files to return (1-100, default: 50).
   - `page_token` (string, optional): Continuation token.
 - **Returns**: JSON object with `files` list containing `id`, `name`, `mime_type`, `url`, `modified_time`.
+  Available provider fields also include `owners`, `last_modifying_user`, `version` and `capabilities`. Follow `next_page_token` until it is absent to finish a listing.
 
 ### `drive_read_text(file_id, max_chars=100000)`
 - **Parameters**:
   - `file_id` (string, required): Google Drive file ID.
   - `max_chars` (integer, optional): Max text character limit (default: 100000).
-- **Returns**: JSON object with `file_id`, `name`, `mime_type`, `text`, `length`, `truncated`.
+- **Returns**: JSON object with `file_id`, `name`, `mime_type`, `text`, `length`, `truncated`, `url`, and the same available provider metadata as `drive_list`.
+- **Sheets coverage**: CSV contains only the first sheet. `export_scope="first_sheet_only"` and `export_note` disclose this even when `truncated=false`; that flag describes character clipping only. Use `sheets_info` and explicit `sheets_read` ranges for other tabs.
+
+Ownership and capability fields are returned only when Google supplies them.
+Shared-drive files have no `owners` field; an absent owner or last modifier is
+not an anonymous person or a permission denial. `version` is Google's file
+change counter, not a Docs revision ID or an edit precondition. Capability
+booleans describe the calling account's access, not a promise that a later write
+will succeed.
 
 ---
 
@@ -103,3 +118,10 @@ This skill uses **pure REST via `httpx` and `cryptography`** rather than the off
 - **Credential Protection**: The granted `GOOGLE_SERVICE_ACCOUNT_JSON` is never returned in tool responses, logged, or shared.
 - **Endpoint Protection**: OAuth2 token exchanges are strictly pinned to verified Google OAuth domains.
 - **Zero Core Mutation**: Confined to `data/skills/external/google-workspace/` and its state directory.
+
+## API references
+
+- [Drive file metadata](https://developers.google.com/workspace/drive/api/reference/rest/v3/files)
+- [Sheets metadata without grid data](https://developers.google.com/workspace/sheets/api/reference/rest/v4/spreadsheets/get)
+- [Values rendering options](https://developers.google.com/workspace/sheets/api/reference/rest/v4/ValueRenderOption)
+- [Export formats and first-sheet CSV scope](https://developers.google.com/workspace/drive/api/guides/ref-export-formats)

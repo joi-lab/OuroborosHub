@@ -49,7 +49,7 @@ class EmailRuntime:
         if text:
             subject = item.subject if item.subject.lower().startswith("re:") else f"Re: {item.subject}"
             self.store.enqueue_outbox(request_id=f"presence:{item.provider_event_key}:{suffix}",
-                                      recipients=[item.sender], subject=subject, body=text,
+                                      recipients=item.context.get("reply_to") or [item.sender], subject=subject, body=text,
                                       in_reply_to=item.message_id, references=item.references)
 
     async def process_inbox(self):
