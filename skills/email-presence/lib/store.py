@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import hashlib
 import json
 from pathlib import Path
@@ -27,6 +27,7 @@ class InboxItem:
     host_reference: str
     attempts: int
     uidvalidity: int = 0
+    context: dict = field(default_factory=dict)
 
     @property
     def thread_key(self):
@@ -68,6 +69,7 @@ class EmailStore:
                     uid INTEGER NOT NULL, message_id TEXT NOT NULL, in_reply_to TEXT NOT NULL,
                     references_json TEXT NOT NULL, sender TEXT NOT NULL, subject TEXT NOT NULL,
                     body TEXT NOT NULL, recipients_json TEXT NOT NULL, thread_key TEXT NOT NULL DEFAULT '',
+                    context_json TEXT NOT NULL DEFAULT '{}',
                     state TEXT NOT NULL DEFAULT 'pending', host_reference TEXT NOT NULL DEFAULT '',
                     lease_token TEXT NOT NULL DEFAULT '', lease_until REAL NOT NULL DEFAULT 0,
                     attempts INTEGER NOT NULL DEFAULT 0, available_at REAL NOT NULL DEFAULT 0,
@@ -84,6 +86,9 @@ class EmailStore:
                     created_at REAL NOT NULL, updated_at REAL NOT NULL);
                 CREATE TABLE IF NOT EXISTS runtime_state (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at REAL NOT NULL);
             """)
+            db.execute("BEGIN IMMEDIATE")
+            if "context_json" not in {r[1] for r in db.execute("PRAGMA table_info(inbox)")}:
+                db.execute("ALTER TABLE inbox ADD COLUMN context_json TEXT NOT NULL DEFAULT '{}'")
             if old and db.execute("SELECT name FROM sqlite_master WHERE name='prototype_inbox'").fetchone():
                 columns = [r[1] for r in db.execute("PRAGMA table_info(prototype_inbox)")]
                 names = ",".join(columns)
@@ -138,14 +143,17 @@ class EmailStore:
 
     def ingest(self, message, *, cursor_key=None, cursor=None):
         now = time.time()
+        context = {key: message[key] for key in (
+            "sender_name", "cc", "date", "reply_to", "headers", "attachments"
+        ) if key in message}
         with self._connect() as db:
             cur = db.execute("""INSERT OR IGNORE INTO inbox
-                (folder,uidvalidity,uid,message_id,in_reply_to,references_json,sender,subject,body,recipients_json,thread_key,created_at,updated_at)
-                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""", (
+                (folder,uidvalidity,uid,message_id,in_reply_to,references_json,sender,subject,body,recipients_json,thread_key,context_json,created_at,updated_at)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (
                     message.get("folder", "INBOX"), message.get("uidvalidity", 0), int(message["uid"]),
                     message["message_id"], message.get("in_reply_to", ""), json.dumps(message.get("references", [])),
                     message.get("sender", ""), message.get("subject", ""), message.get("body", ""),
-                    json.dumps(message.get("recipients", [])), (message.get("references") or [message.get("in_reply_to") or message["message_id"]])[0], now, now))
+                    json.dumps(message.get("recipients", [])), (message.get("references") or [message.get("in_reply_to") or message["message_id"]])[0], json.dumps(context, ensure_ascii=False), now, now))
             if cursor_key:
                 self._put(db, cursor_key, cursor)
             return int(cur.lastrowid or 0), bool(cur.rowcount)
@@ -173,7 +181,8 @@ class EmailStore:
             return None
         return InboxItem(r["id"], r["lease_token"], r["folder"], r["uid"], r["message_id"], r["in_reply_to"],
                          tuple(json.loads(r["references_json"])), r["sender"], r["subject"], r["body"],
-                         tuple(json.loads(r["recipients_json"])), r["host_reference"], r["attempts"], r["uidvalidity"])
+                         tuple(json.loads(r["recipients_json"])), r["host_reference"], r["attempts"], r["uidvalidity"],
+                         json.loads(r["context_json"]))
 
     def set_host_reference(self, row_id, token, reference):
         with self._connect() as db:

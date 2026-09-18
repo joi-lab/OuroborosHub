@@ -14,14 +14,18 @@
     "scopes": {
       "bot": [
         "channels:history",
+        "channels:read",
         "chat:write",
         "files:read",
         "groups:history",
+        "groups:read",
         "im:history",
         "im:read",
         "im:write",
         "mpim:history",
-        "mpim:read"
+        "mpim:read",
+        "users:read",
+        "users:read.email"
       ]
     }
   },

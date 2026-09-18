@@ -67,12 +67,31 @@ def _message_ids(value: Any) -> list[str]:
     return [item.strip() for item in re.findall(r"<[^>]+>", str(value or "")) if item.strip()]
 
 
+def _attachment_metadata(message: Message) -> list[dict[str, Any]]:
+    result = []
+    for part in message.walk():
+        filename = part.get_filename()
+        disposition = part.get_content_disposition()
+        if filename or disposition == "attachment":
+            result.append({
+                "file_name": decode_header_value(filename),
+                "mime_type": part.get_content_type(),
+                "disposition": disposition or "",
+                "content_available": False,
+            })
+    return result
+
+
 def parse_message(raw: bytes, *, folder: str, uid: int, max_body_chars: int = 100_000) -> dict[str, Any]:
     msg = message_from_bytes(raw, policy=default)
     message_id = str(msg.get("Message-ID") or "").strip() or f"<sha256-{hashlib.sha256(raw).hexdigest()}@ouroboros.local>"
+    headers = {
+        name.lower(): [decode_header_value(value) for value in msg.get_all(name, [])]
+        for name in ("From", "To", "Cc", "Reply-To")
+    }
     sender_name, sender_addr = parseaddr(decode_header_value(msg.get("From")))
-    recipients = [addr for _, addr in getaddresses([decode_header_value(msg.get("To"))]) if addr]
-    cc = [addr for _, addr in getaddresses([decode_header_value(msg.get("Cc"))]) if addr]
+    recipients = [addr for _, addr in getaddresses(headers["to"]) if addr]
+    cc = [addr for _, addr in getaddresses(headers["cc"]) if addr]
     return {
         "folder": folder,
         "uid": int(uid),
@@ -85,6 +104,9 @@ def parse_message(raw: bytes, *, folder: str, uid: int, max_body_chars: int = 10
         "recipients": recipients,
         "cc": cc,
         "date": str(msg.get("Date") or ""),
+        "reply_to": [addr for _, addr in getaddresses(headers["reply-to"]) if addr],
+        "headers": headers,
+        "attachments": _attachment_metadata(msg),
         "body": extract_body(msg, max_chars=max_body_chars),
     }
 

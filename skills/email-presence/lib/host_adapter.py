@@ -44,9 +44,14 @@ def email_presence_event(item: InboxItem, *, account_id: str) -> dict[str, Any]:
         "conversation_id": item.thread_key,
         "thread_id": item.thread_key,
         "conversation_key": f"email:{item.thread_key}",
-        "actor": {"platform": "email", "platform_actor_id": item.sender},
-        "conversation": {"platform": "email", "mailbox": item.recipients[0] if item.recipients else "", "thread_id": item.thread_key},
-        "message": {"message_id": item.message_id, "in_reply_to": item.in_reply_to, "references": list(item.references), "imap_uid": item.uid, "folder": item.folder, "uidvalidity": item.uidvalidity, "subject": item.subject},
+        "actor": {"platform": "email", "platform_actor_id": item.sender,
+                  "display_name": item.context.get("sender_name", "")},
+        "conversation": {"platform": "email", "mailbox": str(account_id or "").strip(), "thread_id": item.thread_key},
+        "message": {"message_id": item.message_id, "in_reply_to": item.in_reply_to,
+                    "references": list(item.references), "imap_uid": item.uid,
+                    "folder": item.folder, "uidvalidity": item.uidvalidity,
+                    "subject": item.subject, "to": list(item.recipients),
+                    **item.context},
         "text": f"Subject: {item.subject}\n\n{item.body}",
     }
 

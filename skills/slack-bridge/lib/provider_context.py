@@ -1,0 +1,82 @@
+"""Provider observations enrich a message; they never identify a person for it."""
+
+from __future__ import annotations
+
+import asyncio
+from datetime import datetime, timezone
+from typing import Any, Awaitable, Callable, Mapping
+
+import httpx
+
+from .slack_api import SlackApiError
+
+
+def lookup_error(exc: Exception) -> dict[str, Any]:
+    if isinstance(exc, SlackApiError):
+        result: dict[str, Any] = {
+            "code": exc.error, "http_status": exc.status_code,
+            "retry_after": exc.retry_after,
+        }
+        for key in ("needed", "provided"):
+            if key in exc.details:
+                result[key] = exc.details[key]
+        if exc.error in {"missing_scope", "not_allowed_token_type", "not_in_channel", "channel_not_found", "http_403"}:
+            result["hint"] = (
+                "Check this bot's granted scopes and conversation membership. "
+                "Slack may restrict thread/history access for this bot token; an error is not an empty result."
+            )
+        return result
+    return {"code": "lookup_timeout" if isinstance(exc, (TimeoutError, asyncio.TimeoutError)) else "transport_error",
+            "exception_type": type(exc).__name__}
+
+
+async def observe(source: str, call: Callable[[], Awaitable[dict[str, Any]]]) -> dict[str, Any]:
+    observed_at = datetime.now(timezone.utc).isoformat()
+    try:
+        data = await asyncio.wait_for(call(), timeout=10.0)
+        return {"status": "available", "source": source, "observed_at": observed_at, "data": data}
+    except (SlackApiError, httpx.HTTPError, TimeoutError, asyncio.TimeoutError) as exc:
+        return {"status": "unavailable", "source": source, "observed_at": observed_at, "error": lookup_error(exc)}
+
+
+async def capture_context(slack: Any, item: Any, workspace_name: str) -> dict[str, Any]:
+    user, conversation = await asyncio.gather(
+        observe("users.info", lambda: slack.user_info(item.actor_user_id)),
+        observe("conversations.info", lambda: slack.conversation_info(item.channel_id)),
+    )
+    return {"user": user, "conversation": conversation,
+            "workspace": {"name": workspace_name, "source": "auth.test"}}
+
+
+def enrich_event(event: dict[str, Any], snapshot: Mapping[str, Any] | None) -> dict[str, Any]:
+    if snapshot is None:
+        # Old rows already submitted to Host retain their original event view.
+        return event
+    for section, target, marker in (("user", "actor", "profile_lookup"),
+                                    ("conversation", "conversation", "info_lookup")):
+        observation = snapshot.get(section) or {}
+        event[target][marker] = {key: value for key, value in observation.items() if key != "data"}
+        data = observation.get("data")
+        if observation.get("status") != "available" or not isinstance(data, dict):
+            continue
+        if section == "user":
+            profile = data.get("profile")
+            if isinstance(profile, dict):
+                event["actor"]["profile"] = profile
+                if "display_name" in profile:
+                    event["actor"]["display_name"] = profile["display_name"]
+            if "name" in data:
+                event["actor"]["username"] = data["name"]
+            for key in ("real_name", "tz", "tz_label", "tz_offset", "locale", "deleted", "is_bot", "is_app_user"):
+                if key in data:
+                    event["actor"][key] = data[key]
+        else:
+            for key in ("name", "name_normalized", "topic", "purpose", "is_channel", "is_group",
+                        "is_im", "is_mpim", "is_private", "is_shared", "is_archived", "locale", "user"):
+                if key in data:
+                    event["conversation"][key] = data[key]
+    workspace_name = (snapshot.get("workspace") or {}).get("name")
+    if workspace_name:
+        event["conversation"]["workspace_name"] = workspace_name
+        event["conversation"]["workspace_name_source"] = "auth.test"
+    return event

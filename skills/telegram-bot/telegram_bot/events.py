@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import asdict, dataclass
 from typing import Any, Dict, Optional, Tuple
 
@@ -95,6 +96,12 @@ def parse_telegram_update(
         "reply_to_message_id": _reply_message_id(message),
         "attachments": [item.to_dict() for item in attachments],
     }
+    for key in ("entities", "caption_entities", "quote", "forward_origin"):
+        if key in message:
+            message_fact[key] = deepcopy(message[key])
+    reply = message.get("reply_to_message")
+    if isinstance(reply, dict):
+        message_fact["reply_to_message"] = _reply_context(reply)
     if not text.strip() and not attachments:
         return None
 
@@ -151,6 +158,28 @@ def _reply_message_id(message: Dict[str, Any]) -> Optional[int]:
     if not isinstance(reply, dict):
         return None
     return _integer(reply.get("message_id"))
+
+
+def _reply_context(reply: Dict[str, Any]) -> Dict[str, Any]:
+    """Retain the source message already supplied by Telegram, without a chain."""
+    fields = (
+        "message_id",
+        "message_thread_id",
+        "date",
+        "from",
+        "sender_chat",
+        "chat",
+        "text",
+        "caption",
+        "entities",
+        "caption_entities",
+        "forward_origin",
+    )
+    snapshot = {key: deepcopy(reply[key]) for key in fields if key in reply}
+    attachments = _attachments(reply)
+    if attachments:
+        snapshot["attachments"] = [item.to_dict() for item in attachments]
+    return snapshot
 
 
 def _integer(value: Any) -> Optional[int]:

@@ -2,7 +2,7 @@
 name: telegram-bot
 description: Durable Telegram transport for generic Ouroboros presences, with exact actor and conversation
   provenance, media staging, and provider receipts.
-version: 0.2.1
+version: 0.2.2
 type: extension
 plugin_api: '2.0'
 runtime: python3
@@ -145,6 +145,20 @@ before delivering its late text once.
 Supported v1 Telegram content is text/caption, photos, and documents. Voice,
 reactions, edited messages, service events, and Mini App behavior are outside
 this transport.
+
+## Incoming context
+
+Each event preserves the current sender's provider identity, the chat title and
+topic ID, and the message's text or caption. Text and caption entities retain
+their original UTF-16 offsets, hidden link URLs, and text-mention user facts.
+When Telegram supplies a replied-to message, the event includes its text or
+caption, original author/chat/message IDs, date, entities, and photo/document
+descriptors. Selected quotes and forwarding origins remain separate source
+facts; a forwarded author does not replace the current sender.
+
+Reply context comes only from that incoming update. It does not fetch history,
+follow nested reply chains, or download the replied-to message's media. Direct
+photo/document attachments continue through the existing staging path.
 
 ## Configured room and selected actions
 

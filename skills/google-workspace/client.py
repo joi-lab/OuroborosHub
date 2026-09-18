@@ -20,6 +20,11 @@ DEFAULT_TIMEOUT = 30.0
 MAX_TEXT_EXPORT_CHARS = 100_000
 MAX_SHEETS_ROWS = 5_000
 MAX_SHEETS_CELLS = 50_000
+VALUE_RENDER_OPTIONS = ("FORMATTED_VALUE", "UNFORMATTED_VALUE", "FORMULA")
+DRIVE_FILE_FIELDS = (
+    "id,name,mimeType,size,modifiedTime,webViewLink,parents,owners,"
+    "lastModifyingUser,version,capabilities"
+)
 
 # Pattern for valid Google Drive/Docs/Sheets resource IDs (alphanumeric, dashes, underscores)
 RESOURCE_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_\-]{4,128}$")
@@ -51,6 +56,19 @@ def _validate_resource_id(val: str, name: str = "resource_id") -> str:
             f"Invalid {name} format: '{val}'. Expected a valid Google Drive/Docs identifier (letters, numbers, underscores, dashes)."
         )
     return cleaned
+
+
+def _file_context(item: Dict[str, Any], file_id: str) -> Dict[str, Any]:
+    """Preserve provider metadata without inventing absent owners or permissions."""
+    context = {"url": item.get("webViewLink") or f"https://drive.google.com/open?id={file_id}"}
+    for source, target in (
+        ("owners", "owners"), ("lastModifyingUser", "last_modifying_user"),
+        ("version", "version"), ("modifiedTime", "modified_time"),
+        ("capabilities", "capabilities"),
+    ):
+        if source in item:
+            context[target] = item[source]
+    return context
 
 
 class GoogleWorkspaceClient:
@@ -141,23 +159,51 @@ class GoogleWorkspaceClient:
 
     # --- Sheets API ---
 
+    def sheets_info(self, spreadsheet_id: str) -> Dict[str, Any]:
+        """Discover workbook and tab metadata without downloading cell data."""
+        clean_sid = _validate_resource_id(spreadsheet_id, "spreadsheet_id")
+        params = {"fields": (
+            "spreadsheetId,spreadsheetUrl,properties(title,locale,timeZone),"
+            "sheets(properties(sheetId,title,index,sheetType,gridProperties,hidden))"
+        )}
+        data = self._request("GET", f"{SHEETS_BASE_URL}/{clean_sid}", params=params).json()
+        properties = data.get("properties", {})
+        sheets = []
+        for sheet in data.get("sheets", []):
+            values = sheet.get("properties", {})
+            sheets.append({target: values[source] for source, target in (
+                ("sheetId", "sheet_id"), ("title", "title"), ("index", "index"),
+                ("sheetType", "sheet_type"), ("gridProperties", "grid_properties"),
+                ("hidden", "hidden"),
+            ) if source in values})
+        return {
+            "spreadsheet_id": data.get("spreadsheetId", clean_sid),
+            "title": properties.get("title"), "locale": properties.get("locale"),
+            "time_zone": properties.get("timeZone"),
+            "url": data.get("spreadsheetUrl") or f"https://docs.google.com/spreadsheets/d/{clean_sid}/edit",
+            "sheets": sheets,
+        }
+
     def sheets_read(
         self,
         spreadsheet_id: str,
         range_name: str,
         max_rows: int = MAX_SHEETS_ROWS,
+        value_render_option: str = "FORMATTED_VALUE",
     ) -> Dict[str, Any]:
         """Read values from a rectangular range in a Google Sheet with bounded rows and cell budget."""
         clean_sid = _validate_resource_id(spreadsheet_id, "spreadsheet_id")
         if not range_name or not range_name.strip():
             raise ValueError("range_name is required (e.g. 'Sheet1!A1:D10' or 'A1:B').")
+        if value_render_option not in VALUE_RENDER_OPTIONS:
+            raise ValueError("value_render_option must be FORMATTED_VALUE, UNFORMATTED_VALUE, or FORMULA.")
 
         effective_max_rows = max(1, min(int(max_rows), MAX_SHEETS_ROWS))
 
         # Percent-encode range name (spaces in sheet names etc.)
         encoded_range = quote(range_name.strip(), safe="!:")
         url = f"{SHEETS_BASE_URL}/{clean_sid}/values/{encoded_range}"
-        resp = self._request("GET", url)
+        resp = self._request("GET", url, params={"valueRenderOption": value_render_option})
         data = resp.json()
         all_values = data.get("values", [])
         original_row_count = len(all_values)
@@ -183,6 +229,7 @@ class GoogleWorkspaceClient:
             "spreadsheet_id": clean_sid,
             "range": data.get("range", range_name),
             "major_dimension": data.get("majorDimension", "ROWS"),
+            "value_render_option": value_render_option,
             "values": bounded_values,
             "row_count": len(bounded_values),
             "original_row_count": original_row_count,
@@ -298,7 +345,7 @@ class GoogleWorkspaceClient:
         params: Dict[str, Any] = {
             "q": " and ".join(q_parts),
             "pageSize": page_size,
-            "fields": "nextPageToken, files(id, name, mimeType, size, modifiedTime, webViewLink, parents)",
+            "fields": f"nextPageToken,files({DRIVE_FILE_FIELDS})",
             "supportsAllDrives": "true",
             "includeItemsFromAllDrives": "true",
         }
@@ -316,8 +363,8 @@ class GoogleWorkspaceClient:
                 "mime_type": item.get("mimeType"),
                 "size": item.get("size"),
                 "modified_time": item.get("modifiedTime"),
-                "url": item.get("webViewLink") or f"https://drive.google.com/open?id={item.get('id')}",
                 "parents": item.get("parents", []),
+                **_file_context(item, item.get("id")),
             })
 
         return {
@@ -335,7 +382,7 @@ class GoogleWorkspaceClient:
         # 1. Fetch file metadata
         meta_url = f"{DRIVE_BASE_URL}/{clean_fid}"
         meta_params = {
-            "fields": "id, name, mimeType, size",
+            "fields": DRIVE_FILE_FIELDS,
             "supportsAllDrives": "true",
         }
         resp = self._request("GET", meta_url, params=meta_params)
@@ -356,12 +403,20 @@ class GoogleWorkspaceClient:
             )
 
         # 2. Determine export/download URL & params
+        export_context = {}
         if mime_type == "application/vnd.google-apps.document":
             url = f"{DRIVE_BASE_URL}/{clean_fid}/export"
             params = {"mimeType": "text/plain"}
         elif mime_type == "application/vnd.google-apps.spreadsheet":
             url = f"{DRIVE_BASE_URL}/{clean_fid}/export"
             params = {"mimeType": "text/csv"}
+            export_context = {
+                "export_scope": "first_sheet_only",
+                "export_note": (
+                    "CSV export contains only the first sheet. Use sheets_info to discover tabs "
+                    "and sheets_read for their ranges. truncated reports character clipping only."
+                ),
+            }
         else:
             url = f"{DRIVE_BASE_URL}/{clean_fid}"
             params = {"alt": "media", "supportsAllDrives": "true"}
@@ -414,4 +469,6 @@ class GoogleWorkspaceClient:
             "length": len(text_content),
             "remote_size_bytes": remote_file_size,
             "truncated": truncated,
+            **_file_context(meta, clean_fid),
+            **export_context,
         }

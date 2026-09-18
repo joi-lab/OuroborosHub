@@ -1,7 +1,7 @@
 ---
 name: email-presence
 description: Bidirectional email Presence transport with IMAP polling, durable delivery, and RFC 5322 reply threading.
-version: 0.1.0
+version: 0.1.1
 type: extension
 entry: plugin.py
 plugin_api: "2.0"
@@ -90,6 +90,20 @@ and retries transient provider or Host failures with bounded backoff.
   Inspect the receipt and sent mailbox before making an explicit new send.
 - The `status` extension route exposes poll health, activation/cursor state, queue
   counts and recent receipts. Host Skills/Activity shows companion process health.
+
+## Incoming context and replies
+
+Incoming Presence events retain the From address and display name, all To and Cc
+addresses, Date, and decoded named From/To/Cc/Reply-To headers. Reply-To stays
+separate from the From actor. Automatic responses go to Reply-To when supplied,
+or From otherwise; To and Cc are context, not an automatic reply-all list. The
+configured mailbox account identifies the receiving transport, even when that
+mailbox is absent from To because delivery used Bcc or a mailing-list alias.
+
+Attachment descriptors expose filenames and MIME types with
+`content_available: false`; they do not claim that attachment bytes were read.
+These message facts are retained with the inbox across restarts. Existing inbox
+rows keep their original content and receipts, with new context unavailable.
 
 Text and reply threading are the transport scope. MIME text extraction supports
 HTML-only mail as plain text, with explicit body truncation disclosure. Attachment

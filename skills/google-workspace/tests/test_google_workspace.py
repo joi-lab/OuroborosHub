@@ -158,6 +158,7 @@ def test_sheets_read():
         if "oauth2.googleapis.com/token" in url_str:
             return httpx.Response(200, json={"access_token": "mock_token", "expires_in": 3600})
         if "sheets.googleapis.com/v4/spreadsheets/sheet123/values/Sheet1!A1" in url_str:
+            assert request.url.params["valueRenderOption"] == "FORMATTED_VALUE"
             return httpx.Response(
                 200,
                 json={"range": "Sheet1!A1:C10", "majorDimension": "ROWS", "values": [["Header1", "Header2"], ["Val1", "Val2"]]},
@@ -171,6 +172,63 @@ def test_sheets_read():
         assert res["row_count"] == 2
         assert res["cell_count"] == 4
         assert res["values"][0] == ["Header1", "Header2"]
+        assert res["value_render_option"] == "FORMATTED_VALUE"
+
+
+@pytest.mark.parametrize(("render", "value"), [
+    ("FORMATTED_VALUE", "$3.00"), ("UNFORMATTED_VALUE", 3), ("FORMULA", "=SUM(A1:A2)"),
+])
+def test_sheets_read_render_options(render, value):
+    def respond(request):
+        if request.url.host == "oauth2.googleapis.com":
+            return httpx.Response(200, json={"access_token": "fixture-token"})
+        assert request.url.path == "/v4/spreadsheets/sheet123/values/Totals!B2"
+        assert request.url.params["valueRenderOption"] == render
+        return httpx.Response(200, json={"range": "Totals!B2", "values": [[value]]})
+
+    with httpx.Client(transport=httpx.MockTransport(respond)) as http:
+        with GoogleWorkspaceClient(VALID_SA_JSON_STR, http) as client:
+            result = client.sheets_read("sheet123", "Totals!B2", value_render_option=render)
+    assert result["values"] == [[value]]
+    assert result["value_render_option"] == render
+    assert result["range"] == "Totals!B2"
+
+
+def test_sheets_read_rejects_unknown_render_option_before_request():
+    with httpx.Client(transport=httpx.MockTransport(lambda request: pytest.fail("unexpected HTTP call"))) as http:
+        with GoogleWorkspaceClient(VALID_SA_JSON_STR, http) as client:
+            with pytest.raises(ValueError, match="value_render_option"):
+                client.sheets_read("sheet123", "A1", value_render_option="RAW")
+
+
+def test_sheets_info_discovers_tabs_without_cell_data():
+    def respond(request):
+        if request.url.host == "oauth2.googleapis.com":
+            return httpx.Response(200, json={"access_token": "fixture-token"})
+        assert request.url.path == "/v4/spreadsheets/sheet123"
+        fields = request.url.params["fields"]
+        assert "properties(title,locale,timeZone)" in fields
+        assert "gridProperties" in fields
+        assert "data" not in fields
+        assert request.url.params.get("includeGridData") != "true"
+        return httpx.Response(200, json={
+            "spreadsheetId": "sheet123", "spreadsheetUrl": "https://docs.google.com/spreadsheets/d/sheet123/edit",
+            "properties": {"title": "Quarterly workbook", "locale": "en_GB", "timeZone": "Etc/UTC"},
+            "sheets": [
+                {"properties": {"sheetId": 0, "title": "Overview", "index": 0, "sheetType": "GRID",
+                                "hidden": False, "gridProperties": {"rowCount": 1000, "columnCount": 26, "frozenRowCount": 1}}},
+                {"properties": {"sheetId": 7, "title": "Вторая вкладка", "index": 1, "sheetType": "OBJECT", "hidden": True}},
+            ],
+        })
+
+    with httpx.Client(transport=httpx.MockTransport(respond)) as http:
+        with GoogleWorkspaceClient(VALID_SA_JSON_STR, http) as client:
+            result = client.sheets_info("sheet123")
+    assert (result["title"], result["locale"], result["time_zone"]) == ("Quarterly workbook", "en_GB", "Etc/UTC")
+    assert result["sheets"][0] == {"sheet_id": 0, "title": "Overview", "index": 0, "sheet_type": "GRID",
+                                    "hidden": False, "grid_properties": {"rowCount": 1000, "columnCount": 26, "frozenRowCount": 1}}
+    assert result["sheets"][1]["title"] == "Вторая вкладка"
+    assert "grid_properties" not in result["sheets"][1]
 
 
 def test_sheets_append():
@@ -272,7 +330,8 @@ def test_drive_read_text_doc_export():
         url_str = str(request.url)
         if "oauth2.googleapis.com/token" in url_str:
             return httpx.Response(200, json={"access_token": "mock_token", "expires_in": 3600})
-        if url_str.endswith("drive/v3/files/file_doc?fields=id%2C+name%2C+mimeType%2C+size&supportsAllDrives=true"):
+        if request.url.path == "/drive/v3/files/file_doc" and request.url.params.get("alt") != "media":
+            assert {"id", "name", "mimeType", "size", "owners", "version"} <= set(request.url.params["fields"].split(","))
             return httpx.Response(
                 200,
                 json={"id": "file_doc", "name": "Sample Doc", "mimeType": "application/vnd.google-apps.document", "size": "1024"},
@@ -289,6 +348,70 @@ def test_drive_read_text_doc_export():
         assert "Hello Google Docs" in res["text"]
         assert res["remote_size_bytes"] == 1024
         assert res["truncated"] is False
+
+
+@pytest.mark.parametrize("operation", ["drive_list", "drive_read_text"])
+@pytest.mark.parametrize("shared_drive", [False, True])
+def test_file_metadata_preserves_provider_fields_and_absence(operation, shared_drive):
+    metadata = {"id": "file_meta", "name": "Working notes", "mimeType": "text/plain",
+                "modifiedTime": "2026-01-01T12:30:00Z", "version": "17", "capabilities": {"canEdit": False}}
+    if not shared_drive:
+        metadata.update(owners=[{"displayName": "Document owner", "emailAddress": "owner@example.invalid"}],
+                        lastModifyingUser={"displayName": "Editor", "permissionId": "editor-id"},
+                        webViewLink="https://drive.google.com/file/d/file_meta/view")
+
+    def respond(request):
+        if request.url.host == "oauth2.googleapis.com":
+            return httpx.Response(200, json={"access_token": "fixture-token"})
+        if request.url.params.get("alt") == "media":
+            return httpx.Response(200, text="A complete short note.")
+        fields = request.url.params["fields"]
+        for name in ("owners", "lastModifyingUser", "version", "modifiedTime", "webViewLink", "capabilities"):
+            assert name in fields
+        if request.url.path == "/drive/v3/files":
+            return httpx.Response(200, json={"files": [metadata], "nextPageToken": "next-batch"})
+        assert request.url.path == "/drive/v3/files/file_meta"
+        return httpx.Response(200, json=metadata)
+
+    with httpx.Client(transport=httpx.MockTransport(respond)) as http:
+        with GoogleWorkspaceClient(VALID_SA_JSON_STR, http) as client:
+            if operation == "drive_list":
+                page = client.drive_list()
+                assert page["next_page_token"] == "next-batch"
+                result = page["files"][0]
+            else:
+                result = client.drive_read_text("file_meta")
+    assert result["version"] == "17"
+    assert result["modified_time"] == metadata["modifiedTime"]
+    assert result["capabilities"] == {"canEdit": False}
+    if shared_drive:
+        assert "owners" not in result
+        assert "last_modifying_user" not in result
+        assert result["url"] == "https://drive.google.com/open?id=file_meta"
+    else:
+        assert result["owners"] == metadata["owners"]
+        assert result["last_modifying_user"] == metadata["lastModifyingUser"]
+        assert result["url"] == metadata["webViewLink"]
+
+
+@pytest.mark.parametrize(("max_chars", "truncated"), [(1000, False), (3, True)])
+def test_spreadsheet_csv_scope_is_separate_from_character_clipping(max_chars, truncated):
+    def respond(request):
+        if request.url.host == "oauth2.googleapis.com":
+            return httpx.Response(200, json={"access_token": "fixture-token"})
+        if request.url.path == "/drive/v3/files/sheet123":
+            return httpx.Response(200, json={"id": "sheet123", "name": "Workbook",
+                                           "mimeType": "application/vnd.google-apps.spreadsheet"})
+        assert request.url.path == "/drive/v3/files/sheet123/export"
+        assert request.url.params["mimeType"] == "text/csv"
+        return httpx.Response(200, text="Header,Value\nEntry,1\n")
+
+    with httpx.Client(transport=httpx.MockTransport(respond)) as http:
+        with GoogleWorkspaceClient(VALID_SA_JSON_STR, http) as client:
+            result = client.drive_read_text("sheet123", max_chars=max_chars)
+    assert result["export_scope"] == "first_sheet_only"
+    assert result["truncated"] is truncated
+    assert "sheets_info" in result["export_note"] and "sheets_read" in result["export_note"]
 
 
 def test_drive_read_text_clamped_max_chars():
@@ -330,7 +453,7 @@ def test_drive_read_text_unsupported_mime():
             client.drive_read_text(file_id="file_image")
 
 
-def test_plugin_registration_and_settings_save(tmp_path):
+def test_plugin_registration_and_settings_save(tmp_path, monkeypatch):
     class MockPluginAPI:
         def __init__(self, state_dir: Path):
             self.state_dir = state_dir
@@ -374,8 +497,35 @@ def test_plugin_registration_and_settings_save(tmp_path):
     plugin.register(mock_api)
 
     # Check registered tools
-    expected_tools = {"workspace_auth_status", "sheets_read", "sheets_append", "docs_create", "drive_list", "drive_read_text"}
+    expected_tools = {"workspace_auth_status", "sheets_info", "sheets_read", "sheets_append", "docs_create", "drive_list", "drive_read_text"}
     assert expected_tools.issubset(set(mock_api.tools.keys()))
+    render_schema = mock_api.tools["sheets_read"]["schema"]["properties"]["value_render_option"]
+    assert render_schema["enum"] == ["FORMATTED_VALUE", "UNFORMATTED_VALUE", "FORMULA"]
+    assert render_schema["default"] == "FORMATTED_VALUE"
+    assert mock_api.tools["sheets_info"]["schema"]["required"] == ["spreadsheet_id"]
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            pass
+
+        def sheets_info(self, **kwargs):
+            assert kwargs == {"spreadsheet_id": "sheet123"}
+            return {"title": "Workbook", "sheets": [{"sheet_id": 0, "title": "Overview"}]}
+
+        def sheets_read(self, **kwargs):
+            assert kwargs == {"spreadsheet_id": "sheet123", "range_name": "Overview!A1", "max_rows": 2,
+                              "value_render_option": "FORMULA"}
+            return {"values": [["=1+2"]], "value_render_option": "FORMULA"}
+
+    monkeypatch.setattr(plugin, "GoogleWorkspaceClient", FakeClient)
+    assert json.loads(mock_api.tools["sheets_info"]["handler"]("sheet123"))["sheets"][0]["sheet_id"] == 0
+    assert json.loads(mock_api.tools["sheets_read"]["handler"]("sheet123", "Overview!A1", 2, "FORMULA"))["values"] == [["=1+2"]]
 
     # Check UI tab render kind
     assert mock_api.ui_tabs["google_workspace"]["render"]["kind"] == "declarative"

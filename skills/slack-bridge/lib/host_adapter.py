@@ -12,6 +12,7 @@ from urllib.parse import quote, urlsplit
 import httpx
 
 from .store import InboxItem
+from .provider_context import enrich_event
 
 _OUTCOMES = frozenset({"message", "silent", "tool_delivered", "deferred"})
 _TERMINAL_WORK_STATES = frozenset({"completed", "failed", "cancelled"})
@@ -96,7 +97,7 @@ def slack_presence_event(item: InboxItem) -> dict[str, Any]:
     """Map exact Slack facts into the frozen provider-neutral event shape."""
 
     thread_id = item.thread_ts or item.message_ts
-    return {
+    event = {
         "source_event_id": item.provider_event_key,
         "provider": "slack",
         "account_id": item.team_id,
@@ -137,6 +138,7 @@ def slack_presence_event(item: InboxItem) -> dict[str, Any]:
         },
         "text": item.text,
     }
+    return enrich_event(event, item.provider_context)
 
 
 def _completed_reference(payload: Mapping[str, Any]) -> str:
