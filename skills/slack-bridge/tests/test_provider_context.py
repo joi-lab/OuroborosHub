@@ -66,6 +66,8 @@ def test_provider_mock_through_worker_persists_context_before_host(tmp_path):
             return httpx.Response(200, json={"ok": True, "channel": conversation()})
         events = []
         def host_handler(request):
+            if request.url.path == "/identity":
+                return httpx.Response(200, json={"ok": True})
             event = json.loads(request.content)["event"]
             stored = context_row(store)
             assert stored["user"]["data"] == user()
@@ -115,6 +117,8 @@ def test_failed_lookup_still_delivers_message_with_typed_gap(tmp_path, failure):
             return httpx.Response(200, json={"ok": False, "error": "missing_scope", "needed": "users:read"})
         events = []
         def host_handler(request):
+            if request.url.path == "/identity":
+                return httpx.Response(200, json={"ok": True})
             events.append(json.loads(request.content)["event"])
             return host_response()
         async with httpx.AsyncClient(transport=httpx.MockTransport(slack_handler)) as slack_http, \
@@ -146,6 +150,8 @@ def test_retry_after_restart_reuses_exact_snapshot_but_next_event_refreshes(tmp_
             calls.append(request.url.path)
             return httpx.Response(200, json={"ok": True, "user": user(name), "channel": conversation()})
         def host_handler(request):
+            if request.url.path == "/identity":
+                return httpx.Response(200, json={"ok": True})
             events.append(json.loads(request.content)["event"])
             if len(events) == 1:
                 raise httpx.ReadTimeout("Host reply lost", request=request)
@@ -239,6 +245,8 @@ def test_real_lookup_wait_expiry_still_submits_original_message(tmp_path, monkey
             return httpx.Response(200, json={"ok": True, "user": user(), "channel": conversation()})
 
         def host_handler(request):
+            if request.url.path == "/identity":
+                return httpx.Response(200, json={"ok": True})
             events.append(json.loads(request.content)["event"])
             return host_response()
 

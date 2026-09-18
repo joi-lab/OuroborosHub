@@ -19,6 +19,8 @@ def test_host_submission_matches_exact_event_contract_and_silence_has_no_duplica
     item = InboxItem(1, "lease", "INBOX", 4, "<m>", "", (), "a@example.com", "Subject", "Text", ("bot@example.com",), "", 1)
     async def exercise():
         def handler(request):
+            if request.url.path == '/identity':
+                return httpx.Response(200, json={'ok': True})
             import json
             payload = json.loads(request.content)
             assert set(payload) == {"binding_id", "event"}

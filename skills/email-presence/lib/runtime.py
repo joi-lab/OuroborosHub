@@ -6,8 +6,11 @@ from datetime import datetime, timezone
 import logging
 import smtplib
 import time
+from dataclasses import replace
+from email.utils import getaddresses
 
 from .host_adapter import HostBindingTerminalError
+from .delivery import email_report
 
 log = logging.getLogger("email_presence")
 
@@ -44,13 +47,16 @@ class EmailRuntime:
             self.store.put("poll_health", {"ok": True, "checked_at": time.time(), "new_messages": count})
             return count
 
-    def _reply(self, item, texts, suffix):
+    def _reply(self, item, texts, suffix, mode=0, turn_ref=""):
         text = "\n".join(texts).strip()
         if text:
             subject = item.subject if item.subject.lower().startswith("re:") else f"Re: {item.subject}"
             self.store.enqueue_outbox(request_id=f"presence:{item.provider_event_key}:{suffix}",
                                       recipients=item.context.get("reply_to") or [item.sender], subject=subject, body=text,
-                                      in_reply_to=item.message_id, references=item.references)
+                                      in_reply_to=item.message_id, references=item.references,
+                                      reporting={"version": mode, "account_id": self.account,
+                                                 "origin": {"kind": "automatic", "task_id": turn_ref,
+                                                            "source_event_id": item.provider_event_key}})
 
     async def process_inbox(self):
         item = self.store.claim_inbox()
@@ -64,14 +70,14 @@ class EmailRuntime:
             if not item.host_reference:
                 self.store.set_host_reference(item.row_id, item.lease_token, ref)
             status = await self.host.status(ref)
-            self._reply(item, status.texts, "immediate")
+            self._reply(item, status.texts, "immediate", status.delivery_reporting_version, status.turn_ref)
             if status.state == "pending":
                 self.store.retry_inbox(item.row_id, item.lease_token, "Host turn pending", 5)
             elif status.state == "failed":
                 self.store.fail_inbox(item.row_id, item.lease_token, status.error)
             else:
                 delivery = await self.host.deliver(ref)
-                self._reply(item, delivery.texts, "final")
+                self._reply(item, delivery.texts, "final", delivery.delivery_reporting_version, delivery.turn_ref)
                 self.store.complete_inbox(item.row_id, item.lease_token)
         except HostBindingTerminalError as exc:
             self.store.fail_inbox(item.row_id, item.lease_token, str(exc))
@@ -86,16 +92,32 @@ class EmailRuntime:
         sending = False
         try:
             message = self.client.message(item)
+            reporting = dict(item.reporting)
+            if reporting.get("version") == -1:
+                support = self.store.get("delivery_support") or {"version": 0, "status": "unavailable"}
+                reporting.update(version=support["version"], status=support["status"])
+            reporting["account_id"] = str(message["From"])
+            # MailClient constructs ordinary messages; match send_message's
+            # envelope parsing while retaining the original named To header.
+            recipient_headers = [message[name] for name in ("To", "Bcc", "Cc") if message[name] is not None]
+            envelope_recipients = [address for _, address in getaddresses(recipient_headers)]
+            reporting["wire"] = {"text": message.get_content(), "subject": str(message["Subject"]),
+                                 "recipients": envelope_recipients, "to": str(message["To"] or "")}
+            self.store.set_reporting(item, reporting)
+            item = replace(item, reporting=reporting)
             with self.client.smtp() as smtp:
                 if not self.store.mark_sending(item):
                     return True
                 sending = True
                 refused = smtp.send_message(message)
                 if refused:
+                    accepted = [address for address in envelope_recipients if address not in refused]
+                    reports = [email_report(item, "accepted", recipients=accepted)] if accepted else []
+                    reports.append(email_report(item, "failed", recipients=list(refused), refused=refused))
                     self.store.uncertain_outbox(item.row_id, item.lease_token,
-                                               "Some recipients were refused; accepted recipients must not be resent automatically")
+                                               "Some recipients were refused; accepted recipients must not be resent automatically", reports=reports)
                 else:
-                    self.store.complete_outbox(item.row_id, item.lease_token)
+                    self.store.complete_outbox(item.row_id, item.lease_token, reports=[email_report(item, "accepted")])
         except (smtplib.SMTPDataError, smtplib.SMTPRecipientsRefused, smtplib.SMTPSenderRefused) as exc:
             # Typed negative SMTP replies prove this transaction was not accepted.
             code = getattr(exc, "smtp_code", 550)
@@ -105,18 +127,37 @@ class EmailRuntime:
             if code < 500 and item.attempts < 5:
                 self.store.retry_outbox(item.row_id, item.lease_token, type(exc).__name__, 5)
             else:
-                self.store.fail_outbox(item.row_id, item.lease_token, type(exc).__name__)
+                self.store.fail_outbox(item.row_id, item.lease_token, type(exc).__name__, reports=[email_report(item, "failed", error=type(exc).__name__)])
         except Exception as exc:
             if sending:
                 self.store.uncertain_outbox(item.row_id, item.lease_token,
-                                           f"{type(exc).__name__} during SMTP delivery; inspect Message-ID before retry")
+                                           f"{type(exc).__name__} during SMTP delivery; inspect Message-ID before retry",
+                                           reports=[email_report(item, "uncertain", error=type(exc).__name__)])
             elif item.attempts >= 5:
-                self.store.fail_outbox(item.row_id, item.lease_token, type(exc).__name__)
+                self.store.fail_outbox(item.row_id, item.lease_token, type(exc).__name__, reports=[email_report(item, "failed", error=type(exc).__name__)])
             else:
                 self.store.retry_outbox(item.row_id, item.lease_token, type(exc).__name__, min(60, 2 ** item.attempts))
         return True
 
+    async def process_delivery_report(self):
+        pending = self.store.next_delivery_report()
+        if not pending:
+            return False
+        row_id, index, payload = pending
+        try:
+            await self.host.report_delivery(payload)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self.store.finish_delivery_report(row_id, index, type(exc).__name__)
+        else:
+            self.store.finish_delivery_report(row_id, index)
+        return True
+
     async def run(self, stop):
+        discover = getattr(self.host, "discover_delivery_support", None)
+        mode = await discover() if discover else 0
+        self.store.put("delivery_support", {"version": mode, "status": getattr(self.host, "delivery_reporting_status", "unsupported")})
         async def wait(seconds):
             try:
                 await asyncio.wait_for(stop.wait(), seconds)
@@ -142,8 +183,18 @@ class EmailRuntime:
 
         async def outbox():
             # Independent from a long Presence call: early tool sends can leave now.
-            while not stop.is_set():
-                if not await asyncio.to_thread(self.process_outbox):
-                    await wait(1)
+            reporting = None
+            try:
+                while not stop.is_set():
+                    if reporting is None or reporting.done():
+                        if reporting is not None:
+                            await reporting
+                        reporting = asyncio.create_task(self.process_delivery_report())
+                    if not await asyncio.to_thread(self.process_outbox):
+                        await wait(1)
+            finally:
+                if reporting is not None:
+                    reporting.cancel()
+                    await asyncio.gather(reporting, return_exceptions=True)
 
         await asyncio.gather(poller(), inbox(), outbox())

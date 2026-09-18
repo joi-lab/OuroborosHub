@@ -11,6 +11,7 @@ from starlette.responses import JSONResponse
 from .lib.client import MailClient
 from .lib.host_adapter import HostContractError, normalize_binding_id
 from .lib.store import EmailStore
+from .lib.delivery import tool_origin
 
 SETTING_KEYS = ["EMAIL_IMAP_HOST", "EMAIL_IMAP_PORT", "EMAIL_SMTP_HOST", "EMAIL_SMTP_PORT",
                 "EMAIL_USER", "EMAIL_PASSWORD", "EMAIL_DEFAULT_FOLDER", "EMAIL_AUTH_MODE",
@@ -38,13 +39,14 @@ def register(api):
     def client():
         return MailClient(api.get_settings(SETTING_KEYS))
 
-    def send(*, to, body, subject="", reply_to_message_id="", references=None, request_id=""):
+    def send(ctx=None, *, to, body, subject="", reply_to_message_id="", references=None, request_id=""):
         recipients = [x.strip() for x in str(to).split(",") if x.strip()]
         if not recipients or not str(body).strip():
             raise ValueError("to and body are required")
         rid = request_id or uuid.uuid4().hex
         inserted = store().enqueue_outbox(request_id=rid, recipients=recipients, subject=subject,
-                                          body=body, in_reply_to=reply_to_message_id, references=references or [])
+                                          body=body, in_reply_to=reply_to_message_id, references=references or [],
+                                          reporting={"version": -1, "origin": tool_origin(ctx)})
         return {"ok": True, "request_id": rid, "deduplicated": not inserted, "receipt": store().receipt(rid)}
 
     def search(**kwargs):

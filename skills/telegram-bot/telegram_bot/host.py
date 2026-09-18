@@ -48,6 +48,7 @@ class PresenceSubmission:
     turn_ref: str
     work_ref: str
     binding_id: str
+    delivery_reporting_version: int = 0
 
 
 @dataclass(frozen=True)
@@ -56,6 +57,7 @@ class PresenceWorkResult:
     outcome: str = ""
     text: str = ""
     work_ref: str = ""
+    delivery_reporting_version: int = 0
 
     @property
     def terminal(self) -> bool:
@@ -148,6 +150,31 @@ class PresenceHostClient:
         self.token_provider = token_provider
         self.host_base = str(host_base).rstrip("/")
         self.transport = transport or UrllibPresenceHostTransport()
+        self.delivery_reporting_status = "unknown"
+        self.delivery_reporting_version = 0
+
+    async def discover_delivery_support(self) -> int:
+        if self.delivery_reporting_status in {"supported", "unsupported"}:
+            return self.delivery_reporting_version
+        try:
+            response = await self.transport.request_json(
+                "GET", f"{self.host_base}/identity", headers=self._headers(),
+                payload=None, timeout_sec=10.0,
+            )
+            self.delivery_reporting_version = int(response.get("presence_delivery_version") == 1)
+            self.delivery_reporting_status = "supported" if self.delivery_reporting_version else "unsupported"
+        except (PresenceHostError, OSError, TimeoutError, asyncio.TimeoutError):
+            self.delivery_reporting_status = "unavailable"
+            self.delivery_reporting_version = 0
+        return self.delivery_reporting_version
+
+    async def report_delivery(self, payload: Dict[str, Any]) -> None:
+        response = await self.transport.request_json(
+            "POST", f"{self.host_base}/presence/delivery", headers=self._headers(),
+            payload=payload, timeout_sec=10.0,
+        )
+        if response.get("ok") is not True or response.get("recorded") is not True:
+            raise PresenceHostError("Presence delivery report was not acknowledged")
 
     async def submit(
         self,
@@ -157,6 +184,7 @@ class PresenceHostClient:
         if not isinstance(event, dict) or set(event) != _EVENT_KEYS:
             raise PresenceHostError("presence event does not match the frozen contract")
         binding_id = load_binding_id(self.state_dir)
+        mode = await self.discover_delivery_support()
         response = await self.transport.request_json(
             "POST",
             f"{self.host_base}/presence/turn",
@@ -165,6 +193,7 @@ class PresenceHostClient:
                 "binding_id": binding_id,
                 "event": dict(event),
                 "staged_files": [str(path) for path in staged_files],
+                **({"delivery_reporting_version": 1} if mode else {}),
             },
             timeout_sec=1800.0,
         )
@@ -183,6 +212,7 @@ class PresenceHostClient:
             turn_ref=str(response.get("turn_ref") or "").strip(),
             work_ref=work_ref,
             binding_id=binding_id,
+            delivery_reporting_version=int(response.get("delivery_reporting_version") == 1),
         )
 
     async def poll(self, work_ref: str, binding_id: str) -> PresenceWorkResult:
@@ -211,6 +241,7 @@ class PresenceHostClient:
             outcome=outcome,
             text=str(response.get("text") or ""),
             work_ref=str(work_ref),
+            delivery_reporting_version=int(response.get("delivery_reporting_version") == 1),
         )
 
     def _headers(self) -> Dict[str, str]:

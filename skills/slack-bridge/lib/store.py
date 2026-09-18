@@ -5,7 +5,7 @@ import pathlib
 import sqlite3
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Iterable, Mapping, Sequence
 
 from .events import ParsedEnvelope
@@ -62,6 +62,10 @@ class OutboxItem:
     ordering_key: str
     attempts: int
     text_format: str = "mrkdwn"
+    origin: dict[str, Any] = field(default_factory=dict)
+    delivery_reporting_version: int = 0
+    resolved_channel: str = ""
+    provider_account_id: str = ""
 
 
 class BridgeStore:
@@ -171,6 +175,22 @@ class BridgeStore:
                 # Pending rows were authored for Slack's native mrkdwn. Their
                 # original interpretation survives deployment and retry.
                 db.execute("ALTER TABLE outbox ADD COLUMN text_format TEXT NOT NULL DEFAULT 'mrkdwn'")
+            for name, declaration in (
+                ("origin_json", "TEXT NOT NULL DEFAULT '{}'"),
+                ("delivery_reporting_version", "INTEGER NOT NULL DEFAULT 0"),
+                ("resolved_channel", "TEXT NOT NULL DEFAULT ''"),
+                ("provider_account_id", "TEXT NOT NULL DEFAULT ''"),
+                ("report_payload_json", "TEXT NOT NULL DEFAULT ''"),
+                ("report_state", "TEXT NOT NULL DEFAULT ''"),
+                ("report_lease_token", "TEXT NOT NULL DEFAULT ''"),
+                ("report_lease_until", "REAL NOT NULL DEFAULT 0"),
+                ("report_attempts", "INTEGER NOT NULL DEFAULT 0"),
+                ("report_available_at", "REAL NOT NULL DEFAULT 0"),
+                ("report_error", "TEXT NOT NULL DEFAULT ''"),
+            ):
+                if name not in outbox_columns:
+                    db.execute(f"ALTER TABLE outbox ADD COLUMN {name} {declaration}")
+            db.execute("CREATE INDEX IF NOT EXISTS outbox_report_work ON outbox(report_state,report_available_at,id)")
             db.commit()
 
     def ingest_envelope(
@@ -391,6 +411,8 @@ class BridgeStore:
         thread_ts: str,
         chunks: Sequence[str],
         text_format: str = "markdown",
+        origin: Mapping[str, Any] | None = None,
+        delivery_reporting_version: int = 0,
     ) -> int:
         text_format = normalize_text_format(text_format)
         request_id = str(request_id or uuid.uuid4().hex)
@@ -418,8 +440,9 @@ class BridgeStore:
                     """
                     INSERT OR IGNORE INTO outbox (
                         request_id, chunk_index, chunk_count, target, thread_ts,
-                        text, ordering_key, created_at, updated_at, text_format
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        text, ordering_key, created_at, updated_at, text_format,
+                        origin_json, delivery_reporting_version
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         request_id,
@@ -432,6 +455,8 @@ class BridgeStore:
                         now,
                         now,
                         text_format,
+                        json.dumps(dict(origin or {}), ensure_ascii=False),
+                        1 if delivery_reporting_version == 1 else 0,
                     ),
                 )
             db.commit()
@@ -475,7 +500,15 @@ class BridgeStore:
             ordering_key=str(claimed["ordering_key"]),
             attempts=int(claimed["attempts"]),
             text_format=str(claimed["text_format"]),
+            origin=json.loads(claimed["origin_json"]),
+            delivery_reporting_version=int(claimed["delivery_reporting_version"]),
+            resolved_channel=str(claimed["resolved_channel"]),
+            provider_account_id=str(claimed["provider_account_id"]),
         )
+
+    def set_resolved_target(self, item: OutboxItem, channel: str, account: str) -> None:
+        self._leased_update("outbox", item.row_id, item.lease_token,
+                            "resolved_channel=?,provider_account_id=?", (channel, account))
 
     def complete_outbox(
         self,
@@ -483,6 +516,7 @@ class BridgeStore:
         lease_token: str,
         *,
         provider_message_ts: str = "",
+        report_payload: Mapping[str, Any] | None = None,
     ) -> None:
         now = time.time()
         with self._connect() as db:
@@ -490,18 +524,62 @@ class BridgeStore:
                 """
                 UPDATE outbox
                 SET state='delivered', lease_token='', lease_until=0, last_error='',
-                    provider_message_ts=?, updated_at=?
+                    provider_message_ts=?, updated_at=?, report_payload_json=?,report_state=?
                 WHERE id=? AND state='leased' AND lease_token=?
                 """,
-                (str(provider_message_ts), now, row_id, lease_token),
+                (str(provider_message_ts), now,
+                 json.dumps(report_payload, ensure_ascii=False) if report_payload else "",
+                 "pending" if report_payload else "", row_id, lease_token),
             )
             if updated.rowcount != 1:
                 raise RuntimeError(
                     "Slack outbox lease no longer belongs to this worker"
                 )
 
-    def fail_outbox(self, row_id: int, lease_token: str, error: str) -> None:
-        self._terminal_update("outbox", row_id, lease_token, "failed", error)
+    def fail_outbox(self, row_id: int, lease_token: str, error: str, *,
+                    state: str = "failed", report_payload: Mapping[str, Any] | None = None) -> None:
+        with self._connect() as db:
+            changed = db.execute(
+                """UPDATE outbox SET state=?,lease_token='',lease_until=0,last_error=?,updated_at=?,
+                       report_payload_json=?,report_state=? WHERE id=? AND state='leased' AND lease_token=?""",
+                (state, str(error)[:1000], time.time(),
+                 json.dumps(report_payload, ensure_ascii=False) if report_payload else "",
+                 "pending" if report_payload else "", row_id, lease_token),
+            )
+            if changed.rowcount != 1:
+                raise RuntimeError("Slack outbox lease no longer belongs to this worker")
+
+    def claim_report(self) -> dict[str, Any] | None:
+        now, token = time.time(), uuid.uuid4().hex
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute(
+                """SELECT id,report_payload_json,report_attempts FROM outbox
+                   WHERE report_payload_json<>'' AND report_available_at<=?
+                   AND (report_state='pending' OR (report_state='reporting' AND report_lease_until<=?))
+                   ORDER BY id LIMIT 1""", (now, now),
+            ).fetchone()
+            if row is None:
+                return None
+            db.execute("""UPDATE outbox SET report_state='reporting',report_lease_token=?,
+                          report_lease_until=?,report_attempts=report_attempts+1 WHERE id=?""",
+                       (token, now + 30, row["id"]))
+        return {"row_id": int(row["id"]), "lease_token": token,
+                "attempts": int(row["report_attempts"]) + 1,
+                "payload": json.loads(row["report_payload_json"])}
+
+    def finish_report(self, report: Mapping[str, Any], *, error: str = "") -> None:
+        delay = min(60, 2 ** min(int(report["attempts"]), 5)) if error else 0
+        with self._connect() as db:
+            db.execute("""UPDATE outbox SET report_state=?,report_lease_token='',report_lease_until=0,
+                          report_available_at=?,report_error=? WHERE id=? AND report_lease_token=?""",
+                       ("pending" if error else "acked", time.time() + delay, error[:1000],
+                        report["row_id"], report["lease_token"]))
+
+    def runtime_value(self, key: str, default: Any = None) -> Any:
+        with self._connect() as db:
+            row = db.execute("SELECT value_json FROM runtime_state WHERE key=?", (key,)).fetchone()
+        return json.loads(row[0]) if row else default
 
     def retry_outbox(
         self,
@@ -608,6 +686,12 @@ class BridgeStore:
                     "SELECT state, COUNT(*) AS count FROM outbox GROUP BY state"
                 ).fetchall()
             }
+            reports = {str(row["report_state"]): int(row["count"]) for row in db.execute(
+                "SELECT report_state,COUNT(*) AS count FROM outbox WHERE report_state<>'' GROUP BY report_state"
+            )}
+            report_error = db.execute(
+                "SELECT report_error FROM outbox WHERE report_error<>'' ORDER BY id DESC LIMIT 1"
+            ).fetchone()
             last_error = db.execute(
                 """
                 SELECT last_error FROM (
@@ -642,5 +726,9 @@ class BridgeStore:
             "outbox_leased": outbox.get("leased", 0),
             "outbox_delivered": outbox.get("delivered", 0),
             "outbox_failed": outbox.get("failed", 0),
+            "outbox_uncertain": outbox.get("uncertain", 0),
+            "delivery_reports_pending": reports.get("pending", 0) + reports.get("reporting", 0),
+            "delivery_reports_acked": reports.get("acked", 0),
+            "last_report_error": str(report_error[0]) if report_error else "",
             "last_delivery_error": str(last_error["last_error"]) if last_error else "",
         }

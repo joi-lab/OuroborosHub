@@ -54,6 +54,8 @@ def test_raw_mime_context_reaches_host_after_restart(tmp_path, monkeypatch, to, 
 
     async def exercise():
         def handler(request):
+            if request.url.path == '/identity':
+                return httpx.Response(200, json={'ok': True})
             event = json.loads(request.content)['event']
             assert event['source_event_id'] == 'INBOX:7:42:<current@example.org>'
             assert event['account_id'] == account
@@ -105,6 +107,8 @@ def test_reply_target_and_thread_headers_survive_restart(tmp_path, monkeypatch, 
 
     async def exercise():
         def handler(request):
+            if request.url.path == '/identity':
+                return httpx.Response(200, json={'ok': True})
             assert json.loads(request.content)['event']['actor']['platform_actor_id'] == 'mira@example.org'
             return httpx.Response(200, json={
                 'status': 'completed', 'outcome': 'message', 'text': 'Reviewed.',

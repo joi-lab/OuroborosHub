@@ -47,6 +47,8 @@ class HostTurnStatus:
     state: str
     error: str = ""
     texts: tuple[str, ...] = ()
+    delivery_reporting_version: int = 0
+    turn_ref: str = ""
 
     @property
     def terminal(self) -> bool:
@@ -56,6 +58,8 @@ class HostTurnStatus:
 @dataclass(frozen=True)
 class HostDelivery:
     texts: tuple[str, ...] = ()
+    delivery_reporting_version: int = 0
+    turn_ref: str = ""
 
 
 class PresenceHostAdapter(Protocol):
@@ -148,6 +152,7 @@ def _completed_reference(payload: Mapping[str, Any]) -> str:
         "text": str(payload.get("text") or ""),
         "turn_ref": str(payload.get("turn_ref") or ""),
         "work_ref": str(payload.get("work_ref") or ""),
+        "delivery_reporting_version": _reporting_version(payload),
     }
     raw = json.dumps(receipt, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     encoded = base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
@@ -172,6 +177,7 @@ def _deferred_reference(payload: Mapping[str, Any]) -> str:
         "text": str(payload.get("text") or ""),
         "turn_ref": str(payload.get("turn_ref") or ""),
         "work_ref": str(payload.get("work_ref") or ""),
+        "delivery_reporting_version": _reporting_version(payload),
     }
     raw = json.dumps(receipt, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     encoded = base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
@@ -192,6 +198,10 @@ def _decode_deferred_reference(reference: str) -> dict[str, Any]:
     ):
         raise HostContractError("Invalid persisted deferred-turn receipt")
     return value
+
+
+def _reporting_version(payload: Mapping[str, Any]) -> int:
+    return 1 if payload.get("delivery_reporting_version") == 1 else 0
 
 
 class LoopbackPresenceHostAdapter:
@@ -218,6 +228,34 @@ class LoopbackPresenceHostAdapter:
         )
         self._closed = False
         self._terminal_work: dict[str, dict[str, Any]] = {}
+        self.delivery_reporting_version = 0
+        self.delivery_reporting_status = "unknown"
+
+    async def discover_delivery_support(self) -> int:
+        if self.delivery_reporting_status in {"supported", "unsupported"}:
+            return self.delivery_reporting_version
+        try:
+            response = await self._http.get(
+                f"{self.host_service_url}/identity", headers=self._headers(), timeout=5.0,
+            )
+            payload = await self._json_response(response)
+            self.delivery_reporting_version = 1 if payload.get("presence_delivery_version") == 1 else 0
+            self.delivery_reporting_status = "supported" if self.delivery_reporting_version else "unsupported"
+        except (HostContractError, httpx.HTTPError):
+            # Capability discovery must never prevent sending on an old or
+            # temporarily unavailable Host. The next operation can retry it.
+            self.delivery_reporting_version = 0
+            self.delivery_reporting_status = "unavailable"
+        return self.delivery_reporting_version
+
+    async def report_delivery(self, payload: Mapping[str, Any]) -> None:
+        response = await self._http.post(
+            f"{self.host_service_url}/presence/delivery", headers=self._headers(),
+            json=dict(payload), timeout=10.0,
+        )
+        result = await self._json_response(response)
+        if result.get("ok") is not True or result.get("recorded") is not True:
+            raise HostContractError("Presence delivery report was not acknowledged")
 
     def _headers(self) -> dict[str, str]:
         return {
@@ -252,6 +290,7 @@ class LoopbackPresenceHostAdapter:
     async def submit(self, event: InboxItem) -> str:
         if not self.available:
             raise HostAdapterUnavailable("binding_id is not configured")
+        mode = await self.discover_delivery_support()
         response = await self._http.post(
             f"{self.host_service_url}/presence/turn",
             headers=self._headers(),
@@ -263,6 +302,7 @@ class LoopbackPresenceHostAdapter:
                     for file in event.staged_files
                     if str(file.get("path") or "").strip()
                 ],
+                **({"delivery_reporting_version": 1} if mode else {}),
             },
             timeout=1800.0,
         )
@@ -302,31 +342,38 @@ class LoopbackPresenceHostAdapter:
 
     async def status(self, reference: str) -> HostTurnStatus:
         if reference.startswith("completed:"):
-            _decode_completed_reference(reference)
-            return HostTurnStatus("ready")
+            receipt = _decode_completed_reference(reference)
+            return HostTurnStatus("ready", delivery_reporting_version=_reporting_version(receipt),
+                                  turn_ref=str(receipt.get("turn_ref") or ""))
         if not reference.startswith("deferred:"):
             raise HostContractError("Unknown presence reference type")
         receipt = _decode_deferred_reference(reference)
         work_ref = str(receipt["work_ref"])
         text = str(receipt.get("text") or "")
         immediate = (text,) if text.strip() else ()
+        mode = _reporting_version(receipt)
+        turn_ref = str(receipt.get("turn_ref") or "")
         payload = self._terminal_work.get(work_ref) or await self._poll_work(work_ref)
         status = str(payload.get("status") or "").strip().lower()
         if status == "completed":
-            return HostTurnStatus("ready", texts=immediate)
+            return HostTurnStatus("ready", texts=immediate, delivery_reporting_version=mode, turn_ref=turn_ref)
         if status in {"failed", "cancelled"}:
             return HostTurnStatus(
                 "failed",
                 str(payload.get("error") or status),
                 immediate,
+                mode,
+                turn_ref,
             )
-        return HostTurnStatus("pending", texts=immediate)
+        return HostTurnStatus("pending", texts=immediate, delivery_reporting_version=mode, turn_ref=turn_ref)
 
     async def deliver(self, reference: str) -> HostDelivery:
         if reference.startswith("completed:"):
             payload = _decode_completed_reference(reference)
+            receipt = payload
         elif reference.startswith("deferred:"):
-            work_ref = str(_decode_deferred_reference(reference)["work_ref"])
+            receipt = _decode_deferred_reference(reference)
+            work_ref = str(receipt["work_ref"])
             payload = self._terminal_work.get(work_ref) or await self._poll_work(
                 work_ref
             )
@@ -339,7 +386,8 @@ class LoopbackPresenceHostAdapter:
             if self._outcome(payload) == "message"
             else ""
         )
-        return HostDelivery((text,)) if text.strip() else HostDelivery()
+        return HostDelivery((text,) if text.strip() else (), _reporting_version(receipt),
+                            str(payload.get("turn_ref") or receipt.get("work_ref") or receipt.get("turn_ref") or ""))
 
     async def aclose(self) -> None:
         if self._closed:
