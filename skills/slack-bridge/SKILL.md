@@ -1,7 +1,7 @@
 ---
 name: slack-bridge
 description: Slack presence transport with durable delivery, provider author and conversation context, profile/history/thread reads, proactive text messages, and inbound file staging.
-version: 1.1.0
+version: 1.1.1
 type: extension
 entry: plugin.py
 plugin_api: "2.0"
@@ -112,6 +112,10 @@ conversation membership, scopes and rate limits remain provider facts: a refusal
 returns its error code, HTTP status, required scopes when supplied, and retry
 delay instead of pretending the result was empty. No automatic account login or
 HTTP retry is introduced.
+
+Profile, conversation, history and thread reads use GET query parameters because
+Slack's read methods do not reliably consume JSON POST arguments; message sends
+continue to use POST JSON.
 
 References: [users.info](https://docs.slack.dev/reference/methods/users.info/),
 [conversations.info](https://docs.slack.dev/reference/methods/conversations.info/),

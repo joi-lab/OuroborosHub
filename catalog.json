@@ -1501,13 +1501,13 @@
     {
       "slug": "slack-bridge",
       "name": "slack-bridge",
-      "version": "1.1.0",
+      "version": "1.1.1",
       "type": "extension",
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "3d3627300dc3204b74e81f369143e443efb32ea03c4ceac01cc63936f5edd9d9",
-          "size": 9063
+          "sha256": "d1bc8a610ae8f498b15ca496b36a881a164ce8ca6cc11ceabec5d5a5b3184379",
+          "size": 9252
         },
         {
           "path": "lib/__init__.py",
@@ -1541,8 +1541,8 @@
         },
         {
           "path": "lib/slack_api.py",
-          "sha256": "f9515511a162304af796b25b78954eeac97da880d74190b9d52feba1e1c5496d",
-          "size": 13603
+          "sha256": "50b2f164c65ffbfa5d19aa9fbcd7dcaaf8d190c496c8f40270acc93105edb7d5",
+          "size": 14284
         },
         {
           "path": "lib/socket_mode.py",
@@ -1586,18 +1586,18 @@
         },
         {
           "path": "tests/test_message_format.py",
-          "sha256": "0cb20226cbcda2dc8c8e70733add6aa8ee6cf1d7aa2a5cdbe1e9eb6d64bf6167",
-          "size": 4952
+          "sha256": "d2febd8ef33de8dbc40b47b555b378ebef9940bb114768c78154699da006f4ae",
+          "size": 5110
         },
         {
           "path": "tests/test_provider_context.py",
-          "sha256": "1493456784b414ed371d225c56c7f39a84f5717fd78cd7df638f9a52532a5dfe",
-          "size": 13764
+          "sha256": "27a6958b155b916ce5a6daca2d6313d70dc12e3a8b9c5884a339db77ccd85384",
+          "size": 13816
         },
         {
           "path": "tests/test_read_tools.py",
-          "sha256": "3279acb4b218374b35c2351531950c7653e31c351faeff0df3f58f5d57fb526d",
-          "size": 7180
+          "sha256": "0c50693068f8c81dcf185f67312be7038538a9ce194f8bcbfe92d5c899a6201b",
+          "size": 7417
         },
         {
           "path": "tests/test_slack_api.py",
