@@ -1381,36 +1381,6 @@
       "type": "extension",
       "files": [
         {
-          "path": ".ruff_cache/.gitignore",
-          "sha256": "9e3a60f1e6ec4ae60215c11d54b171392745ec25e9dded433d5bd921363af316",
-          "size": 35
-        },
-        {
-          "path": ".ruff_cache/0.16.4/1203260404332957980",
-          "sha256": "738c9113fafea09524ed641d60ff8274bca789863d5776d9a8f9c84c6a9dd7f1",
-          "size": 220
-        },
-        {
-          "path": ".ruff_cache/0.16.4/2305680225886167819",
-          "sha256": "f20e189eec5b42a1bf0d6c9dfa7f536634a506ce8c522a2a70b806dd90a83fea",
-          "size": 220
-        },
-        {
-          "path": ".ruff_cache/0.16.4/4022987782725767173",
-          "sha256": "c480340eaaee343dc8707a0cbc60a92014cf93490dd78d27753df0445c8b699f",
-          "size": 220
-        },
-        {
-          "path": ".ruff_cache/0.16.4/9614522673402395987",
-          "sha256": "7ff0503d7a5daeb0ea02d92429fce9938575877b6fe6d5cdbd07a3338113f153",
-          "size": 220
-        },
-        {
-          "path": ".ruff_cache/CACHEDIR.TAG",
-          "sha256": "5953156d7e0c564a427251316eaf26f8870e6483ae2197f916b630e4f93e31ae",
-          "size": 43
-        },
-        {
           "path": "FORMATTER_PROVENANCE.md",
           "sha256": "c8813153c8dc88e4785acd6de68aeec30a877d4af3e632037232f5371de51f77",
           "size": 1162
