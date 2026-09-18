@@ -12,6 +12,7 @@ from typing import Any, Dict, Optional
 from starlette.responses import JSONResponse
 
 from .telegram_bot.custody import CustodyStore
+from .telegram_bot.delivery import tool_origin
 from .telegram_bot.formatting import prepare_text, prepare_caption
 from .telegram_bot.host import PresenceHostClient
 from .telegram_bot.runtime import TelegramTransportRuntime
@@ -158,6 +159,7 @@ def _status_payload() -> Dict[str, Any]:
         "last_event_at": runtime.get("last_event_at", ""),
         "last_delivery_at": runtime.get("last_delivery_at", ""),
         "last_error": runtime.get("last_error", ""),
+        "delivery_reporting": runtime.get("delivery_reporting", "unknown"),
         "has_presence_binding": bool(binding_id),
         "management_group_id": str(
             _load_local_settings().get("management_group_id") or ""
@@ -184,6 +186,7 @@ def _load_local_settings() -> Dict[str, Any]:
 
 def _make_telegram_send(api: Any):
     def telegram_send(
+        ctx=None,
         *,
         chat_id: str = "",
         text: str = "",
@@ -210,6 +213,7 @@ def _make_telegram_send(api: Any):
             "kind": selected_kind,
             "chat_id": target,
             "markdown": markdown,
+            "_reporting": {"version": -1, "origin": tool_origin(ctx)},
         }
         if topic_id not in (None, ""):
             payload["topic_id"] = str(topic_id).strip()

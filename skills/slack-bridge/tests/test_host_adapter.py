@@ -60,7 +60,11 @@ def _item() -> InboxItem:
 
 
 def _adapter(handler):
-    http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    def with_legacy_identity(request):
+        if request.url.path == "/identity":
+            return httpx.Response(200, json={"ok": True})
+        return handler(request)
+    http = httpx.AsyncClient(transport=httpx.MockTransport(with_legacy_identity))
     adapter = LoopbackPresenceHostAdapter(
         binding_id="a" * 32,
         host_service_url="http://127.0.0.1:8767",

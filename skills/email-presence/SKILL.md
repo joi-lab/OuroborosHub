@@ -1,7 +1,7 @@
 ---
 name: email-presence
 description: Bidirectional email Presence transport with IMAP polling, durable delivery, and RFC 5322 reply threading.
-version: 0.1.1
+version: 0.2.0
 type: extension
 entry: plugin.py
 plugin_api: "2.0"
@@ -90,6 +90,26 @@ and retries transient provider or Host failures with bounded backoff.
   Inspect the receipt and sent mailbox before making an explicit new send.
 - The `status` extension route exposes poll health, activation/cursor state, queue
   counts and recent receipts. Host Skills/Activity shows companion process health.
+
+## Delivery history
+
+Hosts advertising `presence_delivery_version=1` receive `/presence/delivery`
+observations from the existing outbox. SMTP success is recorded as `accepted`,
+meaning server acceptance, never recipient inbox delivery or reading. A partial
+recipient refusal retains the accepted subset and the actual refusal evidence;
+an ambiguous SMTP disconnect or a process lost while sending remains uncertain
+and is never automatically resent. Reports retain the transmitted text, subject,
+recipients, Message-ID, reply headers and producer origin, including sends made
+after the model turn ends.
+
+Provider state and immutable report payload commit together before the history
+callback. ACK/backoff stays in the same outbox, and its worker owns a concurrent
+report attempt so unavailable history does not delay later mail. Restart and lost
+ACK reuse the original report without another SMTP send. Automatic immediate and
+deferred replies preserve the Host's echoed reporting mode. Old Hosts and migrated
+rows continue normal sending with mode 0; terminal legacy rows are not imported.
+`email_receipt` and `status` expose pending reports and reporting availability;
+queued mail is never logged as accepted speech. No new login or permission.
 
 ## Incoming context and replies
 

@@ -57,6 +57,7 @@ def _validate_target(target: str) -> str:
 
 def _make_slack_send(api: Any):
     def slack_send(
+        ctx: Any = None,
         *,
         channel_or_user: str = "",
         text: str = "",
@@ -70,12 +71,25 @@ def _make_slack_send(api: Any):
         if not chunks:
             return {"ok": False, "error": "text is required"}
         receipt = str(request_id or uuid.uuid4().hex)
-        count = BridgeStore(_state_dir(api)).enqueue_outbox(
+        origin = {"kind": "tool"}
+        task_id = str(getattr(ctx, "task_id", "") or "")
+        if task_id:
+            origin["task_id"] = task_id
+        metadata = getattr(ctx, "task_metadata", {})
+        presence = metadata.get("presence", {}) if isinstance(metadata, dict) else {}
+        event = presence.get("event", {}) if isinstance(presence, dict) else {}
+        source_event_id = event.get("source_event_id") if isinstance(event, dict) else None
+        if source_event_id:
+            origin["source_event_id"] = str(source_event_id)
+        store = BridgeStore(_state_dir(api))
+        count = store.enqueue_outbox(
             request_id=receipt,
             target=target,
             thread_ts=str(thread_ts or "").strip(),
             chunks=chunks,
             text_format=text_format,
+            origin=origin,
+            delivery_reporting_version=store.runtime_value("presence_delivery_version", 0),
         )
         return {
             "ok": True,

@@ -6,9 +6,11 @@ import asyncio
 import json
 import pathlib
 import re
+from dataclasses import replace
 from typing import Any, Callable, Dict, List, Optional, Protocol, Sequence
 
-from .api import TelegramClient, _split_text
+from .api import TelegramClient, TelegramApiError, _split_text
+from .delivery import delivery_report
 from .formatting import prepare_text, prepare_caption
 from .custody import CustodyStore, InboxLease, OutboxLease
 from .events import parse_telegram_update
@@ -100,6 +102,7 @@ class TelegramTransportRuntime:
             "runtime_state": self._runtime_state,
             "bot_label": self._bot_label,
             "last_error": self._last_error,
+            "delivery_reporting": getattr(self.submitter, "delivery_reporting_status", "unsupported"),
             "last_event_at": custody.get("last_event_at", ""),
             "last_delivery_at": custody.get("last_delivery_at", ""),
         }
@@ -198,6 +201,7 @@ class TelegramTransportRuntime:
                 outcome=result.outcome,
                 text=result.text,
                 work_ref=result.work_ref,
+                delivery_reporting_version=result.delivery_reporting_version,
             )
             self._remove_staged_files(staged)
             return True
@@ -297,10 +301,35 @@ class TelegramTransportRuntime:
             return True
 
     async def _outbox_worker(self) -> None:
-        while not self._stopping:
-            worked = await self.process_one_outbox()
-            if not worked:
-                await self._pause(0.5)
+        reporting = None
+        try:
+            while not self._stopping:
+                if reporting is None or reporting.done():
+                    if reporting is not None:
+                        await reporting
+                    reporting = asyncio.create_task(self.process_one_delivery_report())
+                worked = await self.process_one_outbox()
+                if not worked:
+                    await self._pause(0.5)
+        finally:
+            if reporting is not None:
+                reporting.cancel()
+                await asyncio.gather(reporting, return_exceptions=True)
+
+    async def process_one_delivery_report(self) -> bool:
+        pending = self.store.next_delivery_report()
+        if pending is None:
+            return False
+        delivery_id, index, payload = pending
+        try:
+            await self.submitter.report_delivery(payload)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self.store.finish_delivery_report(delivery_id, index, error=_error(exc))
+        else:
+            self.store.finish_delivery_report(delivery_id, index)
+        return True
 
     async def process_one_outbox(self) -> bool:
         lease = self.store.claim_outbox(lease_sec=120.0)
@@ -310,6 +339,15 @@ class TelegramTransportRuntime:
             client = await self._ready_client()
             if client is None:
                 raise RuntimeError("telegram token is unavailable")
+            reporting = dict(lease.payload.get("_reporting") or {"version": 0})
+            if reporting.get("version") == -1:
+                discover = getattr(self.submitter, "discover_delivery_support", None)
+                reporting["version"] = await discover() if discover else 0
+                reporting["status"] = getattr(self.submitter, "delivery_reporting_status", "unsupported")
+            if reporting.get("version") == 1 and not reporting.get("account_id"):
+                reporting["account_id"] = self._bot_id
+            lease = replace(lease, payload={**lease.payload, "_reporting": reporting})
+            self.store.checkpoint_outbox(lease.delivery_id, lease.payload)
             receipt = await _deliver(client, lease, self.store)
             self.store.mark_delivered(lease.delivery_id, provider_receipt=receipt)
             return True
@@ -320,7 +358,10 @@ class TelegramTransportRuntime:
             raise
         except Exception as exc:
             if lease.attempts >= _MAX_OUTBOX_ATTEMPTS:
-                self.store.mark_outbox_failed(lease.delivery_id, reason=_error(exc))
+                payload = self.store.outbox_payload(lease.delivery_id)
+                state = "failed" if isinstance(exc, TelegramApiError) and exc.error_code else "uncertain"
+                report = delivery_report(lease.delivery_id, payload, part_id="status", state=state, error=_error(exc))
+                self.store.mark_outbox_failed(lease.delivery_id, reason=_error(exc), report=report)
             else:
                 self.store.release_outbox(
                     lease.delivery_id,
@@ -383,9 +424,11 @@ async def _deliver(
                 topic_id=topic_id,
                 reply_to_message_id=reply_id if index == 0 else None,
             )
-            messages.append(result)
+            report = delivery_report(lease.delivery_id, payload, part_id=index, state="delivered", receipt=result,
+                                     text=chunk["text"], fmt="html" if chunk["parse_mode"] == "HTML" else "plain")
+            messages.append({key: value for key, value in result.items() if key != "_delivery"})
             store.checkpoint_outbox(
-                lease.delivery_id, {**payload, "_sent_messages": messages}
+                lease.delivery_id, {**payload, "_sent_messages": messages}, report=report
             )
         return {"kind": kind, "messages": messages}
     if kind == "moderation":
@@ -395,6 +438,8 @@ async def _deliver(
         return {"kind": kind, "action": payload["action"], "result": result}
     if kind not in {"photo", "document"}:
         raise ValueError(f"unsupported Telegram outbox kind: {kind}")
+    if payload.get("_sent_media"):
+        return {"kind": kind, "message": payload["_sent_media"]}
     caption = payload.get("_rendered_caption")
     if caption is None:
         caption = prepare_caption(
@@ -411,6 +456,10 @@ async def _deliver(
         topic_id=topic_id,
         reply_to_message_id=reply_id,
     )
+    report = delivery_report(lease.delivery_id, payload, part_id=0, state="delivered", receipt=result,
+                             text=caption["text"], fmt="html" if caption["parse_mode"] == "HTML" else "plain")
+    result = {key: value for key, value in result.items() if key != "_delivery"}
+    store.checkpoint_outbox(lease.delivery_id, {**payload, "_sent_media": result}, report=report)
     return {"kind": kind, "message": result}
 
 

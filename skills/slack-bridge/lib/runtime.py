@@ -28,6 +28,43 @@ def _event_directory_name(item: InboxItem) -> str:
     return clean[:120] or str(item.row_id)
 
 
+async def _discover_reporting(host: Any, store: BridgeStore) -> int:
+    discover = getattr(host, "discover_delivery_support", None)
+    mode = await discover() if discover is not None else 0
+    store.set_runtime(
+        presence_delivery_version=mode,
+        history_reporting_state=getattr(host, "delivery_reporting_status", "unsupported"),
+        history_reporting_limitation="" if mode else "Host delivery reporting unavailable; provider sending remains enabled.",
+    )
+    return mode
+
+
+def _automatic_origin(item: InboxItem, turn_ref: str) -> dict[str, str]:
+    origin = {"kind": "automatic", "source_event_id": item.provider_event_key}
+    if turn_ref:
+        origin["task_id"] = turn_ref
+    return origin
+
+
+def _delivery_report(item: Any, state: str, *, result: dict[str, Any] | None = None,
+                     error: str = "") -> dict[str, Any] | None:
+    if item.delivery_reporting_version != 1:
+        return None
+    result = result or {}
+    message = {"provider_message_id": str(result.get("ts") or ""),
+               "requested_target": item.target, "target_resolved": bool(item.resolved_channel),
+               "chunk_count": item.chunk_count}
+    if error:
+        message["error"] = error
+    return {
+        "schema_version": 1, "delivery_id": item.request_id, "part_id": str(item.chunk_index),
+        "state": state, "provider": "slack", "account_id": item.provider_account_id,
+        "conversation_id": str(result.get("channel") or item.resolved_channel or item.target),
+        "thread_id": item.thread_ts, "text": item.text, "format": item.text_format,
+        "message": message, "origin": item.origin,
+    }
+
+
 class InboundWorker:
     def __init__(
         self,
@@ -62,6 +99,7 @@ class InboundWorker:
 
             reference = item.host_reference
             if not reference:
+                await _discover_reporting(self.host, self.store)
                 reference = str(await self.host.submit(item)).strip()
                 if not reference:
                     raise RuntimeError(
@@ -80,6 +118,8 @@ class InboundWorker:
                     target=item.channel_id,
                     thread_ts=item.reply_thread_ts,
                     chunks=chunks,
+                    origin=_automatic_origin(item, status.turn_ref),
+                    delivery_reporting_version=status.delivery_reporting_version,
                 )
             if status.state == "failed":
                 self.store.fail_inbox(
@@ -107,6 +147,8 @@ class InboundWorker:
                     target=item.channel_id,
                     thread_ts=item.reply_thread_ts,
                     chunks=chunks,
+                    origin=_automatic_origin(item, delivery.turn_ref),
+                    delivery_reporting_version=delivery.delivery_reporting_version,
                 )
             self.store.complete_inbox(item.row_id, item.lease_token)
             return True
@@ -131,33 +173,90 @@ class InboundWorker:
 
 
 class OutboundWorker:
-    def __init__(self, store: BridgeStore, slack: SlackClient) -> None:
+    def __init__(self, store: BridgeStore, slack: SlackClient, host: Any = None) -> None:
         self.store = store
         self.slack = slack
+        self.host = host
+        self._report_task: asyncio.Task[None] | None = None
+
+    async def _report(self, report: dict[str, Any]) -> None:
+        try:
+            await self.host.report_delivery(report["payload"])
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self.store.finish_report(report, error=str(exc) or type(exc).__name__)
+        else:
+            self.store.finish_report(report)
+
+    def _advance_reporting(self) -> bool:
+        """At most one callback per existing worker, never awaited by sending."""
+        advanced = False
+        if self._report_task is not None:
+            if not self._report_task.done():
+                return False
+            try:
+                self._report_task.result()
+            except asyncio.CancelledError:
+                pass
+            except Exception as exc:
+                log.warning("Slack history report checkpoint failed: %s", type(exc).__name__)
+            self._report_task = None
+            advanced = True
+        if self.host is not None:
+            report = self.store.claim_report()
+            if report is not None:
+                self._report_task = asyncio.create_task(self._report(report), name="slack-delivery-report")
+                advanced = True
+        return advanced
+
+    async def aclose(self) -> None:
+        task, self._report_task = self._report_task, None
+        if task is not None:
+            if not task.done():
+                task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
 
     async def process_once(self) -> bool:
+        # A slow callback keeps its own task while this worker continues sending.
+        reported = self._advance_reporting()
         item = self.store.claim_outbox(lease_seconds=60.0)
         if item is None:
-            return False
+            return reported
+        item = dataclasses.replace(item, provider_account_id=(
+            item.provider_account_id or str(self.store.runtime_value("workspace_id", ""))
+        ))
         try:
-            channel = await self.slack.resolve_target(item.target)
+            channel = item.resolved_channel or await self.slack.resolve_target(item.target)
+            self.store.set_resolved_target(item, channel, item.provider_account_id)
+            item = dataclasses.replace(item, resolved_channel=channel)
             result = await self.slack.post_message(
                 channel=channel,
                 text=item.text,
                 thread_ts=item.thread_ts,
                 text_format=item.text_format,
             )
+            actual_channel = str(result.get("channel") or channel)
+            if actual_channel != channel:
+                self.store.set_resolved_target(item, actual_channel, item.provider_account_id)
+                item = dataclasses.replace(item, resolved_channel=actual_channel)
             self.store.complete_outbox(
                 item.row_id,
                 item.lease_token,
                 provider_message_ts=str(result.get("ts") or ""),
+                report_payload=_delivery_report(item, "delivered", result=result),
             )
             return True
         except asyncio.CancelledError:
             raise
         except SlackApiError as exc:
             if item.attempts >= _MAX_OUTBOX_ATTEMPTS:
-                self.store.fail_outbox(item.row_id, item.lease_token, exc.error)
+                uncertain = exc.status_code >= 500 or exc.status_code == 408 or exc.error in {
+                    "invalid_json", "invalid_response", "internal_error", "fatal_error",
+                }
+                state = "uncertain" if uncertain else "failed"
+                self.store.fail_outbox(item.row_id, item.lease_token, exc.error, state=state,
+                                       report_payload=_delivery_report(item, state, error=exc.error))
                 log.warning(
                     "Slack outbox item %s failed after %s attempts: %s",
                     item.row_id,
@@ -176,7 +275,8 @@ class OutboundWorker:
             return True
         except Exception as exc:
             if item.attempts >= _MAX_OUTBOX_ATTEMPTS:
-                self.store.fail_outbox(item.row_id, item.lease_token, str(exc))
+                self.store.fail_outbox(item.row_id, item.lease_token, str(exc), state="uncertain",
+                                       report_payload=_delivery_report(item, "uncertain", error=type(exc).__name__))
                 log.warning(
                     "Slack outbox item %s failed after %s attempts: %s",
                     item.row_id,
@@ -196,15 +296,20 @@ class OutboundWorker:
 
 
 async def _worker_loop(worker: Any, stop: asyncio.Event) -> None:
-    while not stop.is_set():
-        worked = await worker.process_once()
-        if worked:
-            await asyncio.sleep(0)
-            continue
-        try:
-            await asyncio.wait_for(stop.wait(), timeout=0.25)
-        except asyncio.TimeoutError:
-            pass
+    try:
+        while not stop.is_set():
+            worked = await worker.process_once()
+            if worked:
+                await asyncio.sleep(0)
+                continue
+            try:
+                await asyncio.wait_for(stop.wait(), timeout=0.25)
+            except asyncio.TimeoutError:
+                pass
+    finally:
+        close = getattr(worker, "aclose", None)
+        if close is not None:
+            await close()
 
 
 class BridgeRuntime:
@@ -232,11 +337,12 @@ class BridgeRuntime:
         self._tasks: list[asyncio.Task[Any]] = []
 
     async def run(self) -> None:
+        await _discover_reporting(self.host, self.store)
         inbound_state = "active" if self.host.available else "missing_binding_id"
         self.store.set_runtime(host_adapter_state=inbound_state)
         self._tasks = [asyncio.create_task(self.socket.run(), name="slack-socket-mode")]
         for index in range(self.outbound_workers):
-            worker = OutboundWorker(self.store, self.slack)
+            worker = OutboundWorker(self.store, self.slack, self.host)
             self._tasks.append(
                 asyncio.create_task(
                     _worker_loop(worker, self._stop),

@@ -232,7 +232,7 @@ class TelegramClient:
             payload.pop("parse_mode", None)
             payload["text"] = _telegram_html_to_plain(text)
             result = await self._call("sendMessage", payload)
-        return result if isinstance(result, dict) else {}
+        return {**result, "_delivery": {"text": payload["text"], "format": "html" if payload.get("parse_mode") == "HTML" else "plain"}} if isinstance(result, dict) else {}
 
     async def send_photo(
         self,
@@ -323,13 +323,14 @@ class TelegramClient:
             return self._result(endpoint, response)
 
         try:
-            return await post()
+            result = await post()
         except TelegramApiError as exc:
             if not caption or parse_mode != "HTML" or exc.error_code != 400:
                 raise
             fields.pop("parse_mode", None)
             fields["caption"] = _telegram_html_to_plain(caption)
-            return await post()
+            result = await post()
+        return {**result, "_delivery": {"text": fields.get("caption", ""), "format": "html" if fields.get("parse_mode") == "HTML" else "plain"}}
 
     async def _call(
         self,

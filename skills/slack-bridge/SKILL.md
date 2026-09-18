@@ -1,7 +1,7 @@
 ---
 name: slack-bridge
 description: Slack presence transport with durable delivery, provider author and conversation context, profile/history/thread reads, proactive text messages, and inbound file staging.
-version: 1.1.1
+version: 1.2.0
 type: extension
 entry: plugin.py
 plugin_api: "2.0"
@@ -165,3 +165,39 @@ sections within a chunk or use plain text when exact literal presentation matter
 No message characters are silently dropped.
 
 Reference: [chat.postMessage formatting fields](https://docs.slack.dev/reference/methods/chat.postMessage/).
+
+## Receipt-backed conversation history
+
+The companion discovers `presence_delivery_version` from the authenticated
+loopback `/identity` endpoint. On a supporting Host, new Presence submissions
+opt into delivery reporting. The actual mode echoed by the original turn is
+kept with both its immediate and deferred results; an old cached turn or old
+automatic outbox row stays in legacy mode even after an upgrade.
+
+Each new explicit send captures only compact origin references from its tool
+context, never the complete task or credentials. New sends opt into reporting
+when Host capability discovery has succeeded. Older Hosts continue sending;
+`status` exposes `history_reporting_state` and `history_reporting_limitation`
+when receipt-backed history is unavailable. No unknown turn fields are sent to
+an older Host, and no old terminal outbox rows are retroactively imported.
+
+After Slack confirms a physical message chunk, the outbox commits its actual
+resolved channel, provider timestamp and immutable report payload before any
+history callback. The existing outbound workers submit that report through
+`/presence/delivery`. Report ACK, lease and bounded-backoff retries live beside
+the existing provider receipt in the same outbox. Each existing outbound worker
+keeps at most one tracked report task in flight while continuing provider sends;
+stopping the worker cancels and awaits that task. A slow or failed report never
+requeues the provider send or holds later sends waiting for a report ACK. A restart
+or lost ACK retries exactly the same report; the Host owns idempotent history
+acceptance. The status route exposes pending/acknowledged report counts and
+the last report error separately from provider delivery state.
+
+Reports identify tool versus automatic origin explicitly. Successful chunks
+are `delivered`; definitive terminal Slack errors are `failed`, and terminal
+network failures are `uncertain`, never a delivered full logical message. An
+unresolved user target is retained as requested with `target_resolved=false`;
+it does not claim a resolved DM channel. Queued messages are not spoken history.
+The previous bounded provider retry policy is unchanged: an ambiguous provider
+acceptance followed by retry can still duplicate a Slack message. Host report
+deduplication is not a provider-side exactly-once delivery guarantee.

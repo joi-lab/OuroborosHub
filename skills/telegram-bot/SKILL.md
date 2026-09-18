@@ -2,7 +2,7 @@
 name: telegram-bot
 description: Durable Telegram transport for generic Ouroboros presences, with exact actor and conversation
   provenance, media staging, and provider receipts.
-version: 0.2.2
+version: 0.3.0
 type: extension
 plugin_api: '2.0'
 runtime: python3
@@ -145,6 +145,27 @@ before delivering its late text once.
 Supported v1 Telegram content is text/caption, photos, and documents. Voice,
 reactions, edited messages, service events, and Mini App behavior are outside
 this transport.
+
+## Delivery history
+
+Hosts advertising `presence_delivery_version=1` receive delivery observations
+through `/presence/delivery`. Each confirmed text chunk or media send freezes its
+actual transmitted text/format, exact destination, provider receipt and producer
+origin in the existing outbox before reporting. Captionless files retain their
+filename/provider media descriptors. A partial failure preserves confirmed parts
+and reports the remainder as failed or uncertain rather than delivered speech.
+
+History acknowledgements have their own backoff beside the provider receipt.
+The existing outbound worker owns a concurrent report attempt, so a slow or
+failed history callback does not hold later sends or resend successful parts.
+Restart reuses the same immutable report. Queueing alone creates no spoken row.
+Automatic turns keep the Host's actual echoed reporting mode through deferred
+work; legacy rows use mode 0 and are not retroactively imported. Old Hosts keep
+normal sending with an explicit unsupported/unavailable reporting status in
+transport status and delivery receipts. Origin metadata never grants authority.
+
+Telegram acceptance without a stored receipt can still lead to a duplicate on
+the existing provider retry path; reporting does not claim provider exactly-once.
 
 ## Incoming context
 

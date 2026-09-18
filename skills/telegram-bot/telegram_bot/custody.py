@@ -163,6 +163,7 @@ class CustodyStore:
         outcome: str,
         text: str,
         work_ref: str,
+        delivery_reporting_version: int = 0,
     ) -> None:
         """Atomically retain Host custody, immediate text, and deferred work."""
         now = time.time()
@@ -176,6 +177,12 @@ class CustodyStore:
                 conn.rollback()
                 raise ValueError("inbox event is not leased")
             event = json.loads(row["payload_json"])
+            event["_reporting"] = {
+                "version": delivery_reporting_version,
+                "account_id": event.get("account_id", ""),
+                "origin": {"kind": "automatic", "task_id": turn_ref,
+                           "source_event_id": event.get("source_event_id", "")},
+            }
             if text and outcome in {"message", "deferred"}:
                 self._enqueue_outbox(
                     conn,
@@ -380,8 +387,9 @@ class CustodyStore:
                 ),
             )
 
-    def mark_outbox_failed(self, delivery_id: str, *, reason: str) -> None:
+    def mark_outbox_failed(self, delivery_id: str, *, reason: str, report=None) -> None:
         with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             conn.execute(
                 """
                 UPDATE outbox
@@ -390,19 +398,25 @@ class CustodyStore:
                 """,
                 (time.time(), str(reason)[:500], delivery_id),
             )
+            self._add_reports(conn, delivery_id, [report] if report else [])
+            conn.commit()
 
-    def checkpoint_outbox(self, delivery_id: str, payload: Dict[str, Any]) -> None:
+    def checkpoint_outbox(self, delivery_id: str, payload: Dict[str, Any], *, report=None) -> None:
         """Retain confirmed text chunks before attempting the next provider call."""
         with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             conn.execute(
                 "UPDATE outbox SET payload_json=? WHERE delivery_id=? AND state='leased'",
                 (_json(payload), delivery_id),
             )
+            self._add_reports(conn, delivery_id, [report] if report else [])
+            conn.commit()
 
     def mark_delivered(
-        self, delivery_id: str, *, provider_receipt: Dict[str, Any]
+        self, delivery_id: str, *, provider_receipt: Dict[str, Any], report=None
     ) -> None:
         with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             conn.execute(
                 """
                 UPDATE outbox
@@ -412,11 +426,55 @@ class CustodyStore:
                 """,
                 (time.time(), _json(provider_receipt), delivery_id),
             )
+            self._add_reports(conn, delivery_id, [report] if report else [])
+            conn.commit()
+
+    def _add_reports(self, conn, delivery_id, reports):
+        if not reports:
+            return
+        row = conn.execute("SELECT reports_json FROM outbox WHERE delivery_id=?", (delivery_id,)).fetchone()
+        entries = json.loads(row[0])
+        keys = {(x["payload"]["part_id"], x["payload"]["state"]) for x in entries}
+        for report in reports:
+            key = (report["part_id"], report["state"])
+            if key not in keys:
+                entries.append({"payload": report, "acked": False, "attempts": 0, "available_at": time.time(), "error": ""})
+                keys.add(key)
+        self._write_reports(conn, delivery_id, entries)
+
+    @staticmethod
+    def _write_reports(conn, delivery_id, entries):
+        due = min((x["available_at"] for x in entries if not x["acked"]), default=0)
+        conn.execute("UPDATE outbox SET reports_json=?, report_due_at=? WHERE delivery_id=?", (_json(entries), due, delivery_id))
+
+    def next_delivery_report(self):
+        with self._connect() as conn:
+            row = conn.execute("SELECT delivery_id,reports_json FROM outbox WHERE report_due_at>0 AND report_due_at<=? ORDER BY report_due_at LIMIT 1", (time.time(),)).fetchone()
+        if row:
+            for index, entry in enumerate(json.loads(row["reports_json"])):
+                if not entry["acked"] and entry["available_at"] <= time.time():
+                    return row["delivery_id"], index, entry["payload"]
+        return None
+
+    def finish_delivery_report(self, delivery_id, index, *, error=""):
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            entries = json.loads(conn.execute("SELECT reports_json FROM outbox WHERE delivery_id=?", (delivery_id,)).fetchone()[0])
+            entry = entries[index]
+            entry["attempts"] += 1
+            entry.update(acked=not error, error=error, available_at=time.time() + min(300, 2 ** min(entry["attempts"], 8)))
+            self._write_reports(conn, delivery_id, entries)
+            conn.commit()
+
+    def outbox_payload(self, delivery_id):
+        with self._connect() as conn:
+            row = conn.execute("SELECT payload_json FROM outbox WHERE delivery_id=?", (delivery_id,)).fetchone()
+        return json.loads(row[0]) if row else {}
 
     def delivery_receipt(self, delivery_id: str) -> Dict[str, Any]:
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT state, attempts, delivered_at, provider_receipt_json, last_error "
+                "SELECT state, attempts, delivered_at, provider_receipt_json, last_error, payload_json, reports_json "
                 "FROM outbox WHERE delivery_id=?",
                 (delivery_id,),
             ).fetchone()
@@ -428,6 +486,8 @@ class CustodyStore:
             "delivered_at": _timestamp(row["delivered_at"]),
             "provider_receipt": json.loads(row["provider_receipt_json"] or "{}"),
             "error": str(row["last_error"]),
+            "delivery_reporting": json.loads(row["payload_json"]).get("_reporting", {"version": 0, "status": "legacy_unconfirmed"}),
+            "history_reports": json.loads(row["reports_json"]),
         }
 
     def status_snapshot(self) -> Dict[str, Any]:
@@ -471,6 +531,7 @@ class CustodyStore:
                 "work_terminal": sum(
                     work.get(state, 0) for state in ("completed", "failed", "cancelled")
                 ),
+                "delivery_reports_pending": conn.execute("SELECT COUNT(*) FROM outbox WHERE report_due_at>0").fetchone()[0],
                 "last_event_at": _timestamp(last_event),
                 "last_delivery_at": _timestamp(last_delivery),
             }
@@ -537,6 +598,13 @@ class CustodyStore:
                     ON outbox(state, available_at, lease_until, created_at);
                 """
             )
+            conn.execute("BEGIN IMMEDIATE")
+            columns = {r[1] for r in conn.execute("PRAGMA table_info(outbox)")}
+            if "reports_json" not in columns:
+                conn.execute("ALTER TABLE outbox ADD COLUMN reports_json TEXT NOT NULL DEFAULT '[]'")
+                conn.execute("ALTER TABLE outbox ADD COLUMN report_due_at REAL NOT NULL DEFAULT 0")
+            conn.execute("CREATE INDEX IF NOT EXISTS outbox_reports_due ON outbox(report_due_at)")
+            conn.commit()
             self._import_legacy_offset(conn)
 
     def _import_legacy_offset(self, conn: sqlite3.Connection) -> None:
@@ -594,6 +662,7 @@ def _reply_payload(event: Dict[str, Any], text: str) -> Dict[str, Any]:
         "text": str(text),
         "markdown": True,
         "_rendered_chunks": prepare_text(str(text)),
+        "_reporting": event.get("_reporting", {"version": 0}),
     }
     thread_id = str(event.get("thread_id") or "").strip()
     if thread_id:

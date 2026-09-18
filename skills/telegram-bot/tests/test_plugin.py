@@ -143,6 +143,7 @@ def test_telegram_send_queues_text_and_deduplicates(tmp_path):
         "topic_id": "7",
         "markdown": True,
         "_rendered_chunks": [{"text": "Hello", "parse_mode": "HTML"}],
+        "_reporting": {"version": -1, "origin": {"kind": "tool"}},
     }
     api.unload()
 

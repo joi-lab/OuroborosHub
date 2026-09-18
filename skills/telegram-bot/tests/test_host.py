@@ -20,6 +20,8 @@ class FakeTransport:
         self.calls = []
 
     async def request_json(self, method, url, *, headers, payload, timeout_sec):
+        if url.endswith("/identity"):
+            return {"ok": True}
         self.calls.append((method, url, headers, payload, timeout_sec))
         return self.responses.pop(0)
 
