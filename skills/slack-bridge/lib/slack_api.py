@@ -147,12 +147,37 @@ class SlackClient:
         *,
         token: str,
     ) -> dict[str, Any]:
+        return await self._request("POST", endpoint, payload, token=token)
+
+    async def _get(
+        self,
+        endpoint: str,
+        payload: Mapping[str, Any],
+        *,
+        token: str,
+    ) -> dict[str, Any]:
+        return await self._request("GET", endpoint, payload, token=token)
+
+    async def _request(
+        self,
+        method: str,
+        endpoint: str,
+        payload: Mapping[str, Any],
+        *,
+        token: str,
+    ) -> dict[str, Any]:
         if self._closed:
             raise RuntimeError("SlackClient is closed")
-        response = await self._http.post(
+        headers = self._headers(token)
+        arguments = {"json": dict(payload)}
+        if method == "GET":
+            headers.pop("Content-Type", None)
+            arguments = {"params": dict(payload)}
+        response = await self._http.request(
+            method,
             f"https://slack.com/api/{endpoint}",
-            headers=self._headers(token),
-            json=dict(payload),
+            headers=headers,
+            **arguments,
         )
         retry_after = 0.0
         try:
@@ -198,7 +223,7 @@ class SlackClient:
         user_id = str(user_id or "").strip()
         if not user_id:
             raise SlackConfigurationError("user_id is required")
-        response = await self._post(
+        response = await self._get(
             "users.info", {"user": user_id, "include_locale": True}, token=self.bot_token
         )
         user = response.get("user")
@@ -210,7 +235,7 @@ class SlackClient:
         channel_id = str(channel_id or "").strip()
         if not channel_id:
             raise SlackConfigurationError("channel_id is required")
-        response = await self._post(
+        response = await self._get(
             "conversations.info", {"channel": channel_id, "include_locale": True},
             token=self.bot_token,
         )
@@ -236,7 +261,7 @@ class SlackClient:
         endpoint = "conversations.replies" if thread_ts else "conversations.history"
         if thread_ts:
             payload["ts"] = str(thread_ts)
-        response = await self._post(endpoint, payload, token=self.bot_token)
+        response = await self._get(endpoint, payload, token=self.bot_token)
         messages = response.get("messages")
         if not isinstance(messages, list):
             raise SlackApiError("missing_messages")

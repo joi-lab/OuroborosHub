@@ -58,10 +58,11 @@ def test_provider_mock_through_worker_persists_context_before_host(tmp_path):
         def slack_handler(request):
             assert acked, "Provider enrichment belongs outside the Socket ACK path"
             calls.append(request.url.path)
+            assert request.method == "GET" and request.content == b""
             if request.url.path.endswith("users.info"):
-                assert json.loads(request.content)["user"] == "U_TEST"
+                assert request.url.params["user"] == "U_TEST"
                 return httpx.Response(200, json={"ok": True, "user": user()})
-            assert json.loads(request.content)["channel"] == "D_TEST"
+            assert request.url.params["channel"] == "D_TEST"
             return httpx.Response(200, json={"ok": True, "channel": conversation()})
         events = []
         def host_handler(request):

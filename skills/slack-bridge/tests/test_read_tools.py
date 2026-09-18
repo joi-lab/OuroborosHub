@@ -52,10 +52,12 @@ def test_lookup_tools_return_full_current_provider_objects(monkeypatch):
         room = {"id": "D1", "is_im": True, "purpose": {"value": "Discussion"}}
         def provider(request):
             assert request.headers["authorization"] == "Bearer xoxb-test"
+            assert request.method == "GET" and request.content == b""
+            assert "Content-Type" not in request.headers
             if request.url.path.endswith("users.info"):
-                assert json.loads(request.content) == {"user": "U1", "include_locale": True}
+                assert dict(request.url.params) == {"user": "U1", "include_locale": "true"}
                 return httpx.Response(200, json={"ok": True, "user": user})
-            assert json.loads(request.content) == {"channel": "D1", "include_locale": True}
+            assert dict(request.url.params) == {"channel": "D1", "include_locale": "true"}
             return httpx.Response(200, json={"ok": True, "channel": room})
         async with httpx.AsyncClient(transport=httpx.MockTransport(provider)) as http:
             tools = with_tools(monkeypatch, http)
@@ -73,10 +75,12 @@ def test_history_and_thread_keep_full_text_filters_and_cursor(monkeypatch, kind,
         long_text = "context " * 20000
         def provider(request):
             assert request.url.path == "/api/conversations." + endpoint
-            params = json.loads(request.content)
+            assert request.method == "GET" and request.content == b""
+            params = dict(request.url.params)
             calls.append(params)
             assert params["channel"] == "D1"
-            assert params["oldest"] == "1.0" and params["latest"] == "3.0" and params["inclusive"] is True
+            assert params["oldest"] == "1.0" and params["latest"] == "3.0" and params["inclusive"] == "true"
+            assert params["limit"] == "15"
             if endpoint == "replies":
                 assert params["ts"] == "2.0"
             else:

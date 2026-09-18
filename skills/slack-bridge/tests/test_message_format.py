@@ -19,6 +19,8 @@ def test_provider_payload_uses_one_explicit_format_without_rewriting(text_format
         calls = []
         def provider(request):
             assert request.url.path == "/api/chat.postMessage"
+            assert request.method == "POST" and not request.url.query
+            assert request.headers["Content-Type"] == "application/json; charset=utf-8"
             body = json.loads(request.content)
             calls.append(body)
             assert body["channel"] == "D_TEST" and body["thread_ts"] == "123.456"
