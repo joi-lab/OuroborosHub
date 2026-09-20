@@ -255,3 +255,40 @@ def test_dashboard_theme_keeps_live_state_and_legacy_fallback(theme_server, brow
         assert theme_server["unmatched"] == []
     finally:
         context.close()
+
+
+@pytest.mark.parametrize("mode", ["trend", "volume"])
+@pytest.mark.parametrize("scale", [1, 2])
+def test_retained_cache_canvas_repaints_while_hidden(theme_server, browser, mode, scale):
+    """Returning to a retained graph must match an ordinary visible repaint."""
+    instance, _ = browser
+    context = instance.new_context(viewport={"width": 1100, "height": 850}, device_scale_factor=scale)
+    page = context.new_page()
+    try:
+        page.goto(theme_server["url"] + "/?skill=cache_efficiency_snapshot&theme=dark")
+        page.wait_for_function("() => window.ready === true")
+        node = page.locator("iframe").element_handle()
+        frame = node.content_frame()
+        frame.wait_for_function('() => document.querySelector("#kpiRate")?.textContent.includes("%")')
+        frame.locator(f'[data-mode="{mode}"]').click()
+        page.mouse.move(0, 0)
+        frame.evaluate("() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))")
+
+        def theme(value):
+            page.evaluate("t => ouroTheme.set(t)", value)
+            frame.wait_for_function("t => document.documentElement.dataset.theme === t", arg=value, polling=25)
+
+        pixels = 'document.querySelector("canvas").toDataURL()'
+        theme("light")
+        reference = frame.evaluate(pixels)
+        theme("dark")
+        page.locator("section[data-widget-key]").evaluate('n => n.style.display = "none"')
+        theme("light")
+        page.locator("section[data-widget-key]").evaluate('n => n.style.display = ""')
+        frame.evaluate("() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))")
+        assert page.evaluate('n => document.querySelector("iframe") === n', node)
+        same_paint = frame.evaluate(pixels) == reference
+        assert same_paint, "hidden theme change must match visible canvas paint"
+        page.evaluate("async () => await disposeWidget()")
+    finally:
+        context.close()

@@ -241,8 +241,8 @@
         },
         {
           "path": "widget.js",
-          "sha256": "28582b9c0e81dc226d598d6773a4a7a0b040689628a3139fdd1ed922534642a0",
-          "size": 37560
+          "sha256": "92519bb41db7fc2bd2a61e705274c4cf9d21da90e845de796aa202fc97a67ac7",
+          "size": 37723
         }
       ],
       "name": "cache_efficiency_snapshot",

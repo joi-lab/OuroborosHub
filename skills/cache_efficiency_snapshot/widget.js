@@ -668,9 +668,11 @@
   });
 
   function renderChart() {
-    const rect = canvasWrap.getBoundingClientRect();
-    const w = rect.width;
-    const h = rect.height;
+    // A retained frame can receive a theme while its host page is hidden.
+    // Its layout rect is then zero, but the canvas keeps its last paint size.
+    const dpr = window.devicePixelRatio || 1;
+    const w = canvas.width / dpr;
+    const h = canvas.height / dpr;
     ctx.clearRect(0, 0, w, h);
 
     if (!state.data || !state.data.buckets || state.data.buckets.length === 0) {
