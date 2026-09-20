@@ -44,6 +44,18 @@ Start in the main Ouroboros repository:
 
 Skills are reviewed code. Keep them small, explicit, and honest about permissions.
 
+Module dashboards can declare `render.appearance: host` and feature-detect the
+optional `OuroborosWidget.onTheme` API. On hosts with the bridge, apply the
+resolved Light/Dark value without rebuilding the widget and unsubscribe during
+disposal. On older hosts, preserve a usable local palette; the declaration alone
+does not enable theme delivery. Widgets with their own appearance can declare
+`independent` or `fixed` (an intentionally stable visual world).
+
+Changed published payloads need a new skill version in `SKILL.md` and the catalog:
+existing clients discover updates by comparing those versions. Test both the
+current bridge and a host without `onTheme`, including Canvas/SVG repaint and
+preserved state. The core author guide above owns the detailed contract.
+
 ## How to add a skill
 
 A skill lives in its own folder:
@@ -113,6 +125,18 @@ Ouroboros's canonical installation names; display names may be shared. Curated
 metadata, formatting and intentionally unlisted development files are preserved.
 The same validation runs before normal catalog generation writes its result.
 Pull requests and pushes to `main` run these checks in CI.
+
+The dashboard browser acceptance needs a local Ouroboros core checkout (including
+its Git history), Playwright, Chromium and WebKit. Run it explicitly; ordinary
+catalog CI does not provide these dependencies:
+
+```bash
+OUROBOROS_THEME_CORE_ROOT=/path/to/ouroboros python -m pytest -p no:cacheprovider -q tests/test_dashboard_theme_browser.py
+```
+
+It uses real current and pre-theme module bridges with synthetic skill responses,
+checks both palettes, state preservation, Canvas/SVG repaint and disposal, and
+confirms that an older bridge keeps the dark fallback.
 
 ## Review and trust model
 

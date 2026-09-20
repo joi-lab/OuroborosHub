@@ -198,7 +198,7 @@ class TestRegistration(RouteTestCase):
 
     def test_manifest_version_matches_the_documented_release(self) -> None:
         text = (_ROOT / "SKILL.md").read_text(encoding="utf-8")
-        self.assertIn("version: 1.1.2", text)
+        self.assertIn("version: 1.1.3", text)
 
     def test_unload_callback_releases_the_reader(self) -> None:
         api = self.register()

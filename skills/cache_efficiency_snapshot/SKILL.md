@@ -1,6 +1,6 @@
 ---
 name: cache_efficiency_snapshot
-version: 0.5.0
+version: 0.5.1
 title: Cache Efficiency Snapshot
 description: Interactive cache observability dashboard over per-call usage events with token-weighted read rates, separate request and session counts, measurement coverage, and Canvas charts.
 type: extension

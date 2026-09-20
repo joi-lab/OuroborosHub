@@ -1,7 +1,7 @@
 ---
 name: token-usage
 description: Token Observatory — Liquid Glass dashboard for recorded Ouroboros token usage, tasks and models.
-version: 1.1.0
+version: 1.1.1
 type: extension
 runtime: python3
 entry: plugin.py

@@ -130,6 +130,22 @@ class CatalogTests(unittest.TestCase):
                 self.assertIn('Catalog validation failed', error.getvalue())
                 self.assertEqual(path.read_text(), raw)
 
+    def test_generator_excludes_pytest_cache_but_keeps_sibling_payloads(self):
+        self.entry()
+        tests_dir = self.root / 'skills/demo/tests'
+        cache_dir = tests_dir / '.pytest_cache/v/cache'
+        cache_dir.mkdir(parents=True)
+        (cache_dir / 'nodeids').write_text('["generated test state"]', encoding='utf-8')
+        sibling = tests_dir / 'fixture.json'
+        sibling.write_text('{"message": "published test fixture"}', encoding='utf-8')
+
+        catalog = builder.build_catalog(self.root)
+        files = {item['path']: item for item in catalog['skills'][0]['files']}
+        self.assertEqual(set(files), {'SKILL.md', 'readme.txt', 'tests/fixture.json'})
+        self.assertEqual(files['tests/fixture.json']['sha256'],
+                         hashlib.sha256(sibling.read_bytes()).hexdigest())
+        builder.validate_catalog(self.root, catalog)
+
 
 if __name__ == '__main__':
     unittest.main()

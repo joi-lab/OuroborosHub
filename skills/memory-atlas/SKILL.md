@@ -1,7 +1,7 @@
 ---
 name: memory-atlas
 description: Read-only atlas, document reader, authentic history browser, literal search, and evidence graph for allowlisted Ouroboros core memory, consolidated dialogue chronicles, and project knowledge. Opens on global memory; every link it draws is proven from stored bytes, with no model calls at runtime. Use to inspect memory provenance without modifying serving-process data.
-version: 0.2.11
+version: 0.2.12
 type: extension
 runtime: python3
 entry: plugin.py

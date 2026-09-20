@@ -1,7 +1,7 @@
 ---
 name: context-lens
 description: Read-only context-size charts for model requests over a chosen horizon, with honest telemetry coverage.
-version: 1.1.2
+version: 1.1.3
 type: extension
 runtime: python3
 entry: plugin.py

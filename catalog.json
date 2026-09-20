@@ -226,7 +226,7 @@
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "7e6b11ec9fc46e6be1ff1745514c7e23ae2103032ef1e5166384ae3ea6b4244c",
+          "sha256": "c0047cf55fc9100c38f7722c786c71965764b37c85476fefa1d7cf112aa9f462",
           "size": 4903
         },
         {
@@ -248,7 +248,7 @@
       "name": "cache_efficiency_snapshot",
       "slug": "cache_efficiency_snapshot",
       "type": "extension",
-      "version": "0.5.0"
+      "version": "0.5.1"
     },
     {
       "description": "Fully playable Classic Doom (1993) standalone 2.5D FPS raycaster extension widget with textured walls, procedural sprite enemies, authentic weapons, levels, HUD, Web Audio sound and heavy metal music synthesizer.",
@@ -280,7 +280,7 @@
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "db234b31f3cc5bb08f2502b998a130ae2b042b380f3ab5bd16b38f984992f378",
+          "sha256": "185e1fe7285eaca890d08dd3375148af84f2bd5c7944b21ab77a82dbcf528d76",
           "size": 9549
         },
         {
@@ -302,7 +302,7 @@
       "name": "claudexor_quotas",
       "slug": "claudexor_quotas",
       "type": "extension",
-      "version": "0.5.0",
+      "version": "0.5.1",
       "when_to_use": "The owner wants to see, at a glance, the quota windows, limits and reset times of every authorized Claudexor account, including which facets could not be read."
     },
     {
@@ -310,7 +310,7 @@
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "2bfc8a5098f0b93f2b9baa0d7dd82dbd85b16fa14a118f62dd771a0fbeb30810",
+          "sha256": "196482a663ca00595ba0adb393e39194e88ac873313929612f9d36fd4ae31899",
           "size": 31166
         },
         {
@@ -330,7 +330,7 @@
         },
         {
           "path": "tests/test_plugin_routes.py",
-          "sha256": "f8ca31c35f1346b743537f604913038e40912a000c61a13366baf4d8ca48058d",
+          "sha256": "c90e87f06b513e7f7566bdbb21bf09dde121f0a2ead04a5ff4b69e7579a8bf0b",
           "size": 24712
         },
         {
@@ -352,7 +352,7 @@
       "name": "context-lens",
       "slug": "context-lens",
       "type": "extension",
-      "version": "1.1.2",
+      "version": "1.1.3",
       "when_to_use": "The owner wants to understand reported input sizes, their spread and growth within tasks."
     },
     {
@@ -709,7 +709,7 @@
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "8ba9911987d38994136ab922e3565e410f4c02f7d0604db3d0be3a0ed0822ca3",
+          "sha256": "81da444d9b8ab77ff3543c17aa1338a7c4d8da38291b9170f9b4812427e781d4",
           "size": 6481
         },
         {
@@ -781,7 +781,7 @@
       "name": "memory-atlas",
       "slug": "memory-atlas",
       "type": "extension",
-      "version": "0.2.11"
+      "version": "0.2.12"
     },
     {
       "description": "Generate a music clip from a text prompt via OpenRouter's Google Lyria model and play it directly inside the widget. Files are persisted to the skill's private state directory and streamed through an extension route for both inline playback and download.",
@@ -1053,12 +1053,12 @@
         },
         {
           "path": "README.md",
-          "sha256": "e1fbc2bef423809ba56a18686348577e75a4dd5242a380ab5afd8f0205c8e044",
-          "size": 14223
+          "sha256": "fa8e8860967195fb6c8926e0a68e44f5f2b0d4cb3e62790c4fb3fe44f367172d",
+          "size": 14245
         },
         {
           "path": "SKILL.md",
-          "sha256": "8b8599e9440976b91c2c4987444146c84e2b11f6553098d84783158d62077a67",
+          "sha256": "1a88755075c0708ccc8c92310ce6b64785a2760703357bb87980bf21bdf2f7e3",
           "size": 4724
         },
         {
@@ -1115,7 +1115,7 @@
       "name": "token-usage",
       "slug": "token-usage",
       "type": "extension",
-      "version": "1.1.0",
+      "version": "1.1.1",
       "when_to_use": "Inspect token usage across Ouroboros models, harnesses, projects and tasks over the retained history."
     },
     {
