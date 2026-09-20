@@ -292,3 +292,41 @@ def test_retained_cache_canvas_repaints_while_hidden(theme_server, browser, mode
         page.evaluate("async () => await disposeWidget()")
     finally:
         context.close()
+
+
+@pytest.mark.parametrize("mode", ["trend", "volume"])
+@pytest.mark.parametrize("initial_scale,new_scale", [(1, 2), (2, 1)])
+def test_cache_repaint_uses_the_scale_of_its_backing_canvas(theme_server, browser, mode, initial_scale, new_scale):
+    """Changing displays must not mix a new DPR with the existing canvas scale."""
+    instance, engine = browser
+    if engine != "chromium":
+        pytest.skip("runtime DPR emulation uses Chromium CDP")
+    context = instance.new_context(viewport={"width": 1100, "height": 850}, device_scale_factor=initial_scale)
+    page = context.new_page()
+    try:
+        page.goto(theme_server["url"] + "/?skill=cache_efficiency_snapshot&theme=light")
+        page.wait_for_function("() => window.ready === true")
+        frame = page.locator("iframe").element_handle().content_frame()
+        frame.wait_for_function('() => document.querySelector("#kpiRate")?.textContent.includes("%")')
+        frame.locator(f'[data-mode="{mode}"]').click()
+        page.mouse.move(0, 0)
+        frame.evaluate("() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))")
+        pixels = 'document.querySelector("canvas").toDataURL()'
+        reference = frame.evaluate(pixels)
+        frame.evaluate("() => {window.qaResizeCount=0; window.addEventListener('resize', () => qaResizeCount++);}")
+        cdp = context.new_cdp_session(page)
+        cdp.send("Emulation.setDeviceMetricsOverride", {
+            "width": 1100, "height": 850, "deviceScaleFactor": new_scale, "mobile": False,
+        })
+        frame.wait_for_function("value => devicePixelRatio === value", arg=new_scale)
+        assert frame.evaluate("qaResizeCount") == 0
+        # A repaint at the same theme isolates backing-scale consistency from colour changes.
+        page.evaluate("() => ouroTheme.set('dark')")
+        frame.wait_for_function("() => document.documentElement.dataset.theme === 'dark'")
+        page.evaluate("() => ouroTheme.set('light')")
+        frame.wait_for_function("() => document.documentElement.dataset.theme === 'light'")
+        same_paint = frame.evaluate(pixels) == reference
+        assert same_paint, "a DPR-only change must preserve the logical paint geometry"
+        page.evaluate("async () => await disposeWidget()")
+    finally:
+        context.close()

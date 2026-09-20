@@ -602,6 +602,7 @@
   // Canvas & Interaction Engine
   const canvas = document.getElementById('chartCanvas');
   const ctx = canvas.getContext('2d');
+  let paintDpr = 1;
   const canvasWrap = document.getElementById('canvasWrap');
   const tooltip = document.getElementById('chartTooltip');
   let colors;
@@ -628,6 +629,7 @@
       ctx.setTransform(1, 0, 0, 1, 0, 0);
     }
     ctx.scale(dpr, dpr);
+    paintDpr = dpr;
     renderChart();
   }
 
@@ -670,9 +672,9 @@
   function renderChart() {
     // A retained frame can receive a theme while its host page is hidden.
     // Its layout rect is then zero, but the canvas keeps its last paint size.
-    const dpr = window.devicePixelRatio || 1;
-    const w = canvas.width / dpr;
-    const h = canvas.height / dpr;
+    // Use the scale applied at resize, even if the display DPR since changed.
+    const w = canvas.width / paintDpr;
+    const h = canvas.height / paintDpr;
     ctx.clearRect(0, 0, w, h);
 
     if (!state.data || !state.data.buckets || state.data.buckets.length === 0) {
