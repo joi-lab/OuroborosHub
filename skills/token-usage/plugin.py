@@ -257,7 +257,7 @@ def register(api):
         api.register_route("export", export, methods=["GET"])
         api.register_route("preferences", preferences, methods=["GET", "PUT"])
         api.register_ui_tab("observatory", "Token Observatory", icon="◉", render={
-            "kind": "module", "entry": "widget.js", "height": 560, "span": 2, "start": "manual"})
+            "kind": "module", "entry": "widget.js", "appearance": "host", "height": 560, "span": 2, "start": "manual"})
         api.on_unload(service.close)
     except Exception:
         service.close()

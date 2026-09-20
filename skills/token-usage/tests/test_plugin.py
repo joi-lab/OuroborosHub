@@ -226,7 +226,7 @@ class PluginContractTests(OwnedTemporaryCase):
         api, service = self.register_fake()
         self.assertEqual(set(api.routes), {"data", "export", "preferences"})
         self.assertEqual(api.tabs, {"observatory": {"title": "Token Observatory", "icon": "◉", "render": {
-            "kind": "module", "entry": "widget.js", "height": 560, "span": 2, "start": "manual"}}})
+            "kind": "module", "entry": "widget.js", "appearance": "host", "height": 560, "span": 2, "start": "manual"}}})
         self.assertIs(service.index.stop_event, service._stop)
         self.assertEqual(service.index.calls, 0)
         self.assertFalse((self.root / "state").exists())

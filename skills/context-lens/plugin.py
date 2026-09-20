@@ -172,6 +172,7 @@ def register(api: Any) -> None:
         render={
             "kind": "module",
             "entry": "widget.js",
+            "appearance": "host",
             "start": "auto",
             # A chart card reads best across both masonry columns; the host
             # normalizes render.span to 1 or 2 (extension_surface_names.

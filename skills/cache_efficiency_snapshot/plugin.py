@@ -592,7 +592,7 @@ def register(api: Any) -> None:
         "cache_efficiency",
         "Cache Efficiency Snapshot",
         icon="activity",
-        render={"kind": "module", "entry": "widget.js", "span": 2},
+        render={"kind": "module", "entry": "widget.js", "appearance": "host", "span": 2},
     )
     if hasattr(api, "on_unload") and callable(api.on_unload):
         try:

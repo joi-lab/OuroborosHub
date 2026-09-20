@@ -143,7 +143,7 @@ def build_catalog(root: Path) -> dict:
             raise ValueError(f'{skill_dir.name}: SKILL.md frontmatter must be an object')
         files = []
         for path in sorted(skill_dir.rglob('*')):
-            if '__pycache__' in path.parts or path.suffix in {'.pyc', '.pyo', '.so', '.dylib', '.dll', '.wasm'}:
+            if any(part in {'__pycache__', '.pytest_cache'} for part in path.parts) or path.suffix in {'.pyc', '.pyo', '.so', '.dylib', '.dll', '.wasm'}:
                 continue
             if path.is_file():
                 digest, size = _file_facts(path)

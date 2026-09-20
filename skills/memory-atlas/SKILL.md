@@ -1,7 +1,7 @@
 ---
 name: memory-atlas
 description: Read-only atlas, document reader, authentic history browser, literal search, and evidence graph for allowlisted Ouroboros core memory, consolidated dialogue chronicles, and project knowledge. Opens on global memory; every link it draws is proven from stored bytes, with no model calls at runtime. Use to inspect memory provenance without modifying serving-process data.
-version: 0.2.11
+version: 0.2.12
 type: extension
 runtime: python3
 entry: plugin.py
@@ -14,12 +14,17 @@ ui_tab:
   render:
     kind: module
     entry: widget.js
+    appearance: host
     start: manual
     height: 580
     span: 2
 ---
 
 # Memory Atlas
+
+## Host appearance
+
+This module opts into the host-resolved Light/Dark theme through the optional `OuroborosWidget.onTheme` bridge. Older hosts keep the existing dark palette. Theme changes update presentation in place and disposal unsubscribes the listener.
 
 Obtain the canonical serving-process data directory from
 `api.get_runtime_info()["data_dir"]` and fail closed if it is invalid. Expose only

@@ -50,6 +50,7 @@
     var controllers = new Set();
     var timers = [];
     var observers = [];
+    var chartDraws = [];
     var listeners = [];
     var scheduled = [];
     var disposed = false;
@@ -402,11 +403,25 @@
 
     // -------------------------------------------------------------- drawing
 
-    var CHART_INK = 'rgba(226, 232, 240, 0.55)';
-    var ACCENT = '#c93545';
-    var ACCENT_LIGHT = '#f07a86';
-    var GRID = 'rgba(255, 255, 255, 0.07)';
-    var META = 'rgba(255, 255, 255, 0.68)';
+    var chartColors = {};
+    var DARK_CHART_COLORS = {
+        ink: 'rgba(226,232,240,0.55)', accent: '#c93545', selected: '#f07a86',
+        grid: 'rgba(255,255,255,0.07)', muted: 'rgba(255,255,255,0.68)',
+        reference: 'rgba(240,122,134,0.45)', 'reference-label': 'rgba(240,122,134,0.85)',
+        related: 'rgba(255,255,255,0.42)', 'line-1': 'rgba(226,232,240,0.78)',
+        'line-2': 'rgba(226,232,240,0.56)', 'line-3': 'rgba(226,232,240,0.4)'
+    };
+    function readChartColors() {
+        if (typeof getComputedStyle !== 'function') {
+            chartColors = Object.assign({}, DARK_CHART_COLORS);
+            return;
+        }
+        var css = getComputedStyle(document.documentElement);
+        ['ink', 'accent', 'selected', 'grid', 'muted', 'reference', 'reference-label',
+            'related', 'line-1', 'line-2', 'line-3'].forEach(function (name) {
+            chartColors[name] = css.getPropertyValue('--lens-' + name).trim() || DARK_CHART_COLORS[name];
+        });
+    }
     var FONT = '-apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif';
     // Clear space demanded between two measured pieces of chart text. Labels are
     // dropped, never shrunk: every chart string stays at the 12px the rest of
@@ -436,7 +451,7 @@
     }
 
     function emptyChart(box, text) {
-        box.ctx.fillStyle = META;
+        box.ctx.fillStyle = chartColors['muted'];
         box.ctx.font = '14px ' + FONT;
         box.ctx.textAlign = 'center';
         box.ctx.textBaseline = 'middle';
@@ -478,13 +493,13 @@
         for (var i = 0; i <= 4; i += 1) {
             var value = (yMax / 4) * i;
             var y = yOf(value);
-            ctx.strokeStyle = GRID;
+            ctx.strokeStyle = chartColors['grid'];
             ctx.lineWidth = 1;
             ctx.beginPath();
             ctx.moveTo(pad.left, Math.round(y) + 0.5);
             ctx.lineTo(pad.left + plotW, Math.round(y) + 0.5);
             ctx.stroke();
-            ctx.fillStyle = META;
+            ctx.fillStyle = chartColors['muted'];
             ctx.textAlign = 'right';
             ctx.fillText(compact(value), pad.left - 8, y);
         }
@@ -494,7 +509,7 @@
             if (entry[1] === null || entry[1] > yMax) return;
             var y = Math.round(yOf(entry[1])) + 0.5;
             ctx.save();
-            ctx.strokeStyle = 'rgba(240, 122, 134, 0.45)';
+            ctx.strokeStyle = chartColors['reference'];
             ctx.setLineDash(entry[0] === 'Typical' ? [5, 4] : [2, 4]);
             ctx.lineWidth = 1;
             ctx.beginPath();
@@ -502,7 +517,7 @@
             ctx.lineTo(pad.left + plotW, y);
             ctx.stroke();
             ctx.restore();
-            ctx.fillStyle = 'rgba(240, 122, 134, 0.85)';
+            ctx.fillStyle = chartColors['reference-label'];
             ctx.textAlign = 'left';
             ctx.fillText(entry[0], pad.left + 6, y - 8);
         });
@@ -511,7 +526,7 @@
         // sides: nothing else is drawn there, so neither can land on a tick
         // label. The right caption is measured against the left one so the two
         // cannot meet on a very narrow canvas either.
-        ctx.fillStyle = META;
+        ctx.fillStyle = chartColors['muted'];
         ctx.textAlign = 'left';
         ctx.fillText('input tokens', 2, CAPTION_Y);
         var yCaptionRight = 2 + ctx.measureText('input tokens').width;
@@ -559,12 +574,12 @@
             var selected = state.selected && state.selected.id === point.id;
             ctx.beginPath();
             ctx.arc(x, y, selected ? 4.5 : 2.6, 0, Math.PI * 2);
-            ctx.fillStyle = selected ? ACCENT_LIGHT : CHART_INK;
+            ctx.fillStyle = selected ? chartColors['selected'] : chartColors['ink'];
             ctx.fill();
             if (selected) {
                 ctx.beginPath();
                 ctx.arc(x, y, 8, 0, Math.PI * 2);
-                ctx.strokeStyle = ACCENT;
+                ctx.strokeStyle = chartColors['accent'];
                 ctx.lineWidth = 1.5;
                 ctx.stroke();
             }
@@ -599,12 +614,12 @@
         for (var i = 0; i <= 2; i += 1) {
             var value = (yMax / 2) * i;
             var y = Math.round(yOf(value)) + 0.5;
-            ctx.strokeStyle = GRID;
+            ctx.strokeStyle = chartColors['grid'];
             ctx.beginPath();
             ctx.moveTo(pad.left, y);
             ctx.lineTo(pad.left + plotW, y);
             ctx.stroke();
-            ctx.fillStyle = META;
+            ctx.fillStyle = chartColors['muted'];
             ctx.textAlign = 'right';
             ctx.fillText(compact(value), pad.left - 8, yOf(value));
         }
@@ -614,18 +629,18 @@
             group.points.forEach(function (point) {
                 ctx.beginPath();
                 ctx.arc(xOf(point.t), yOf(Math.min(point.prompt_tokens, yMax)), 2.2, 0, Math.PI * 2);
-                ctx.fillStyle = 'rgba(255, 255, 255, 0.42)';
+                ctx.fillStyle = chartColors['related'];
                 ctx.fill();
             });
         });
 
         // This task's own homogeneous runs: joined inside a group only.
-        var shades = ['rgba(226, 232, 240, 0.78)', 'rgba(226, 232, 240, 0.56)', 'rgba(226, 232, 240, 0.4)'];
+        var shades = [chartColors['line-1'], chartColors['line-2'], chartColors['line-3']];
         (payload.groups || []).forEach(function (group, index) {
             var holdsSelection = state.selected && group.points.some(function (p) {
                 return p.id === state.selected.id;
             });
-            var ink = holdsSelection ? ACCENT_LIGHT : shades[index % shades.length];
+            var ink = holdsSelection ? chartColors['selected'] : shades[index % shades.length];
             ctx.strokeStyle = ink;
             ctx.lineWidth = holdsSelection ? 1.8 : 1.2;
             ctx.beginPath();
@@ -648,7 +663,7 @@
         // the plot, and when even that leaves them overlapping on a narrow card
         // only the newest is drawn rather than two strings printed over each
         // other. Neither is shrunk below the chart's 12px.
-        ctx.fillStyle = META;
+        ctx.fillStyle = chartColors['muted'];
         var startText = axisTime(tMin, tMax - tMin);
         var endText = axisTime(tMax, tMax - tMin);
         var startWidth = ctx.measureText(startText).width;
@@ -673,6 +688,7 @@
      * redundant work simply is not done. The card's frame height is fixed by the
      * manifest, so the host mounts no auto-height observer above this one. */
     function liveChart(container, canvas, draw) {
+        chartDraws.push(draw);
         schedule(draw);
         if (typeof ResizeObserver !== 'function') return;
         var pending = false;
@@ -1197,6 +1213,7 @@
         clearScheduled();
         observers.forEach(function (observer) { observer.disconnect(); });
         observers = [];
+        chartDraws = [];
         listeners = listeners.filter(function (entry) {
             if (root.contains(entry[0])) {
                 entry[0].removeEventListener(entry[1], entry[2], entry[3]);
@@ -1356,65 +1373,81 @@
 
     function installStyle() {
         var css = [
+            ':root{color-scheme:dark;--lens-background:#0d0b0f;--lens-text:#e2e8f0;',
+            '--lens-muted:rgba(255,255,255,0.68);--lens-label:rgba(255,255,255,0.82);',
+            '--lens-faint:rgba(255,255,255,0.55);--lens-disabled:rgba(255,255,255,0.38);',
+            '--lens-ink-rgb:255,255,255;--lens-accent-rgb:201,53,69;--lens-tooltip:rgba(18,20,26,0.98);',
+            '--lens-ink:rgba(226,232,240,0.55);--lens-accent:#c93545;--lens-selected:#f07a86;',
+            '--lens-grid:rgba(255,255,255,0.07);--lens-reference:rgba(240,122,134,0.45);',
+            '--lens-reference-label:rgba(240,122,134,0.85);--lens-related:rgba(255,255,255,0.42);',
+            '--lens-line-1:rgba(226,232,240,0.78);--lens-line-2:rgba(226,232,240,0.56);--lens-line-3:rgba(226,232,240,0.4);}',
+            ':root[data-theme=light]{color-scheme:light;--lens-background:#f8fafc;--lens-text:#18212f;',
+            '--lens-muted:#526174;--lens-label:#334155;--lens-faint:#5b687a;--lens-disabled:#7c8797;',
+            '--lens-ink-rgb:15,23,42;--lens-accent-rgb:184,47,67;--lens-tooltip:rgba(255,255,255,0.98);',
+            '--lens-ink:#64748b;--lens-accent:#b82f43;--lens-selected:#b82f43;',
+            '--lens-grid:rgba(15,23,42,0.12);--lens-reference:rgba(184,47,67,0.55);',
+            '--lens-reference-label:#b82f43;--lens-related:#7c8797;',
+            '--lens-line-1:#475569;--lens-line-2:#64748b;--lens-line-3:#7c8797;}',
+
             // The frame height is fixed by the manifest, so this document is the
             // one scrolling surface: no inner pane competes with it and the last
             // row of the card is always reachable.
             'html{height:100%;}',
-            'html,body{margin:0;padding:0;background:#0d0b0f;max-width:100%;overflow-x:hidden;}',
+            'html,body{margin:0;padding:0;background:var(--lens-background);max-width:100%;overflow-x:hidden;}',
             'body{min-height:100%;overflow-y:auto;',
             'font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",system-ui,sans-serif;',
-            'color:#e2e8f0;font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased;}',
+            'color:var(--lens-text);font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased;}',
             '#root{box-sizing:border-box;padding:16px;display:flex;flex-direction:column;gap:12px;max-width:100%;}',
             '*{box-sizing:border-box;min-width:0;}',
             'h1,h2,h3{margin:0;font-weight:600;}',
             '.title{font-size:16px;line-height:1.3;}',
-            '.subtitle{margin:2px 0 0;font-size:12px;line-height:1.35;color:rgba(255,255,255,0.68);}',
+            '.subtitle{margin:2px 0 0;font-size:12px;line-height:1.35;color:var(--lens-muted);}',
             '.header{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;}.titles{flex:1;}',
             '.button{font:inherit;font-size:13px;min-height:34px;padding:6px 15px;border-radius:999px;',
-            'border:1px solid rgba(255,255,255,0.08);background:rgba(255,255,255,0.04);color:#e2e8f0;cursor:pointer;}',
-            '.button:hover:not(:disabled){background:rgba(255,255,255,0.08);}',
-            '.button:disabled{color:rgba(255,255,255,0.38);cursor:default;}',
+            'border:1px solid rgba(var(--lens-ink-rgb),0.08);background:rgba(var(--lens-ink-rgb),0.04);color:var(--lens-text);cursor:pointer;}',
+            '.button:hover:not(:disabled){background:rgba(var(--lens-ink-rgb),0.08);}',
+            '.button:disabled{color:var(--lens-disabled);cursor:default;}',
             '.button-quiet{min-height:28px;padding:3px 12px;font-size:12px;}',
             '.button:focus-visible,.control:focus-visible,.row:focus-visible,summary:focus-visible,',
-            '.segment:focus-visible{outline:2px solid rgba(201,53,69,0.4);outline-offset:2px;}',
+            '.segment:focus-visible{outline:2px solid rgba(var(--lens-accent-rgb),0.4);outline-offset:2px;}',
             // Horizon: one segmented row, the pressed span carried by the brand
             // red at low weight rather than by a second colour.
             '.horizon{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}',
             '.segmented{display:inline-flex;padding:2px;gap:2px;border-radius:999px;',
-            'border:1px solid rgba(255,255,255,0.08);background:rgba(255,255,255,0.03);}',
+            'border:1px solid rgba(var(--lens-ink-rgb),0.08);background:rgba(var(--lens-ink-rgb),0.03);}',
             '.segment{font:inherit;font-size:13px;line-height:1.3;min-height:28px;padding:3px 13px;',
-            'border:0;border-radius:999px;background:transparent;color:rgba(255,255,255,0.68);cursor:pointer;}',
-            '.segment:hover{color:#e2e8f0;background:rgba(255,255,255,0.06);}',
-            '.segment-on{background:rgba(201,53,69,0.18);color:#e2e8f0;',
-            'box-shadow:inset 0 0 0 1px rgba(201,53,69,0.32);}',
+            'border:0;border-radius:999px;background:transparent;color:var(--lens-muted);cursor:pointer;}',
+            '.segment:hover{color:var(--lens-text);background:rgba(var(--lens-ink-rgb),0.06);}',
+            '.segment-on{background:rgba(var(--lens-accent-rgb),0.18);color:var(--lens-text);',
+            'box-shadow:inset 0 0 0 1px rgba(var(--lens-accent-rgb),0.32);}',
             '.coverage-line{margin:-2px 0 0;}',
-            '.card{border:1px solid rgba(255,255,255,0.08);background:rgba(255,255,255,0.03);',
+            '.card{border:1px solid rgba(var(--lens-ink-rgb),0.08);background:rgba(var(--lens-ink-rgb),0.03);',
             'border-radius:12px;padding:14px;display:flex;flex-direction:column;gap:8px;}',
             '.card-title{font-size:16px;line-height:1.3;}',
             '.sub-title{font-size:14px;line-height:1.3;}',
             '.card-head{display:flex;align-items:baseline;justify-content:space-between;gap:10px;flex-wrap:wrap;}',
-            '.muted{color:rgba(255,255,255,0.68);}',
+            '.muted{color:var(--lens-muted);}',
             '.meta{font-size:12px;line-height:1.4;}',
             '.body{font-size:14px;}',
             'p{margin:0;overflow-wrap:anywhere;}',
-            '.strong-line{color:#e2e8f0;font-weight:600;margin-top:2px;}',
+            '.strong-line{color:var(--lens-text);font-weight:600;margin-top:2px;}',
             '.tiles{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;}@media(min-width:660px){.tiles,.filters{grid-template-columns:repeat(4,minmax(0,1fr));}}',
-            '.tile{border:1px solid rgba(255,255,255,0.08);background:rgba(255,255,255,0.03);',
+            '.tile{border:1px solid rgba(var(--lens-ink-rgb),0.08);background:rgba(var(--lens-ink-rgb),0.03);',
             'border-radius:12px;padding:10px 12px;}',
             '.tile-value{font-size:24px;line-height:1.25;font-weight:600;}',
-            '.tile-label{font-size:12px;line-height:1.35;color:rgba(255,255,255,0.82);margin-top:1px;}',
-            '.tile-note{font-size:12px;line-height:1.3;color:rgba(255,255,255,0.55);min-height:14px;}',
+            '.tile-label{font-size:12px;line-height:1.35;color:var(--lens-label);margin-top:1px;}',
+            '.tile-note{font-size:12px;line-height:1.3;color:var(--lens-faint);min-height:14px;}',
             '.filters{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;}',
             '.field{display:flex;flex-direction:column;gap:3px;}',
-            '.field-label{font-size:12px;line-height:1.35;color:rgba(255,255,255,0.68);}',
+            '.field-label{font-size:12px;line-height:1.35;color:var(--lens-muted);}',
             '.control{font:inherit;font-size:14px;min-height:32px;padding:4px 8px;border-radius:8px;max-width:100%;',
-            'border:1px solid rgba(255,255,255,0.08);background:rgba(255,255,255,0.04);color:#e2e8f0;}',
+            'border:1px solid rgba(var(--lens-ink-rgb),0.08);background:rgba(var(--lens-ink-rgb),0.04);color:var(--lens-text);}',
             '.chart{position:relative;height:220px;}',
             '.chart-small{height:140px;}',
             '.canvas{width:100%;height:100%;display:block;}',
             '.tooltip{position:absolute;transform:translateX(-50%);pointer-events:none;font-size:12px;',
-            'line-height:1.35;padding:5px 8px;border-radius:8px;border:1px solid rgba(255,255,255,0.08);',
-            'background:rgba(18,20,26,0.98);color:#e2e8f0;white-space:nowrap;max-width:100%;}',
+            'line-height:1.35;padding:5px 8px;border-radius:8px;border:1px solid rgba(var(--lens-ink-rgb),0.08);',
+            'background:var(--lens-tooltip);color:var(--lens-text);white-space:nowrap;max-width:100%;}',
             '.columns{display:grid;grid-template-columns:minmax(0,1fr);gap:10px;align-items:start;}',
             '@media (min-width:660px){.columns{grid-template-columns:minmax(0,1fr) minmax(0,1fr);}}',
             '.column{display:flex;flex-direction:column;gap:10px;min-width:0;}',
@@ -1424,36 +1457,36 @@
             '.row-actions{display:flex;gap:8px;flex-wrap:wrap;}',
             '.row{display:flex;width:100%;align-items:baseline;justify-content:space-between;gap:10px;',
             'font:inherit;text-align:left;padding:5px 8px;border-radius:8px;border:1px solid transparent;',
-            'background:transparent;color:#e2e8f0;cursor:pointer;}',
-            '.row:hover{background:rgba(255,255,255,0.07);}',
-            '.row-active{background:rgba(201,53,69,0.12);border-color:rgba(201,53,69,0.25);}',
+            'background:transparent;color:var(--lens-text);cursor:pointer;}',
+            '.row:hover{background:rgba(var(--lens-ink-rgb),0.07);}',
+            '.row-active{background:rgba(var(--lens-accent-rgb),0.12);border-color:rgba(var(--lens-accent-rgb),0.25);}',
             '.row-main{display:flex;align-items:baseline;gap:8px;min-width:0;}',
             '.row-tokens{font-size:14px;font-weight:600;white-space:nowrap;}',
-            '.row-model{font-size:12px;line-height:1.35;color:rgba(255,255,255,0.54);overflow:hidden;',
+            '.row-model{font-size:12px;line-height:1.35;color:var(--lens-faint);overflow:hidden;',
             'text-overflow:ellipsis;white-space:nowrap;}',
-            '.row-meta{font-size:12px;line-height:1.35;color:rgba(255,255,255,0.68);text-align:right;}',
+            '.row-meta{font-size:12px;line-height:1.35;color:var(--lens-muted);text-align:right;}',
             '.lead{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;}',
             '.lead-value{font-size:24px;line-height:1.25;font-weight:600;}',
-            '.lead-label{font-size:12px;line-height:1.35;color:rgba(255,255,255,0.68);}',
+            '.lead-label{font-size:12px;line-height:1.35;color:var(--lens-muted);}',
             '.detail-body{display:flex;flex-direction:column;gap:5px;}',
             '.detail-row{display:flex;align-items:baseline;justify-content:space-between;gap:10px;}',
-            '.detail-label{font-size:12px;line-height:1.35;color:rgba(255,255,255,0.68);}',
+            '.detail-label{font-size:12px;line-height:1.35;color:var(--lens-muted);}',
             '.detail-value{font-size:14px;text-align:right;overflow-wrap:anywhere;}',
-            '.detail-note{font-size:12px;line-height:1.35;color:rgba(255,255,255,0.6);margin:-2px 0 3px;}',
+            '.detail-note{font-size:12px;line-height:1.35;color:var(--lens-muted);margin:-2px 0 3px;}',
             '.legend{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:3px;',
-            'font-size:12px;line-height:1.35;color:rgba(255,255,255,0.68);}',
+            'font-size:12px;line-height:1.35;color:var(--lens-muted);}',
             '.legend-item{display:flex;align-items:center;gap:8px;}',
-            '.legend-mark{flex:0 0 auto;width:14px;height:2px;border-radius:2px;background:rgba(226,232,240,0.78);}',
-            '.legend-mark.loose{width:6px;height:6px;border-radius:999px;background:rgba(255,255,255,0.42);}',
+            '.legend-mark{flex:0 0 auto;width:14px;height:2px;border-radius:2px;background:var(--lens-line-1);}',
+            '.legend-mark.loose{width:6px;height:6px;border-radius:999px;background:var(--lens-related);}',
             '.notes{margin:0;padding-left:17px;display:flex;flex-direction:column;gap:5px;',
-            'font-size:12px;line-height:1.4;color:rgba(255,255,255,0.68);}',
+            'font-size:12px;line-height:1.4;color:var(--lens-muted);}',
             '.disclosures{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));',
             'gap:10px;align-items:start;}',
-            'summary{cursor:pointer;font-size:14px;line-height:1.35;color:rgba(255,255,255,0.82);}',
+            'summary{cursor:pointer;font-size:14px;line-height:1.35;color:var(--lens-label);}',
             '.details-card{gap:6px;}',
             '.details-card[open]{gap:8px;}',
             '.inline-details{display:flex;flex-direction:column;gap:6px;}',
-            '.inline-details>summary{font-size:12px;color:rgba(255,255,255,0.68);}'
+            '.inline-details>summary{font-size:12px;color:var(--lens-muted);}'
         ].join('');
         var style = document.createElement('style');
         style.textContent = css;
@@ -1463,6 +1496,15 @@
     // -------------------------------------------------------------- startup
 
     installStyle();
+    readChartColors();
+    var offTheme = window.OuroborosWidget && typeof window.OuroborosWidget.onTheme === 'function'
+        ? window.OuroborosWidget.onTheme(function (theme) {
+            if (disposed) return;
+            document.documentElement.dataset.theme = theme;
+            readChartColors();
+            // A theme change never rebuilds controls or closes disclosures.
+            chartDraws.forEach(function (draw) { draw(); });
+        }) : null;
     if (!document.getElementById('root')) {
         var rootNode = document.createElement('div');
         rootNode.id = 'root';
@@ -1484,11 +1526,13 @@
     if (typeof window.__ouroWidgetOnDispose === 'function') {
         window.__ouroWidgetOnDispose(function () {
             disposed = true;
+            if (typeof offTheme === 'function') offTheme();
             timers.forEach(clearInterval);
             timers = [];
             clearScheduled();
             observers.forEach(function (observer) { observer.disconnect(); });
             observers = [];
+        chartDraws = [];
             listeners.forEach(function (entry) {
                 entry[0].removeEventListener(entry[1], entry[2], entry[3]);
             });
