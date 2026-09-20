@@ -290,8 +290,8 @@
         },
         {
           "path": "test_quotas.py",
-          "sha256": "91f4bad8efa803db9e8d884a78d501044271e2068323c7af17837c6a4e585b1a",
-          "size": 75668
+          "sha256": "b799c3ba5551b4f5f01d21c0c2eee22bbfd0aa81adc718472f28ed9dbaeee494",
+          "size": 75732
         },
         {
           "path": "widget.js",
@@ -753,31 +753,6 @@
           "size": 4584
         },
         {
-          "path": "tests/.pytest_cache/.gitignore",
-          "sha256": "3ed731b65d06150c138e2dadb0be0697550888a6b47eb8c45ecc9adba8b8e9bd",
-          "size": 37
-        },
-        {
-          "path": "tests/.pytest_cache/CACHEDIR.TAG",
-          "sha256": "37dc88ef9a0abeddbe81053a6dd8fdfb13afb613045ea1eb4a5c815a74a3bde4",
-          "size": 191
-        },
-        {
-          "path": "tests/.pytest_cache/README.md",
-          "sha256": "73fd6fccdd802c419a6b2d983d6c3173b7da97558ac4b589edec2dfe443db9ad",
-          "size": 302
-        },
-        {
-          "path": "tests/.pytest_cache/v/cache/lastfailed",
-          "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
-          "size": 2
-        },
-        {
-          "path": "tests/.pytest_cache/v/cache/nodeids",
-          "sha256": "83c880995ce5903a1e2711bb440c5db1b212c02b3d33b9f288f74f35815c80c1",
-          "size": 8211
-        },
-        {
           "path": "tests/test_reader.py",
           "sha256": "36ec1e8a65253bd246b6883cf3ac41c4328eff86752785c962e367d3fa041077",
           "size": 101472
@@ -799,8 +774,8 @@
         },
         {
           "path": "widget.js",
-          "sha256": "db129bfb8588115c82714edc4fa7856d272998f5fcbdbdb2edfe36adc0d0a386",
-          "size": 135308
+          "sha256": "4076456b2b7aa9e79a6b1c719536bf0526931491dd9bf361bd5195721a3c7a4a",
+          "size": 135440
         }
       ],
       "name": "memory-atlas",
