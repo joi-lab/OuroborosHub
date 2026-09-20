@@ -12,9 +12,22 @@ permissions:
   - route
   - widget
 env_from_settings: []
+ui_tab:
+  tab_id: cache_efficiency
+  title: Cache Efficiency Snapshot
+  icon: activity
+  render:
+    kind: module
+    entry: widget.js
+    appearance: host
+    span: 2
 ---
 
 # Cache Efficiency Snapshot
+
+## Host appearance
+
+This module opts into the host-resolved Light/Dark theme through the optional `OuroborosWidget.onTheme` bridge. Older hosts keep the existing dark palette. Theme changes update presentation in place and disposal unsubscribes the listener.
 
 A read-only dashboard over Ouroboros's own usage records. Requests come from
 the per-call `llm_usage` events in `logs/events.jsonl` and its rotated

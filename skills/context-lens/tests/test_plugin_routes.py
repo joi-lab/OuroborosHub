@@ -158,6 +158,7 @@ class TestRegistration(RouteTestCase):
         render = api.tabs["lens"]["render"]
         self.assertEqual(render["kind"], "module")
         self.assertEqual(render["entry"], "widget.js")
+        self.assertEqual(render["appearance"], "host")
         self.assertEqual(render["start"], "auto")
         self.assertEqual(render["height"], 760)
         self.assertIsNotNone(render["height"])

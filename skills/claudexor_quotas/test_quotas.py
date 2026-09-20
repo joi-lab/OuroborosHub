@@ -664,6 +664,7 @@ def test_real_plugin_routes_keep_get_passive_and_post_foreground(monkeypatch):
     api = _MockAPI()
     plugin.register(api)
     assert api.routes["quotas"]["methods"] == ("GET",)
+    assert api.tabs["quotas"]["render"]["appearance"] == "host"
     assert api.routes["refresh"]["methods"] == ("POST",)
 
     assert api.routes["quotas"]["handler"]({})["ok"] is True

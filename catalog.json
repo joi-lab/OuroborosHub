@@ -226,23 +226,23 @@
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "19d269f9a98cf4f54d2dca570cdec32e79d959dc735ff90e5516e6ff45ef9b9f",
-          "size": 4475
+          "sha256": "7e6b11ec9fc46e6be1ff1745514c7e23ae2103032ef1e5166384ae3ea6b4244c",
+          "size": 4903
         },
         {
           "path": "plugin.py",
-          "sha256": "f4a0c3d06c1dae879dc1c3bb6308c1d9b8276ab39b0efb3e80a07df41bb7c5da",
-          "size": 26119
+          "sha256": "8be35c3263fb98a4fd079179a39474964355f00dfaa48e0e024b1a011e00ecd1",
+          "size": 26141
         },
         {
           "path": "test_cache_efficiency.py",
-          "sha256": "d2b3f2ea442be68e1a247bc8b681b93696e08b77384aeb7de4918fcef7f6c698",
-          "size": 27246
+          "sha256": "b3828410b9d6aecac23a5275159d90696c6909f914b49c0bbd0415a41fc9589c",
+          "size": 27323
         },
         {
           "path": "widget.js",
-          "sha256": "62a1637e945367f3215c312176f059440cfbda117f61b3197bfa46f3bdf41109",
-          "size": 34628
+          "sha256": "28582b9c0e81dc226d598d6773a4a7a0b040689628a3139fdd1ed922534642a0",
+          "size": 37560
         }
       ],
       "name": "cache_efficiency_snapshot",
@@ -280,13 +280,13 @@
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "0b319175c73a71181785fb39d3eb024481f625543f310b0265f1e9cf0b1f33a4",
-          "size": 9268
+          "sha256": "db234b31f3cc5bb08f2502b998a130ae2b042b380f3ab5bd16b38f984992f378",
+          "size": 9549
         },
         {
           "path": "plugin.py",
-          "sha256": "7ddbfd388cdffcfc8992c78fde00ad301e13df9bc523ebc00ea4abd95dd4d77b",
-          "size": 31753
+          "sha256": "73fa0a5d8f171740e6873cd1a7e82058dd818acdaa93422ddadf9d7466a4c401",
+          "size": 31775
         },
         {
           "path": "test_quotas.py",
@@ -295,8 +295,8 @@
         },
         {
           "path": "widget.js",
-          "sha256": "14d0ff6b3e5eeb6cc3be1887788fb5cacdbf87b6d1b26490af0f1aafa2f3b486",
-          "size": 169896
+          "sha256": "fa05062ce15e242507a5396e05485bd3964716b71c263a23176d56562ec06bd3",
+          "size": 171361
         }
       ],
       "name": "claudexor_quotas",
@@ -310,8 +310,8 @@
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "066b35fa1d32cc22c024032e4e861f34c922a7f2737d7d484e7440cdab92a8dc",
-          "size": 30885
+          "sha256": "2bfc8a5098f0b93f2b9baa0d7dd82dbd85b16fa14a118f62dd771a0fbeb30810",
+          "size": 31166
         },
         {
           "path": "lens_core.py",
@@ -320,8 +320,8 @@
         },
         {
           "path": "plugin.py",
-          "sha256": "881ea7f283785060af25a8e7fe61937e6fbb4bdfb8b17009fc54db1eb3c3beb5",
-          "size": 8002
+          "sha256": "41ee8a35db43cb68b03c8706d4a500769de2a36a701d17408af89de399874135",
+          "size": 8036
         },
         {
           "path": "tests/test_lens_core.py",
@@ -330,8 +330,8 @@
         },
         {
           "path": "tests/test_plugin_routes.py",
-          "sha256": "7b5ba7b2290686d068cffb3b490526404a3330392fc2037e3c730412c75b7163",
-          "size": 24657
+          "sha256": "f8ca31c35f1346b743537f604913038e40912a000c61a13366baf4d8ca48058d",
+          "size": 24712
         },
         {
           "path": "tests/test_widget_contract.py",
@@ -345,8 +345,8 @@
         },
         {
           "path": "widget.js",
-          "sha256": "d833a223d425adc9e105d31e40015737057d7ea9f8fdb98bf2700ccdb586cabd",
-          "size": 73641
+          "sha256": "ac846dda9f7cb178306024d66f5871c29148af6cae98fd64954ed490a22bc820",
+          "size": 76801
         }
       ],
       "name": "context-lens",
@@ -709,8 +709,8 @@
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "c66de8a04f701d5d4097fe3bfb358f4b457311100c3da44a57692937b065b2dd",
-          "size": 6200
+          "sha256": "8ba9911987d38994136ab922e3565e410f4c02f7d0604db3d0be3a0ed0822ca3",
+          "size": 6481
         },
         {
           "path": "docs/api-contract.md",
@@ -749,8 +749,33 @@
         },
         {
           "path": "plugin.py",
-          "sha256": "ef62d180596fd89fbc81b44412cfdfc7f44e769477aa0009643985f8612cca31",
-          "size": 4562
+          "sha256": "2c8e17f4b35e67a15819ab829ded195a06dcc7a5e13a200000a3e036acfa48b1",
+          "size": 4584
+        },
+        {
+          "path": "tests/.pytest_cache/.gitignore",
+          "sha256": "3ed731b65d06150c138e2dadb0be0697550888a6b47eb8c45ecc9adba8b8e9bd",
+          "size": 37
+        },
+        {
+          "path": "tests/.pytest_cache/CACHEDIR.TAG",
+          "sha256": "37dc88ef9a0abeddbe81053a6dd8fdfb13afb613045ea1eb4a5c815a74a3bde4",
+          "size": 191
+        },
+        {
+          "path": "tests/.pytest_cache/README.md",
+          "sha256": "73fd6fccdd802c419a6b2d983d6c3173b7da97558ac4b589edec2dfe443db9ad",
+          "size": 302
+        },
+        {
+          "path": "tests/.pytest_cache/v/cache/lastfailed",
+          "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+          "size": 2
+        },
+        {
+          "path": "tests/.pytest_cache/v/cache/nodeids",
+          "sha256": "83c880995ce5903a1e2711bb440c5db1b212c02b3d33b9f288f74f35815c80c1",
+          "size": 8211
         },
         {
           "path": "tests/test_reader.py",
@@ -774,8 +799,8 @@
         },
         {
           "path": "widget.js",
-          "sha256": "955cab80ae9e0d0d08fe9a92d65d3a054d61e3a2d6b44489471f34dbb5b9a19a",
-          "size": 130620
+          "sha256": "db129bfb8588115c82714edc4fa7856d272998f5fcbdbdb2edfe36adc0d0a386",
+          "size": 135308
         }
       ],
       "name": "memory-atlas",
@@ -1058,8 +1083,8 @@
         },
         {
           "path": "SKILL.md",
-          "sha256": "64e145038697101c035feaf86983f4bab0a4d8cb534c3acaccb10a5b1c341a79",
-          "size": 4443
+          "sha256": "8b8599e9440976b91c2c4987444146c84e2b11f6553098d84783158d62077a67",
+          "size": 4724
         },
         {
           "path": "accounting.py",
@@ -1078,8 +1103,8 @@
         },
         {
           "path": "plugin.py",
-          "sha256": "b44b754857e404d80eb47fbc7c3551053f74737621bdc4f0065e6c9aa9547c34",
-          "size": 12299
+          "sha256": "a20b506eea7b25ea301ac9fd198138ccc883e45ab05192118365c2b477d73e45",
+          "size": 12321
         },
         {
           "path": "tests/oracle.py",
@@ -1098,8 +1123,8 @@
         },
         {
           "path": "tests/test_plugin.py",
-          "sha256": "77a621f497ea2b97f568f332b7002ee7154191ba89700251d9db5dc457ac8952",
-          "size": 25279
+          "sha256": "d5a65ccdeccae06a70f6bdd823ef4461e94e2dfd788b618dfb098f8077d63f07",
+          "size": 25301
         },
         {
           "path": "tests/widget_contract.cjs",
@@ -1108,8 +1133,8 @@
         },
         {
           "path": "widget.js",
-          "sha256": "eea0325924990b5688cd285528ccc795f88245cfeae557a5e5cb06a1097eb630",
-          "size": 67400
+          "sha256": "579eb0d17eb9d22521a53e0b503f65dc69bb8582f4eedfacbe704ff858e5c59c",
+          "size": 68932
         }
       ],
       "name": "token-usage",

@@ -14,12 +14,17 @@ ui_tab:
   render:
     kind: module
     entry: widget.js
+    appearance: host
     start: manual
     height: 580
     span: 2
 ---
 
 # Memory Atlas
+
+## Host appearance
+
+This module opts into the host-resolved Light/Dark theme through the optional `OuroborosWidget.onTheme` bridge. Older hosts keep the existing dark palette. Theme changes update presentation in place and disposal unsubscribes the listener.
 
 Obtain the canonical serving-process data directory from
 `api.get_runtime_info()["data_dir"]` and fail closed if it is invalid. Expose only

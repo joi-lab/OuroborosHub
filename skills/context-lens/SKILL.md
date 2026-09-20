@@ -20,12 +20,17 @@ ui_tab:
   render:
     kind: module
     entry: widget.js
+    appearance: host
     start: auto
     span: 2
     height: 760
 ---
 
 # Context Lens
+
+## Host appearance
+
+This module opts into the host-resolved Light/Dark theme through the optional `OuroborosWidget.onTheme` bridge. Older hosts keep the existing dark palette. Theme changes update presentation in place and disposal unsubscribes the listener.
 
 A Widgets card that answers one question about this install: **how large were
 the inputs of recent model requests, how much do they vary, and where does the
