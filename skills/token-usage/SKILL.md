@@ -1,7 +1,7 @@
 ---
 name: token-usage
 description: Token Observatory — Liquid Glass dashboard for recorded Ouroboros token usage, tasks and models.
-version: 1.1.0
+version: 1.1.1
 type: extension
 runtime: python3
 entry: plugin.py
@@ -18,12 +18,17 @@ ui_tab:
   render:
     kind: module
     entry: widget.js
+    appearance: host
     start: manual
     height: 560
     span: 2
 ---
 
 # Token Observatory
+
+## Host appearance
+
+This module opts into the host-resolved Light/Dark theme through the optional `OuroborosWidget.onTheme` bridge. Older hosts keep the existing dark palette. Theme changes update presentation in place and disposal unsubscribes the listener.
 
 Independent Widgets dashboard for recorded Ouroboros usage. Start **Token Observatory** in Widgets after the host has reviewed, granted and enabled this extension. The dashboard does not call a language model.
 

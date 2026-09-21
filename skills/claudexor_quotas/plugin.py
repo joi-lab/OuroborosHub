@@ -822,5 +822,5 @@ def register(api: Any) -> None:
         "quotas",
         "Claudexor Quotas",
         icon="gauge",
-        render={"kind": "module", "entry": "widget.js", "span": 2},
+        render={"kind": "module", "entry": "widget.js", "appearance": "host", "span": 2},
     )

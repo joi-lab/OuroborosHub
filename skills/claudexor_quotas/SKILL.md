@@ -1,7 +1,7 @@
 ---
 name: claudexor_quotas
 description: Quota widget showing fresh and last-known limits for every authorized Claudexor account, with honest foreground refresh and per-facet read state. Writes nothing but the reader's display choices, into its own state directory.
-version: 0.5.0
+version: 0.5.1
 type: extension
 runtime: python3
 entry: plugin.py
@@ -18,9 +18,14 @@ ui_tab:
   render:
     kind: module
     entry: widget.js
+    appearance: host
 ---
 
-# Claudexor Quotas (v0.5.0)
+# Claudexor Quotas (v0.5.1)
+
+## Host appearance
+
+This module opts into the host-resolved Light/Dark theme through the optional `OuroborosWidget.onTheme` bridge. Older hosts keep the existing dark palette. Theme changes update presentation in place and disposal unsubscribes the listener.
 
 A projection of the host's own account surface. Cached projection reads remain
 read-only. The owner's explicit Refresh button invokes the host's dedicated

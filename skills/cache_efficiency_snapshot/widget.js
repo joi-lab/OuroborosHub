@@ -1,6 +1,6 @@
 /**
  * Cache Efficiency Snapshot — Standalone Module Widget
- * Dark Glassmorphic Dashboard with Canvas 2D Charts and Multi-Timeframe Analytics.
+ * Theme-aware Dashboard with Canvas 2D Charts and Multi-Timeframe Analytics.
  * Zero external CDN dependencies.
  */
 (function () {
@@ -10,11 +10,35 @@
   // Injected Scoped CSS
   const style = document.createElement('style');
   style.textContent = `
+    :root {
+      color-scheme: dark;
+      --ces-background: #0d0b0f; --ces-text: #f8fafc; --ces-value: #ffffff;
+      --ces-body: #e2e8f0; --ces-muted: #94a3b8; --ces-slate: #64748b;
+      --ces-green: #34d399; --ces-cyan: #38bdf8; --ces-violet: #a855f7;
+      --ces-accent: #e85d6f; --ces-danger: #f43f5e; --ces-error: #fca5a5; --ces-amber: #c69245;
+      --ces-ink-rgb: 255, 255, 255; --ces-base-rgb: 13, 11, 15;
+      --ces-surface-rgb: 23, 18, 28; --ces-tooltip-rgb: 17, 13, 22;
+      --ces-soft-accent-rgb: 240, 122, 134; --ces-accent-rgb: 232, 93, 111;
+      --ces-danger-rgb: 244, 63, 94; --ces-cyan-rgb: 56, 189, 248; --ces-shadow-rgb: 0, 0, 0;
+      --ces-grid: rgba(var(--ces-ink-rgb), 0.06);
+      --ces-crosshair: rgba(var(--ces-soft-accent-rgb), 0.45);
+    }
+    :root[data-theme=light] {
+      color-scheme: light;
+      --ces-background: #f8fafc; --ces-text: #18212f; --ces-value: #0f172a;
+      --ces-body: #334155; --ces-muted: #526174; --ces-slate: #64748b;
+      --ces-green: #047857; --ces-cyan: #0369a1; --ces-violet: #7e22ce;
+      --ces-accent: #b82f43; --ces-danger: #be123c; --ces-error: #9f1239; --ces-amber: #92600c;
+      --ces-ink-rgb: 15, 23, 42; --ces-base-rgb: 241, 245, 249;
+      --ces-surface-rgb: 255, 255, 255; --ces-tooltip-rgb: 255, 255, 255;
+      --ces-soft-accent-rgb: 184, 47, 67; --ces-accent-rgb: 184, 47, 67;
+      --ces-danger-rgb: 190, 18, 60; --ces-cyan-rgb: 3, 105, 161; --ces-shadow-rgb: 148, 163, 184;
+    }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body, #root {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'SF Pro Display', Inter, sans-serif;
-      background: #0d0b0f;
-      color: #f8fafc;
+      background: var(--ces-background);
+      color: var(--ces-text);
       width: 100%;
       min-height: 100%;
       overflow-x: hidden;
@@ -34,26 +58,26 @@
 
     /* Glass Card */
     .ces-card {
-      background: rgba(23, 18, 28, 0.75);
+      background: rgba(var(--ces-surface-rgb), 0.75);
       backdrop-filter: blur(16px);
       -webkit-backdrop-filter: blur(16px);
-      border: 1px solid rgba(240, 122, 134, 0.14);
+      border: 1px solid rgba(var(--ces-soft-accent-rgb), 0.14);
       border-radius: 12px;
       padding: 14px 18px;
-      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.36);
+      box-shadow: 0 8px 32px rgba(var(--ces-shadow-rgb), 0.36);
       transition: border-color 0.2s ease, box-shadow 0.2s ease;
     }
     .ces-card:hover {
-      border-color: rgba(240, 122, 134, 0.28);
-      box-shadow: 0 10px 36px rgba(232, 93, 111, 0.08);
+      border-color: rgba(var(--ces-soft-accent-rgb), 0.28);
+      box-shadow: 0 10px 36px rgba(var(--ces-accent-rgb), 0.08);
     }
 
     /* Error Banner */
     .ces-error-banner {
       display: none;
-      background: rgba(244, 63, 94, 0.16);
-      border: 1px solid rgba(244, 63, 94, 0.45);
-      color: #fca5a5;
+      background: rgba(var(--ces-danger-rgb), 0.16);
+      border: 1px solid rgba(var(--ces-danger-rgb), 0.45);
+      color: var(--ces-error);
       padding: 10px 14px;
       border-radius: 8px;
       font-size: 0.8rem;
@@ -79,31 +103,31 @@
       width: 10px;
       height: 10px;
       border-radius: 50%;
-      background: #34d399;
-      box-shadow: 0 0 12px #34d399;
+      background: var(--ces-green);
+      box-shadow: 0 0 12px var(--ces-green);
       animation: ces-pulse-glow 2s infinite ease-in-out;
     }
     @keyframes ces-pulse-glow {
       0%, 100% { transform: scale(1); opacity: 0.85; }
-      50% { transform: scale(1.3); opacity: 1; box-shadow: 0 0 16px #34d399; }
+      50% { transform: scale(1.3); opacity: 1; box-shadow: 0 0 16px var(--ces-green); }
     }
     .ces-pulse.error {
-      background: #f43f5e;
-      box-shadow: 0 0 12px #f43f5e;
+      background: var(--ces-danger);
+      box-shadow: 0 0 12px var(--ces-danger);
       animation: none;
     }
     .ces-title {
       font-size: 1.12rem;
       font-weight: 700;
       letter-spacing: -0.02em;
-      color: #f8fafc;
+      color: var(--ces-text);
       display: flex;
       align-items: center;
       gap: 8px;
     }
     .ces-subtitle {
       font-size: 0.76rem;
-      color: #94a3b8;
+      color: var(--ces-muted);
       margin-top: 2px;
     }
 
@@ -116,15 +140,15 @@
     }
     .ces-timeframe-group {
       display: inline-flex;
-      background: rgba(13, 11, 15, 0.85);
-      border: 1px solid rgba(255, 255, 255, 0.08);
+      background: rgba(var(--ces-base-rgb), 0.85);
+      border: 1px solid rgba(var(--ces-ink-rgb), 0.08);
       border-radius: 8px;
       padding: 3px;
     }
     .ces-tf-btn {
       background: transparent;
       border: none;
-      color: #94a3b8;
+      color: var(--ces-muted);
       font-size: 0.75rem;
       font-weight: 600;
       padding: 5px 12px;
@@ -133,20 +157,20 @@
       transition: all 0.15s ease;
     }
     .ces-tf-btn:hover {
-      color: #f8fafc;
-      background: rgba(255, 255, 255, 0.05);
+      color: var(--ces-text);
+      background: rgba(var(--ces-ink-rgb), 0.05);
     }
     .ces-tf-btn.active {
-      color: #f8fafc;
-      background: rgba(232, 93, 111, 0.22);
-      border: 1px solid rgba(232, 93, 111, 0.4);
-      box-shadow: 0 0 10px rgba(232, 93, 111, 0.25);
+      color: var(--ces-text);
+      background: rgba(var(--ces-accent-rgb), 0.22);
+      border: 1px solid rgba(var(--ces-accent-rgb), 0.4);
+      box-shadow: 0 0 10px rgba(var(--ces-accent-rgb), 0.25);
     }
 
     .ces-btn {
-      background: rgba(23, 18, 28, 0.9);
-      border: 1px solid rgba(240, 122, 134, 0.2);
-      color: #f8fafc;
+      background: rgba(var(--ces-surface-rgb), 0.9);
+      border: 1px solid rgba(var(--ces-soft-accent-rgb), 0.2);
+      color: var(--ces-text);
       font-size: 0.78rem;
       font-weight: 600;
       padding: 6px 14px;
@@ -158,8 +182,8 @@
       transition: all 0.2s ease;
     }
     .ces-btn:hover {
-      background: rgba(232, 93, 111, 0.15);
-      border-color: rgba(232, 93, 111, 0.45);
+      background: rgba(var(--ces-accent-rgb), 0.15);
+      border-color: rgba(var(--ces-accent-rgb), 0.45);
     }
     .ces-btn:active { transform: scale(0.97); }
     .ces-btn.spinning svg {
@@ -188,10 +212,10 @@
       width: 4px;
       border-radius: 4px 0 0 4px;
     }
-    .ces-kpi-card.crimson::before { background: #e85d6f; box-shadow: 0 0 8px #e85d6f; }
-    .ces-kpi-card.cyan::before { background: #38bdf8; box-shadow: 0 0 8px #38bdf8; }
-    .ces-kpi-card.emerald::before { background: #34d399; box-shadow: 0 0 8px #34d399; }
-    .ces-kpi-card.violet::before { background: #a855f7; box-shadow: 0 0 8px #a855f7; }
+    .ces-kpi-card.crimson::before { background: var(--ces-accent); box-shadow: 0 0 8px var(--ces-accent); }
+    .ces-kpi-card.cyan::before { background: var(--ces-cyan); box-shadow: 0 0 8px var(--ces-cyan); }
+    .ces-kpi-card.emerald::before { background: var(--ces-green); box-shadow: 0 0 8px var(--ces-green); }
+    .ces-kpi-card.violet::before { background: var(--ces-violet); box-shadow: 0 0 8px var(--ces-violet); }
 
     .ces-kpi-header {
       display: flex;
@@ -201,7 +225,7 @@
     .ces-kpi-label {
       font-size: 0.74rem;
       font-weight: 600;
-      color: #94a3b8;
+      color: var(--ces-muted);
       text-transform: uppercase;
       letter-spacing: 0.04em;
     }
@@ -210,14 +234,14 @@
       font-weight: 700;
       padding: 2px 7px;
       border-radius: 10px;
-      background: rgba(255, 255, 255, 0.08);
-      color: #f8fafc;
+      background: rgba(var(--ces-ink-rgb), 0.08);
+      color: var(--ces-text);
     }
     .ces-kpi-val {
       font-size: 1.75rem;
       font-weight: 800;
       letter-spacing: -0.03em;
-      color: #ffffff;
+      color: var(--ces-value);
       font-variant-numeric: tabular-nums;
       display: flex;
       align-items: baseline;
@@ -226,11 +250,11 @@
     .ces-kpi-unit {
       font-size: 0.95rem;
       font-weight: 600;
-      color: #94a3b8;
+      color: var(--ces-muted);
     }
     .ces-kpi-sub {
       font-size: 0.74rem;
-      color: #94a3b8;
+      color: var(--ces-muted);
       display: flex;
       align-items: center;
       gap: 5px;
@@ -252,19 +276,19 @@
     .ces-chart-title {
       font-size: 0.92rem;
       font-weight: 700;
-      color: #f8fafc;
+      color: var(--ces-text);
     }
     .ces-chart-mode-group {
       display: inline-flex;
-      background: rgba(13, 11, 15, 0.85);
-      border: 1px solid rgba(255, 255, 255, 0.08);
+      background: rgba(var(--ces-base-rgb), 0.85);
+      border: 1px solid rgba(var(--ces-ink-rgb), 0.08);
       border-radius: 6px;
       padding: 2px;
     }
     .ces-chart-mode-btn {
       background: transparent;
       border: none;
-      color: #94a3b8;
+      color: var(--ces-muted);
       font-size: 0.72rem;
       font-weight: 600;
       padding: 4px 10px;
@@ -272,17 +296,17 @@
       cursor: pointer;
     }
     .ces-chart-mode-btn.active {
-      color: #38bdf8;
-      background: rgba(56, 189, 248, 0.15);
+      color: var(--ces-cyan);
+      background: rgba(var(--ces-cyan-rgb), 0.15);
     }
 
     .ces-canvas-wrap {
       position: relative;
       width: 100%;
       height: 230px;
-      background: rgba(13, 11, 15, 0.5);
+      background: rgba(var(--ces-base-rgb), 0.5);
       border-radius: 10px;
-      border: 1px solid rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(var(--ces-ink-rgb), 0.04);
       overflow: hidden;
     }
     canvas {
@@ -294,14 +318,14 @@
       position: absolute;
       pointer-events: none;
       display: none;
-      background: rgba(17, 13, 22, 0.94);
+      background: rgba(var(--ces-tooltip-rgb), 0.94);
       backdrop-filter: blur(12px);
-      border: 1px solid rgba(240, 122, 134, 0.3);
-      box-shadow: 0 6px 20px rgba(0,0,0,0.6);
+      border: 1px solid rgba(var(--ces-soft-accent-rgb), 0.3);
+      box-shadow: 0 6px 20px rgba(var(--ces-shadow-rgb),0.6);
       border-radius: 8px;
       padding: 8px 12px;
       font-size: 0.74rem;
-      color: #f8fafc;
+      color: var(--ces-text);
       z-index: 100;
       white-space: nowrap;
       transform: translate(-50%, -110%);
@@ -323,29 +347,29 @@
     table.ces-table th {
       padding: 8px 10px;
       font-weight: 600;
-      color: #94a3b8;
+      color: var(--ces-muted);
       text-transform: uppercase;
       font-size: 0.68rem;
       letter-spacing: 0.05em;
-      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+      border-bottom: 1px solid rgba(var(--ces-ink-rgb), 0.08);
       cursor: pointer;
       user-select: none;
     }
-    table.ces-table th:hover { color: #f8fafc; }
+    table.ces-table th:hover { color: var(--ces-text); }
     table.ces-table td {
       padding: 10px;
-      border-bottom: 1px solid rgba(255, 255, 255, 0.04);
-      color: #e2e8f0;
+      border-bottom: 1px solid rgba(var(--ces-ink-rgb), 0.04);
+      color: var(--ces-body);
       font-variant-numeric: tabular-nums;
     }
     table.ces-table tr:hover td {
-      background: rgba(255, 255, 255, 0.02);
+      background: rgba(var(--ces-ink-rgb), 0.02);
     }
     .ces-bar-wrap {
       width: 100%;
       min-width: 90px;
       height: 5px;
-      background: rgba(255, 255, 255, 0.08);
+      background: rgba(var(--ces-ink-rgb), 0.08);
       border-radius: 3px;
       overflow: hidden;
       margin-top: 4px;
@@ -353,18 +377,18 @@
     .ces-bar-fill {
       height: 100%;
       border-radius: 3px;
-      background: linear-gradient(90deg, #e85d6f, #38bdf8);
+      background: linear-gradient(90deg, var(--ces-accent), var(--ces-cyan));
     }
 
     /* Diagnostics Drawer */
     details.ces-drawer {
-      border-top: 1px solid rgba(255, 255, 255, 0.06);
+      border-top: 1px solid rgba(var(--ces-ink-rgb), 0.06);
       padding-top: 8px;
     }
     summary.ces-drawer-summary {
       font-size: 0.76rem;
       font-weight: 600;
-      color: #94a3b8;
+      color: var(--ces-muted);
       cursor: pointer;
       list-style: none;
       display: flex;
@@ -373,24 +397,24 @@
       user-select: none;
     }
     summary.ces-drawer-summary::-webkit-details-marker { display: none; }
-    summary.ces-drawer-summary:hover { color: #f8fafc; }
+    summary.ces-drawer-summary:hover { color: var(--ces-text); }
     .ces-drawer-content {
       margin-top: 10px;
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
       gap: 10px;
       font-size: 0.74rem;
-      color: #94a3b8;
+      color: var(--ces-muted);
     }
     .ces-diag-item {
-      background: rgba(13, 11, 15, 0.6);
+      background: rgba(var(--ces-base-rgb), 0.6);
       padding: 7px 10px;
       border-radius: 6px;
-      border: 1px solid rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(var(--ces-ink-rgb), 0.03);
     }
-    .ces-diag-item b { color: #f8fafc; }
-    .ces-note { color: #94a3b8; font-size: 12px; line-height: 1.5; }
-    .ces-route { display: block; color: #94a3b8; font-size: 12px; font-weight: 400; overflow-wrap: anywhere; margin-top: 4px; }
+    .ces-diag-item b { color: var(--ces-text); }
+    .ces-note { color: var(--ces-muted); font-size: 12px; line-height: 1.5; }
+    .ces-route { display: block; color: var(--ces-muted); font-size: 12px; font-weight: 400; overflow-wrap: anywhere; margin-top: 4px; }
     .ces-kpi-sub { flex-wrap: wrap; line-height: 1.4; }
     .ces-tooltip { max-width: calc(100% - 16px); white-space: normal; transform: none; }
     @media (max-width: 540px) {
@@ -505,7 +529,7 @@
         <div class="ces-card ces-kpi-card emerald">
           <div class="ces-kpi-header">
             <span class="ces-kpi-label">Measurement Coverage</span>
-            <span class="ces-kpi-badge" style="color:#34d399">Records</span>
+            <span class="ces-kpi-badge" style="color:var(--ces-green)">Records</span>
           </div>
           <div class="ces-kpi-val"><span id="kpiCoverage">--</span></div>
           <div class="ces-kpi-sub" id="kpiCoverageSub">Unknown measurements stay unknown</div>
@@ -553,7 +577,7 @@
               </tr>
             </thead>
             <tbody id="modelsTbody">
-              <tr><td colspan="6" style="text-align:center; color:#64748b;">Loading analytics data...</td></tr>
+              <tr><td colspan="6" style="text-align:center; color:var(--ces-slate);">Loading analytics data...</td></tr>
             </tbody>
           </table>
         </div>
@@ -578,8 +602,18 @@
   // Canvas & Interaction Engine
   const canvas = document.getElementById('chartCanvas');
   const ctx = canvas.getContext('2d');
+  let paintDpr = 1;
   const canvasWrap = document.getElementById('canvasWrap');
   const tooltip = document.getElementById('chartTooltip');
+  let colors;
+  function readChartColors() {
+    const css = getComputedStyle(document.documentElement);
+    colors = {};
+    for (const name of ['background', 'muted', 'slate', 'green', 'cyan', 'accent', 'amber', 'grid', 'crosshair']) {
+      colors[name] = css.getPropertyValue('--ces-' + name).trim();
+    }
+  }
+  readChartColors();
 
   let mouseX = -1;
   let isHovering = false;
@@ -595,6 +629,7 @@
       ctx.setTransform(1, 0, 0, 1, 0, 0);
     }
     ctx.scale(dpr, dpr);
+    paintDpr = dpr;
     renderChart();
   }
 
@@ -635,15 +670,17 @@
   });
 
   function renderChart() {
-    const rect = canvasWrap.getBoundingClientRect();
-    const w = rect.width;
-    const h = rect.height;
+    // A retained frame can receive a theme while its host page is hidden.
+    // Its layout rect is then zero, but the canvas keeps its last paint size.
+    // Use the scale applied at resize, even if the display DPR since changed.
+    const w = canvas.width / paintDpr;
+    const h = canvas.height / paintDpr;
     ctx.clearRect(0, 0, w, h);
 
     if (!state.data || !state.data.buckets || state.data.buckets.length === 0) {
       // Nothing left to inspect: a stale reading would describe a vanished bin.
       clearInspection();
-      ctx.fillStyle = '#64748b';
+      ctx.fillStyle = colors.slate;
       ctx.font = '12px system-ui';
       ctx.textAlign = 'center';
       ctx.fillText(state.errorMessage ? 'Data unavailable: ' + state.errorMessage : 'No activity records in this timeframe', w / 2, h / 2);
@@ -663,9 +700,9 @@
   }
 
   function drawAxes(buckets, points, pad, cw, ch, w, h, maximum, percentage) {
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.06)';
+    ctx.strokeStyle = colors.grid;
     ctx.lineWidth = 1;
-    ctx.fillStyle = '#94a3b8';
+    ctx.fillStyle = colors.muted;
     ctx.font = '10px monospace';
     ctx.textAlign = 'right';
     for (let index = 0; index <= 4; index++) {
@@ -688,7 +725,7 @@
     if (!isHovering || !points.length) return;
     const closest = points.reduce((best, point) => Math.abs(mouseX - point.x) < Math.abs(mouseX - best.x) ? point : best);
     const data = closest.data;
-    ctx.strokeStyle = 'rgba(240, 122, 134, 0.45)';
+    ctx.strokeStyle = colors.crosshair;
     ctx.setLineDash([3, 3]);
     ctx.beginPath();
     ctx.moveTo(closest.x, pad.top);
@@ -722,21 +759,21 @@
       else ctx.moveTo(point.x, point.y);
       previous = point;
     }
-    ctx.strokeStyle = '#e85d6f';
+    ctx.strokeStyle = colors.accent;
     ctx.lineWidth = 2.5;
     ctx.stroke();
     for (const point of points) {
       if (point.y === null) continue;
       ctx.beginPath();
       ctx.arc(point.x, point.y, 3, 0, Math.PI * 2);
-      ctx.fillStyle = '#0d0b0f';
+      ctx.fillStyle = colors.background;
       ctx.fill();
-      ctx.strokeStyle = '#38bdf8';
+      ctx.strokeStyle = colors.cyan;
       ctx.lineWidth = 1.5;
       ctx.stroke();
     }
     if (!points.some(point => point.y !== null)) {
-      ctx.fillStyle = '#94a3b8';
+      ctx.fillStyle = colors.muted;
       ctx.textAlign = 'center';
       ctx.fillText('No comparable cache measurements', pad.left + cw / 2, pad.top + ch / 2);
     }
@@ -750,7 +787,7 @@
     drawAxes(buckets, points, pad, cw, ch, w, h, maximum, false);
     buckets.forEach((bucket, index) => {
       let y = pad.top + ch;
-      for (const [value, color] of [[bucket.cached, '#34d399'], [bucket.uncached, '#64748b'], [bucket.unknown, '#c69245']]) {
+      for (const [value, color] of [[bucket.cached, colors.green], [bucket.uncached, colors.slate], [bucket.unknown, colors.amber]]) {
         const height = value / maximum * ch;
         y -= height;
         ctx.fillStyle = color;
@@ -860,21 +897,21 @@
     });
 
     if (models.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="6" style="text-align:center; color:#64748b;">No model activity in this timeframe</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="6" style="text-align:center; color:var(--ces-slate);">No model activity in this timeframe</td></tr>';
       return;
     }
 
     tbody.innerHTML = models.map(model => `
       <tr>
-        <td style="font-weight:600; color:#f8fafc;">
+        <td style="font-weight:600; color:var(--ces-text);">
           ${escapeHtml(model.model)}
           <span class="ces-route">${escapeHtml(model.provider)} · ${model.kind === 'subscription_session' ? 'Session aggregate · final reported model' : escapeHtml(model.kind)}</span>
           ${model.rate === null ? '' : `<div class="ces-bar-wrap"><div class="ces-bar-fill" style="width:${model.rate}%"></div></div>`}
         </td>
         <td>${counted(model.total_records, model.kind === 'attempt' ? 'request' : model.kind === 'subscription_session' ? 'session' : 'record')}</td>
         <td>${formatTokens(model.prompt_tokens)}</td>
-        <td style="color:#38bdf8">${formatTokens(model.cached_tokens)}</td>
-        <td><b style="color:#e85d6f">${formatRate(model.rate)}</b><span class="ces-route">${model.rate === null ? 'No comparable input' : `${formatTokens(model.eligible_cached_tokens)} / ${formatTokens(model.eligible_prompt_tokens)} measured`}</span></td>
+        <td style="color:var(--ces-cyan)">${formatTokens(model.cached_tokens)}</td>
+        <td><b style="color:var(--ces-accent)">${formatRate(model.rate)}</b><span class="ces-route">${model.rate === null ? 'No comparable input' : `${formatTokens(model.eligible_cached_tokens)} / ${formatTokens(model.eligible_prompt_tokens)} measured`}</span></td>
         <td>${model.measured_records} / ${model.total_records}<span class="ces-route">${model.unknown_total_records} unknown input · ${model.unknown_read_records} unknown reads</span></td>
       </tr>
     `).join('');
@@ -942,9 +979,19 @@
     }
   }
 
+  // Repaint only the existing canvas; controls, selection and scroll stay put.
+  const offTheme = window.OuroborosWidget && typeof window.OuroborosWidget.onTheme === 'function'
+    ? window.OuroborosWidget.onTheme(theme => {
+    if (state.disposed) return;
+    document.documentElement.dataset.theme = theme;
+    readChartColors();
+    renderChart();
+  }) : null;
+
   // Widget Disposal Hook
   window.__ouroWidgetOnDispose(function () {
     state.disposed = true;
+    if (typeof offTheme === 'function') offTheme();
     state.reqSequence += 1;
     stopPolling();
     window.removeEventListener('resize', resizeCanvas);

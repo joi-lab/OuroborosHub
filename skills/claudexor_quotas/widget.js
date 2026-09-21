@@ -86,6 +86,7 @@
     var lastGood = null;
     var lastGoodAt = 0;
     var stopped = false;
+    var themeOff = null;
     var inFlight = false;
     var settingsOpen = false;
     // The open tab is not remembered — the panel always opens on the one a
@@ -128,24 +129,25 @@
     var STYLE = [
         ':root{',
         'color-scheme:dark;',
-        '--bg-canvas:#0d0b0f;',
+        '--bg-canvas:#0d0b0f;--neutral-rgb:255,255,255;--popup:rgba(20,16,26,.97);',
+        '--warn-text:#fde68a;--bad-text:#fecdd3;--stale-text:#e5c27b;',
         '--bg-surface-inset:rgba(0, 0, 0, 0.30);',
         /* Glass is exactly three things: a light fill, a blurred backdrop and a
            hairline edge that is brighter along the top. No shadow, no glow. */
-        '--glass-fill:rgba(255, 255, 255, 0.05);',
+        '--glass-fill:rgba(var(--neutral-rgb), 0.05);',
         '--glass-blur:saturate(150%) blur(18px);',
-        '--glass-edge:rgba(255, 255, 255, 0.10);',
-        '--glass-edge-top:rgba(255, 255, 255, 0.16);',
+        '--glass-edge:rgba(var(--neutral-rgb), 0.10);',
+        '--glass-edge-top:rgba(var(--neutral-rgb), 0.16);',
         '--accent-core:#c93545;',
         /* A flat accent fill reads as a sticker; the vertical gradient plus a
            light top edge is what makes the button feel like glass. */
         '--accent-grad:linear-gradient(180deg, #d84152 0%, #b62c3c 100%);',
         '--accent-grad-hover:linear-gradient(180deg, #e04b5c 0%, #c53544 100%);',
-        '--accent-edge:rgba(255, 255, 255, 0.14);',
-        '--border-prominent:rgba(255, 255, 255, 0.20);',
+        '--accent-edge:rgba(var(--neutral-rgb), 0.14);',
+        '--border-prominent:rgba(var(--neutral-rgb), 0.20);',
         '--text-primary:#e2e8f0;',
-        '--text-secondary:rgba(255, 255, 255, 0.68);',
-        '--text-muted:rgba(255, 255, 255, 0.54);',
+        '--text-secondary:rgba(var(--neutral-rgb), 0.68);',
+        '--text-muted:rgba(var(--neutral-rgb), 0.54);',
         '--status-ok:#22c55e;--status-ok-bg:rgba(34, 197, 94, 0.13);',
         '--grad-ok:linear-gradient(90deg, #16a34a 0%, #4ade80 100%);',
         '--status-warn:#f59e0b;',
@@ -176,6 +178,13 @@
         '--font-mono:ui-monospace, "SF Mono", Menlo, Monaco, Consolas, "Liberation Mono", monospace;',
         '--transition-fast:0.15s ease;',
         '}',
+        ':root[data-theme=light]{color-scheme:light;--bg-canvas:#faf9f7;--neutral-rgb:28,25,29;',
+        '--bg-surface-inset:rgba(28,25,29,.05);--glass-fill:rgba(255,255,255,.72);',
+        '--glass-edge:rgba(28,25,29,.13);--glass-edge-top:rgba(255,255,255,.9);',
+        '--border-prominent:rgba(28,25,29,.3);--text-primary:#211f24;',
+        '--text-secondary:#56515b;--text-muted:#6b6470;--popup:rgba(255,255,255,.97);',
+        '--status-ok:#167347;--status-warn:#956000;--status-stale:#856000;',
+        '--status-bad:#b5293d;--warn-text:#795300;--bad-text:#a52336;--stale-text:#795300}',
         'body{margin:0;font:13px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;',
         /* The frame opens at 320px and grows to fit #root when the module asks.
            min-height keeps the usual case exactly one screen — the ground and
@@ -241,7 +250,7 @@
         '.pip.ok{background:var(--status-ok)}',
         '.pip.warn{background:var(--status-warn)}',
         '.pip.bad{background:var(--status-bad)}',
-        '.pip.muted{background:rgba(255, 255, 255, 0.30)}',
+        '.pip.muted{background:rgba(var(--neutral-rgb), 0.30)}',
         /* Inside the button and clear of the mark under it, which is a tighter
            fit than it looks. The buttons are pills 26 high, so their right edge
            is an arc of radius 13 — there is no corner to put a badge in, and a
@@ -310,7 +319,7 @@
            bars in the card, so a colour never means two different things. */
         /* Both selectors carry .progress-bar so that the shared rules below —
            written later in this sheet — cannot win on source order. */
-        '.progress-bar.spark{width:44px;height:5px;border-color:rgba(255, 255, 255, 0.14);flex:none;',
+        '.progress-bar.spark{width:44px;height:5px;border-color:rgba(var(--neutral-rgb), 0.14);flex:none;',
         'display:inline-block;vertical-align:middle}',
         '.acct-caret{display:flex;flex:none;color:var(--text-muted)}',
         /* Below this the button cannot hold a bar as well as a name and a
@@ -323,7 +332,7 @@
            lands on top of the list as a bright system stripe. Scrolling stays,
            only the stripe goes. */
         '.acct-pop{position:absolute;top:calc(var(--row-h) + 6px);left:0;right:0;z-index:40;padding:4px;',
-        'border-radius:var(--radius-md);background:rgba(20, 16, 26, 0.97);',
+        'border-radius:var(--radius-md);background:var(--popup);',
         /* The list runs down to just short of the bottom edge and scrolls
            inside itself rather than pushing the screen. A fixed 260 points
            made it scroll with a third of the frame empty underneath.
@@ -389,7 +398,7 @@
         '@media (max-width:420px){.acct-rl-in{display:none}}',
         /* A model name comes from the vendor with no length limit of its own;
            without a ceiling one long name pushes the whole row sideways. */
-        '.acct-cap{font-size:10px;color:var(--text-secondary);background:rgba(255, 255, 255, 0.07);',
+        '.acct-cap{font-size:10px;color:var(--text-secondary);background:rgba(var(--neutral-rgb), 0.07);',
         'max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;',
         'border-radius:var(--radius-sm);padding:0 5px}',
         '.acct-cap.exhausted{color:var(--status-bad);background:var(--status-bad-bg)}',
@@ -429,7 +438,7 @@
            and "Verification failed" beside a count and a rule is wider than
            that. The name gives way first, the count and the rule stay. */
         '.acct-sec-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
-        '.acct-sec-count{font-variant-numeric:tabular-nums;color:rgba(255, 255, 255, 0.38)}',
+        '.acct-sec-count{font-variant-numeric:tabular-nums;color:rgba(var(--neutral-rgb), 0.38)}',
         '.acct-sec-line{flex:1 1 auto;height:1px;background:var(--glass-edge)}',
         '.acct-sec.broken{background:rgba(201, 53, 69, 0.08);border-radius:var(--radius-sm);',
         'margin:4px 0;padding-bottom:2px}',
@@ -449,9 +458,9 @@
 
         /* Banners */
         '.banner{border-radius:var(--radius-md);padding:10px 14px;margin-bottom:12px;font-size:12px;',
-        'border:1px solid var(--status-warn-border);background:var(--status-warn-bg);color:#fde68a;',
+        'border:1px solid var(--status-warn-border);background:var(--status-warn-bg);color:var(--warn-text);',
         'display:flex;gap:10px;align-items:flex-start}',
-        '.banner.bad{border-color:var(--status-bad-border);background:var(--status-bad-bg);color:#fecdd3}',
+        '.banner.bad{border-color:var(--status-bad-border);background:var(--status-bad-bg);color:var(--bad-text)}',
         '.banner-icon{display:flex;line-height:1;margin-top:1px}',
 
         /* Status Pills & Chips */
@@ -476,7 +485,7 @@
         '.state-dot.ok{background:var(--status-ok);color:var(--status-ok)}',
         '.state-dot.warn{background:var(--status-warn);color:var(--status-warn)}',
         '.state-dot.bad{background:var(--accent-core);color:var(--accent-core)}',
-        '.state-dot.muted{background:rgba(255, 255, 255, 0.30);color:rgba(255, 255, 255, 0.30)}',
+        '.state-dot.muted{background:rgba(var(--neutral-rgb), 0.30);color:rgba(var(--neutral-rgb), 0.30)}',
         '.account-title-wrap{display:flex;align-items:center;gap:8px;flex-wrap:wrap}',
         '.account-meta{color:var(--text-muted);font-size:11px;margin:2px 0 10px;padding-left:13px;display:flex;align-items:center;',
         'gap:6px;flex-wrap:wrap}',
@@ -509,7 +518,7 @@
         '.tile-name{display:flex;align-items:center;gap:6px;min-width:0}',
         '.tile-len{color:var(--text-muted);white-space:nowrap}',
         '.tile-model{font-size:10px;font-weight:500;padding:1px 6px;border-radius:var(--radius-sm);min-width:0;',
-        'background:rgba(255, 255, 255, 0.07);color:var(--text-secondary);',
+        'background:rgba(var(--neutral-rgb), 0.07);color:var(--text-secondary);',
         'overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
         '.tile-model.spent{background:var(--status-bad-bg);color:var(--status-bad)}',
         '.tile-pct{white-space:nowrap;font-variant-numeric:tabular-nums}',
@@ -533,13 +542,13 @@
         /* 8px Gradient Progress Bars */
         '.progress-wrap{margin:6px 0 2px}',
         '.progress-bar{height:8px;border-radius:var(--radius-pill);background:var(--bg-surface-inset);',
-        'border:1px solid rgba(255, 255, 255, 0.05);overflow:hidden}',
+        'border:1px solid rgba(var(--neutral-rgb), 0.05);overflow:hidden}',
         '.progress-fill{height:100%;border-radius:var(--radius-pill);transition:width 0.6s cubic-bezier(0.16, 1, 0.3, 1)}',
         '.progress-fill.ok{background:var(--grad-ok)}',
         '.progress-fill.warn{background:var(--grad-warn)}',
         '.progress-fill.bad{background:var(--grad-bad)}',
         '.progress-fill.stale{background:linear-gradient(90deg, #9a6b21 0%, #d6a54a 100%)}',
-        '.progress-fill.unmetered{background:repeating-linear-gradient(45deg, rgba(255,255,255,0.10), rgba(255,255,255,0.10) 6px, rgba(255,255,255,0.04) 6px, rgba(255,255,255,0.04) 12px);width:100%}',
+        '.progress-fill.unmetered{background:repeating-linear-gradient(45deg, rgba(var(--neutral-rgb), 0.10), rgba(var(--neutral-rgb), 0.10) 6px, rgba(var(--neutral-rgb), 0.04) 6px, rgba(var(--neutral-rgb), 0.04) 12px);width:100%}',
 
         /* Window tiles — the grid gives them their place, the inset ground and
            a hairline edge give them their shape. Chips and stamps below are
@@ -551,26 +560,26 @@
         'font-size:11px;color:var(--text-muted);margin-top:6px}',
         '.quota-last-known{margin-top:10px;padding:9px 10px;border:1px solid rgba(214,165,74,0.34);',
         'border-radius:var(--radius-md);background:rgba(214,165,74,0.07)}',
-        '.last-known-copy{font-size:11px;color:#e5c27b}',
+        '.last-known-copy{font-size:11px;color:var(--stale-text)}',
         '.quota-tile.stale{border-color:rgba(214,165,74,0.30);background:rgba(214,165,74,0.06)}',
         '.quota-tile.stale .tile-pct,.quota-tile.stale .tile-when-word{color:var(--status-stale)!important}',
         '.quota-tile.stale .tile-model,.quota-tile.stale .model-chip,.quota-tile.stale .ticker{',
-        'color:#e5c27b;background:rgba(214,165,74,0.10)}',
+        'color:var(--stale-text);background:rgba(214,165,74,0.10)}',
         '.quota-observed{font-size:11px;color:var(--text-muted)}',
         '.quota-unavailable{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px;',
-        'font-size:11px;color:#fde68a}',
+        'font-size:11px;color:var(--warn-text)}',
         '.quota-action{padding:1px 7px;border-radius:var(--radius-pill);background:var(--status-warn-bg);',
-        'color:#fde68a}',
+        'color:var(--warn-text)}',
 
         /* Tickers & Monospace Counters */
         '.ticker{font-family:var(--font-mono);font-variant-numeric:tabular-nums;font-weight:500;',
-        'background:rgba(255,255,255,0.07);padding:1px 6px;border-radius:var(--radius-sm)}',
+        'background:rgba(var(--neutral-rgb), 0.07);padding:1px 6px;border-radius:var(--radius-sm)}',
         '.ticker.bad{color:var(--status-bad);background:var(--status-bad-bg)}',
 
         /* Model Chips */
         '.model-chips-wrap{display:flex;align-items:center;gap:4px;flex-wrap:wrap}',
         '.model-chip{display:inline-flex;align-items:center;font-size:11px;padding:1px 6px;',
-        'border-radius:var(--radius-sm);background:rgba(255,255,255,0.07);color:var(--text-secondary)}',
+        'border-radius:var(--radius-sm);background:rgba(var(--neutral-rgb), 0.07);color:var(--text-secondary)}',
         '.model-chip.exhausted{color:var(--status-bad);background:var(--status-bad-bg)}',
 
         /* Empty State */
@@ -659,11 +668,11 @@
            cannot be read at half width. */
         '.dens-pv{flex:none}',
         '.dens-pv .pv-dot{fill:var(--text-muted)}',
-        '.dens-pv .pv-name{fill:rgba(255, 255, 255, 0.28)}',
-        '.dens-pv .pv-bar{fill:rgba(255, 255, 255, 0.20)}',
+        '.dens-pv .pv-name{fill:rgba(var(--neutral-rgb), 0.28)}',
+        '.dens-pv .pv-bar{fill:rgba(var(--neutral-rgb), 0.20)}',
         '.dens-pv .pv-bar.spent{fill:var(--accent-core)}',
-        '.dens-pv .pv-line{fill:rgba(255, 255, 255, 0.18)}',
-        '.dens-pv .pv-line.strong{fill:rgba(255, 255, 255, 0.32)}',
+        '.dens-pv .pv-line{fill:rgba(var(--neutral-rgb), 0.18)}',
+        '.dens-pv .pv-line.strong{fill:rgba(var(--neutral-rgb), 0.32)}',
         /* One family per row: its mark and name on the left, its choice on the
            right, in the same capsule of pills the whole widget uses for a
            choice between a few things. */
@@ -699,10 +708,10 @@
            the same object in two places. */
         '.switch{position:relative;width:30px;height:17px;flex:none;padding:0;cursor:pointer;',
         'border-radius:var(--radius-pill);border:1px solid var(--glass-edge);',
-        'background:rgba(255, 255, 255, 0.14);transition:background var(--transition-fast)}',
+        'background:rgba(var(--neutral-rgb), 0.14);transition:background var(--transition-fast)}',
         '.switch.on{background:var(--accent-core);border-color:var(--accent-edge)}',
         '.switch-knob{position:absolute;top:2px;left:2px;width:11px;height:11px;border-radius:50%;',
-        'background:rgba(255, 255, 255, 0.70);transition:left var(--transition-fast),background var(--transition-fast)}',
+        'background:rgba(var(--neutral-rgb), 0.70);transition:left var(--transition-fast),background var(--transition-fast)}',
         '.switch.on .switch-knob{left:15px;background:#fff}',
     ].join('');
 
@@ -3077,6 +3086,7 @@
 
     function stop() {
         stopped = true;
+        if (themeOff) { themeOff(); themeOff = null; }
         generation++;
         if (dataTimer !== null) { window.clearInterval(dataTimer); dataTimer = null; }
         document.removeEventListener('click', onDocumentClick);
@@ -3103,6 +3113,12 @@
 
     function start() {
         installStyle();
+        // The host resolves Light/Dark/System; older hosts keep the original dark palette.
+        if (!themeOff && window.OuroborosWidget && typeof window.OuroborosWidget.onTheme === 'function') {
+            themeOff = window.OuroborosWidget.onTheme(function (theme) {
+                document.documentElement.dataset.theme = theme;
+            });
+        }
         document.addEventListener('click', onDocumentClick);
         document.addEventListener('keydown', onDocumentKey);
         if (dataTimer === null) {
@@ -3115,7 +3131,10 @@
 
     window.addEventListener('pagehide', stop);
     if (typeof window.__ouroWidgetOnDispose === 'function') {
-        window.__ouroWidgetOnDispose(flushPrefs);
+        window.__ouroWidgetOnDispose(function () {
+            if (themeOff) { themeOff(); themeOff = null; }
+            return flushPrefs();
+        });
     }
     // Restored from the back/forward cache the widget is otherwise dead for
     // good: the timer is gone and every answer is dropped by the stopped flag,

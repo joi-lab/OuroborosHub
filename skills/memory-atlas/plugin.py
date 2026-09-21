@@ -34,7 +34,7 @@ class MemoryAtlasPlugin:
                 self._disposers.append(result)
         result = api.register_ui_tab(
             "atlas", title="Memory Atlas", icon="◈",
-            render={"kind": "module", "entry": "widget.js", "start": "manual",
+            render={"kind": "module", "entry": "widget.js", "appearance": "host", "start": "manual",
                     "height": 580, "span": 2},
         )
         if callable(result):

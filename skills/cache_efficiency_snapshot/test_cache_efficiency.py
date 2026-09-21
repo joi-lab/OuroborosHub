@@ -508,6 +508,7 @@ def test_plugin_route_joins_usage_events_with_ledger_sessions_and_unload_clears(
     register(api)
     assert "data" in api.routes
     assert api.ui_tabs["cache_efficiency"]["render"]["kind"] == "module"
+    assert api.ui_tabs["cache_efficiency"]["render"]["appearance"] == "host"
 
     class MockRequest:
         query_params = {"timeframe": "1H"}
