@@ -1,8 +1,8 @@
 {
-  "description": "Official Ouroboros skills catalog.",
-  "name": "OuroborosHub",
-  "raw_base_url": "https://raw.githubusercontent.com/razzant/OuroborosHub/main",
   "schema_version": 1,
+  "name": "OuroborosHub",
+  "description": "Official Ouroboros skills catalog.",
+  "raw_base_url": "https://raw.githubusercontent.com/razzant/OuroborosHub/main",
   "skills": [
     {
       "description": "Agent-to-Agent protocol bridge for Ouroboros. Provides a local A2A-compatible server plus client tools for discovering and messaging other A2A agents.",
@@ -345,8 +345,8 @@
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "97bbfeebe9c89c354f39ac12392968835044bef3ee734e470f4bdc6a973ef7f3",
-          "size": 6526
+          "sha256": "59e478bcedcf3a389a567dd9b2fa316f3926de583b34a7b26d539a54d8495e52",
+          "size": 6606
         },
         {
           "path": "client.py",
@@ -355,8 +355,8 @@
         },
         {
           "path": "operations.py",
-          "sha256": "63d5fdd997f9239ebe906d1d2377ff340dd6998b90668bfb93940b329001b1c8",
-          "size": 13985
+          "sha256": "6566f6788a459488c18fe98053a84ffb5169984246293a6171b07df128a4c711",
+          "size": 14419
         },
         {
           "path": "plugin.py",
@@ -370,14 +370,14 @@
         },
         {
           "path": "tests/test_confluence.py",
-          "sha256": "f06099fd690f99835be75b2e7991b9cee4e766d9eb1f63ed02430d41263ad1c5",
-          "size": 20504
+          "sha256": "933941140078258bbab1c146784bc7bbcfa284d7e9f1f14e2dcd7d437ecb7057",
+          "size": 21324
         }
       ],
       "name": "confluence",
       "slug": "confluence",
       "type": "extension",
-      "version": "0.1.1"
+      "version": "0.1.2"
     },
     {
       "description": "Read-only context-size charts for model requests over a chosen horizon, with honest telemetry coverage.",
