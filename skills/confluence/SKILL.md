@@ -1,7 +1,7 @@
 ---
 name: confluence
 description: Read, search and author Confluence Cloud pages, comments and attachments using an existing personal or scoped API token.
-version: 0.1.1
+version: 0.1.2
 type: extension
 entry: plugin.py
 plugin_api: "2.0"
@@ -82,7 +82,8 @@ particular page is accessible. Writes are never implied by a read probe.
 - `upload_attachment` creates an attachment from an explicitly supplied local
   file; it does not replace same-named attachments. `download_attachment` stores
   a complete file in a unique `state_dir/jobs/<id>/output/` directory and returns
-  its path, byte count and SHA-256. Pass the original filename if needed.
+  its path, byte count and SHA-256. Pass a plain filename if needed; directory
+  paths and Windows drive-qualified names are rejected before downloading.
   Download redirects may reach a signed HTTPS CDN URL, but credentials and
   cookies never follow an off-origin hop. Partial files are removed on failure.
 

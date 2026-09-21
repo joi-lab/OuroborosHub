@@ -381,13 +381,30 @@ def test_gateway_download_other_tenant_never_gets_auth(tmp_path):
         assert tools.download_attachment("123", "456")["ok"] is True
 
 
-@pytest.mark.parametrize("filename", ["../outside", "/absolute", "..", "folder\\file", "bad\0name"])
+@pytest.mark.parametrize("filename", ["../outside", "/absolute", "..", "folder\\file", "D:escape", "D:", "c:report.txt", "bad\0name"])
 def test_download_filename_is_confined(filename, tmp_path):
     calls = []
     client, tools = connect(lambda r: calls.append(r), tmp_path)
-    with client, pytest.raises(ConfluenceError):
+    with client, pytest.raises(ConfluenceError) as error:
         tools.download_attachment("123", "456", filename)
+    assert error.value.error["code"] == "invalid_argument"
     assert not calls and not list(tmp_path.iterdir())
+
+
+@pytest.mark.parametrize("filename", ["guide.txt", "Отчёт 2026.pdf", "draft.v2.txt"])
+def test_download_plain_filename_preserves_bytes(filename, tmp_path):
+    calls = []
+    def provider(request):
+        calls.append(request)
+        return httpx.Response(200, content=b"complete attachment")
+    client, tools = connect(provider, tmp_path)
+    with client:
+        result = tools.download_attachment("123", "456", filename)
+    output = Path(result["path"])
+    assert result["ok"] and len(calls) == 1
+    assert output.name == filename and output.resolve().is_relative_to(tmp_path.resolve() / "jobs")
+    assert output.read_bytes() == b"complete attachment"
+    assert not list(tmp_path.rglob("*.partial"))
 
 
 def test_download_rejects_plain_http_redirect_without_credentials(tmp_path):
