@@ -7,7 +7,7 @@ import mimetypes
 import re
 import time
 import uuid
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any
 from urllib.parse import urljoin
 
@@ -185,7 +185,9 @@ class Operations:
         if not re.fullmatch(r"(?:att)?[0-9]+", attachment_id):
             raise ConfluenceError("invalid_argument", "attachment_id must be a numeric ID, optionally prefixed by att.")
         filename = filename or f"attachment-{attachment_id}"
-        if filename in {".", ".."} or any(c in filename for c in "/\\\0\r\n"):
+        windows_name = PureWindowsPath(filename)
+        if (filename in {".", ".."} or windows_name.drive or windows_name.is_absolute()
+                or any(c in filename for c in "/\\\0\r\n")):
             raise ConfluenceError("invalid_argument", "filename must be a plain file name, not a path.")
         url = self.client.api_url(f"{V1}/content/{self.client.page_id(page_id)}/child/attachment/{attachment_id}/download")
         authenticated = True
@@ -193,6 +195,11 @@ class Operations:
         output_dir.mkdir(parents=True, exist_ok=False)
         output = output_dir / filename
         temporary = output_dir / (filename + ".partial")
+        try:
+            output.resolve().relative_to(output_dir.resolve())
+            temporary.resolve().relative_to(output_dir.resolve())
+        except ValueError as exc:
+            raise ConfluenceError("invalid_argument", "filename resolves outside the attachment job directory.") from exc
         started = time.monotonic()
         try:
             for _ in range(6):
