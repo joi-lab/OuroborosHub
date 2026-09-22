@@ -88,6 +88,11 @@ bare IDs or ordinary Google Docs, Sheets, Drive file/folder and `open?id=...`
 links. A general request path remains API-relative; it is not a document URL.
 All operational tools accept `auth_mode` with the same explicit route semantics.
 
+Tool results use compact JSON without removing fields. Pretty-printing deeply
+nested Docs structures can exceed the host's isolated-child response bound even
+for a short document; compact serialization preserves the complete parsed result
+while avoiding indentation and extra whitespace on that wire.
+
 ### `sheets_info(spreadsheet_id)`
 - **Description**: Read spreadsheet title, locale, timezone, URL, and tab IDs, titles, order, type, visibility and grid properties. Does not fetch cell values or formatting.
 - **Returns**: `spreadsheet_id`, `title`, `locale`, `time_zone`, `url`, and `sheets`. Each tab preserves the properties Google returned; non-grid tabs may omit `grid_properties`.

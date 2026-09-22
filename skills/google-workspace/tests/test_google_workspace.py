@@ -65,6 +65,18 @@ def test_parse_service_account_info_valid():
     assert parsed["type"] == "service_account"
 
 
+def test_compact_tool_results_preserve_complete_nested_document():
+    from .workspace_fixtures import nested_document
+
+    document = nested_document()
+    payload = {"document": document, "body": document["body"], "empty": None}
+    result = plugin._format_json(payload)
+    assert json.loads(result) == payload
+    assert "Полный текст строки 🧪" in result
+    pretty = json.dumps(payload, indent=2, ensure_ascii=False)
+    assert len(result.encode("utf-8")) < len(pretty.encode("utf-8")) / 2
+
+
 def test_parse_service_account_info_invalid():
     with pytest.raises(ValueError, match="Missing Service Account configuration"):
         parse_service_account_info("")

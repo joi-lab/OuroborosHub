@@ -635,12 +635,12 @@
       "files": [
         {
           "path": "README.md",
-          "sha256": "74d689075fdaba431a9de355275702df5b7ba809c62b945650dd3a26899bde5f",
-          "size": 15174
+          "sha256": "d725054d026c0668b5760c174afd88281a5d3f3d30067cfec45c79c68624626c",
+          "size": 15476
         },
         {
           "path": "SKILL.md",
-          "sha256": "cc4ae5667b4e632f79e5fc0288617ec4a2c9587b04301af9f370cb25249a3f43",
+          "sha256": "01ae401fddf5ebfcf07cbf9c092fdb5be696fbc0022415569b40b203321eb499",
           "size": 3063
         },
         {
@@ -660,8 +660,8 @@
         },
         {
           "path": "plugin.py",
-          "sha256": "2f002214f4674aa1bc8295611e6a33a3a3036ec8c88adc928a3327279dbc8671",
-          "size": 37809
+          "sha256": "505649dca71c5d1212790c381d6e9d88109524f7c04d9027556e1daf41d1b27a",
+          "size": 37822
         },
         {
           "path": "tests/__init__.py",
@@ -670,23 +670,28 @@
         },
         {
           "path": "tests/isolated_signing_probe.py",
-          "sha256": "e50870eaac3eb55cfa29dfe0d6c28e7a15692dfe937f8bb9324a76444fcbc016",
-          "size": 7389
+          "sha256": "6176c2ec70e63dfd3e5142e2f07dd0fce76a4d6be91baede1d29cb3430782373",
+          "size": 9554
         },
         {
           "path": "tests/test_google_workspace.py",
-          "sha256": "c3f29b6ae520fe0f1de86e81135fb2fb8f4b800521331ab624f6514bb7207d9d",
-          "size": 32071
+          "sha256": "8d78520472eef387e03ae7933211fd9c0651327056ca80002a194f8d41361c1d",
+          "size": 32588
         },
         {
           "path": "tests/test_isolated_signing.py",
-          "sha256": "e15dc10742936324ab3f4341ba8aedda1476b27c72a222a2d0ac76741b1dfbeb",
-          "size": 1994
+          "sha256": "c36f48f000f388c94d3782521b660d17c04f5641c826e96b57a62de9a0cd76dd",
+          "size": 2113
         },
         {
           "path": "tests/test_user_oauth.py",
           "sha256": "baa70320368a763ff07c1f09f7415bc901cafb6a8c1c2fad5c84512306de8c23",
           "size": 11569
+        },
+        {
+          "path": "tests/workspace_fixtures.py",
+          "sha256": "643ee2302d8ebd3e2d797c7f404371a5b693f09d388c6d8c9a93e265fc0cb734",
+          "size": 914
         }
       ],
       "install_specs": [
@@ -696,7 +701,7 @@
       "name": "google-workspace",
       "slug": "google-workspace",
       "type": "extension",
-      "version": "0.2.1"
+      "version": "0.2.2"
     },
     {
       "description": "Comprehensive, charming, and fully playable Happy Farm game widget with crops, livestock, economy, orders, day-night/weather cycles, and audio.",
