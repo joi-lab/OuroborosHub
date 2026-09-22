@@ -1254,7 +1254,7 @@
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "2321a3e153972b7a4d48a893650425746939658e4513cfc37b220445ab934722",
+          "sha256": "b6f32bdb65a8d5d363c181e3aeaa7a2780d309acfc0c3e999b9f919c6b5677dd",
           "size": 17649
         },
         {
@@ -1309,8 +1309,8 @@
         },
         {
           "path": "plugin.py",
-          "sha256": "bf9d644139deb3b38ac1f5faeb4af454974ef9175b675f60f68d41f8d001a144",
-          "size": 26065
+          "sha256": "473cd5f8f82ce4392e968debf85144f2d51604ca717b4fa69c76409a26d84e6f",
+          "size": 26349
         },
         {
           "path": "scripts/slack_daemon.py",
@@ -1364,14 +1364,14 @@
         },
         {
           "path": "tests/test_workers_plugin.py",
-          "sha256": "c6635137983d8dcdc1b370369df242c9d445de4b0354f1741b25fa306bb8d18c",
-          "size": 23838
+          "sha256": "057c14194221cb7903341b7c651f5707ccda7b338d934fab84c201493f250aa3",
+          "size": 26360
         }
       ],
       "name": "slack-bridge",
       "slug": "slack-bridge",
       "type": "extension",
-      "version": "1.3.1"
+      "version": "1.3.3"
     },
     {
       "description": "Inspect, filter, sort, group, and aggregate CSV and XLSX tables while reporting truncation and non-numeric values honestly.",
@@ -1429,8 +1429,8 @@
         },
         {
           "path": "SKILL.md",
-          "sha256": "dce4961556785ccf660a7ee221b6c19ce34965145ba5e385d0005d2ef392f7fd",
-          "size": 12217
+          "sha256": "ac8d4f8d4924dc8986354ae14172241aad24ff5257163e16b97077589ec1496c",
+          "size": 12318
         },
         {
           "path": "plugin.py",
@@ -1479,8 +1479,8 @@
         },
         {
           "path": "telegram_bot/tools.py",
-          "sha256": "b586e41b3f4fb1f9978ab53ff183b327e85a34d2209e42f530fe69f78d4791a6",
-          "size": 9792
+          "sha256": "607abd1d5f5592acf84c66fee85365d8b11165b756e3f8e40437f8e7ecb60d6b",
+          "size": 9886
         },
         {
           "path": "tests/conftest.py",
@@ -1529,13 +1529,13 @@
         },
         {
           "path": "tests/test_moderation.py",
-          "sha256": "9e2bfdb1f32deb871d4ecd80925ba31cd7334170db7344be7ba4bd196cfbeb77",
-          "size": 4047
+          "sha256": "3d5bc3167f8523f174f4ecd489de33ebeb196f548d829ce2392fa10fb87f7bb0",
+          "size": 5392
         },
         {
           "path": "tests/test_plugin.py",
-          "sha256": "c475dc4f6deaea00e031c50393af930105d04a465454a76d945a2a9e898636c9",
-          "size": 7923
+          "sha256": "97c4bdf123264698556a69147c938f4d90f34cdb24ee483610317f43560439bd",
+          "size": 8901
         },
         {
           "path": "tests/test_runtime.py",
@@ -1546,7 +1546,7 @@
       "name": "telegram-bot",
       "slug": "telegram-bot",
       "type": "extension",
-      "version": "0.4.1"
+      "version": "0.4.2"
     },
     {
       "description": "Token Observatory — Liquid Glass dashboard for recorded Ouroboros token usage, tasks and models.",

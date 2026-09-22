@@ -2,7 +2,7 @@
 name: telegram-bot
 description: Durable Telegram transport for generic Ouroboros presences, with exact actor and conversation
   provenance, media staging, and provider receipts.
-version: 0.4.1
+version: 0.4.2
 type: extension
 plugin_api: '2.0'
 runtime: python3
@@ -217,7 +217,8 @@ is not proof of provider delivery.
 that update an own message: `editMessageText` and `setMessageReaction`. It
 accepts Bot API-shaped parameters and retains a new operation identity plus an
 optional `original_delivery_id` source reference, so an edit/reaction never
-rewrites the original outbound delivery history. Inspect its result with
+rewrites the original outbound delivery history. For edits, omit `parse_mode`
+for plain text or choose `HTML` / `MarkdownV2` for provider formatting. Inspect its result with
 `telegram_receipt(operation="operation", request_id=...)`. The original
 delivery reference stays in provider message facts; Host origin retains its
 standard `kind`/task/source-event provenance. A reaction update contains

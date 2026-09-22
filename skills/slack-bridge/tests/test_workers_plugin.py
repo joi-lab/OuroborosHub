@@ -331,6 +331,59 @@ def test_slack_send_explicit_plain_format_is_persisted(tmp_path):
     assert item.text_format == "plain" and item.text == "**literal**"
 
 
+def test_registered_tool_arrays_have_items_and_enums_have_no_empty_choices(tmp_path):
+    """Pin the two provider catalog refusals against actual registrations."""
+    api = _Api(tmp_path)
+    _load_plugin().register(api)
+    pending = [(name, metadata["schema"]) for name, (_, metadata) in api.tools.items()]
+    while pending:
+        path, node = pending.pop()
+        if isinstance(node, dict):
+            if node.get("type") == "array":
+                assert isinstance(node.get("items"), dict) and node["items"], path
+            if "enum" in node:
+                assert node["enum"] and "" not in node["enum"], path
+            pending.extend((f"{path}.{key}", value) for key, value in node.items())
+        elif isinstance(node, list):
+            pending.extend((f"{path}[{index}]", value) for index, value in enumerate(node))
+
+
+def test_message_edit_block_fields_survive_registration_queue_and_provider_request(tmp_path):
+    api = _Api(tmp_path)
+    _load_plugin().register(api)
+    edit, metadata = api.tools["slack_message_edit"]
+    block_schema = metadata["schema"]["properties"]["blocks"]["items"]
+    assert block_schema["type"] == "object"
+    assert block_schema["properties"]["type"]["type"] == "string"
+    assert block_schema["required"] == ["type"]
+    assert block_schema.get("additionalProperties", True) is True
+    blocks = [
+        {"type": "section", "block_id": "summary", "text": {"type": "mrkdwn", "text": "*Kept*"},
+         "accessory": {"type": "button", "action_id": "open", "text": {"type": "plain_text", "text": "Open"}}},
+        {"type": "divider"},
+    ]
+    captured = []
+
+    def provider(request):
+        captured.append(json.loads(request.content))
+        assert request.url.path == "/api/chat.update"
+        return httpx.Response(200, json={"ok": True, "channel": "C1", "ts": "1.1"})
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(provider)) as http:
+            client = SlackClient("xoxb-test", "xapp-test", http_client=http)
+            for index, value in enumerate((blocks, [])):
+                assert edit(channel="C1", ts="1.1", blocks=value, text="fallback",
+                            text_format="plain", request_id=f"blocks-{index}")["ok"]
+                assert await OutboundWorker(BridgeStore(tmp_path), client).process_once()
+
+    asyncio.run(run())
+    assert captured == [
+        {"channel": "C1", "ts": "1.1", "blocks": value, "text": "fallback", "mrkdwn": False}
+        for value in (blocks, [])
+    ]
+
+
 def test_slack_file_upload_copies_immutable_bytes_into_existing_outbox(tmp_path):
     module = _load_plugin()
     api = _Api(tmp_path)
