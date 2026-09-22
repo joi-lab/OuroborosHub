@@ -84,6 +84,23 @@ def test_package_style_plugin_registration_and_status_route(tmp_path):
     assert "conversation_id=*" in form["fields"][0]["help"]
     assert callable(api.unload)
 
+    # Check the model-visible catalog, not only direct Python handler calls.
+    pending = [(name, metadata["schema"]) for name, _, metadata in api.tools]
+    while pending:
+        path, node = pending.pop()
+        if isinstance(node, dict):
+            if node.get("type") == "array":
+                assert isinstance(node.get("items"), dict) and node["items"], path
+            if "enum" in node:
+                assert node["enum"] and "" not in node["enum"], path
+            pending.extend((f"{path}.{key}", value) for key, value in node.items())
+        elif isinstance(node, list):
+            pending.extend((f"{path}[{index}]", value) for index, value in enumerate(node))
+    operation_schema = next(metadata["schema"] for name, _, metadata in api.tools
+                            if name == "telegram_operation")
+    assert "parse_mode" not in operation_schema["required"]
+    assert operation_schema["properties"]["parse_mode"]["enum"] == ["HTML", "MarkdownV2"]
+
     response = __import__("asyncio").run(api.routes[0][1](None))
     payload = json.loads(response.body)
     assert payload["runtime_state"] == "not_started"

@@ -4,7 +4,7 @@ from types import SimpleNamespace
 from telegram_bot.api import TelegramClient
 from telegram_bot.custody import CustodyStore
 from telegram_bot.runtime import TelegramTransportRuntime
-from telegram_bot.tools import make_moderation_tool, make_receipt_tool
+from telegram_bot.tools import make_moderation_tool, make_operation_tool, make_receipt_tool
 
 
 class Transport:
@@ -113,3 +113,28 @@ def test_moderation_requires_exact_ids_and_typed_permissions(tmp_path):
         tool(action="ban_member", chat_id="-42", user_id=42, request_id="")["ok"]
         is False
     )
+
+
+def test_edit_operation_plain_and_formatted_text_reach_provider_unchanged(tmp_path):
+    async def run():
+        transport = Transport()
+        client = TelegramClient("test-token", transport=transport)
+        edit = make_operation_tool(SimpleNamespace(get_state_dir=lambda: str(tmp_path)))
+        runtime = TelegramTransportRuntime(
+            state_dir=tmp_path, token_provider=lambda: "test-token", logger=None, submitter=None,
+        )
+        runtime._client, runtime._client_token = client, "test-token"
+        # Omission is the advertised plain-text form. Retain old explicit-empty calls too.
+        cases = [({}, "*literal*"), ({"parse_mode": ""}, "<literal>"),
+                 ({"parse_mode": "HTML"}, "<b>bold</b>"),
+                 ({"parse_mode": "MarkdownV2"}, "*bold*")]
+        for index, (options, text) in enumerate(cases):
+            assert edit(method="editMessageText", chat_id="-42", message_id=123,
+                        request_id=f"format-{index}", text=text, **options)["ok"]
+            assert await runtime.process_one_outbox()
+            expected = {"chat_id": "-42", "message_id": 123, "text": text}
+            if options.get("parse_mode"):
+                expected.update(options)
+            assert transport.calls[-1] == ("editMessageText", expected)
+
+    asyncio.run(run())

@@ -265,6 +265,13 @@ def _make_action(api: Any, operation: str):
 
 
 def _register_mutation_tools(api: Any) -> None:
+    block_schema = {
+        "type": "object",
+        "properties": {"type": {"type": "string"}},
+        "required": ["type"],
+        # Block Kit variants carry different fields; keep their provider payloads open.
+        "additionalProperties": True,
+    }
     upload_schema = {
         "type": "object", "additionalProperties": False,
         "properties": {
@@ -309,7 +316,7 @@ def _register_mutation_tools(api: Any) -> None:
         timeout_sec=60,
     )
     action_specs = [
-        ("slack_message_edit", "update_message", {"channel": {"type": "string"}, "ts": {"type": "string"}, "text": {"type": "string"}, "blocks": {"type": "array"}, "text_format": {"type": "string", "enum": list(TEXT_FORMATS)}, "request_id": {"type": "string"}}, ["channel", "ts"]),
+        ("slack_message_edit", "update_message", {"channel": {"type": "string"}, "ts": {"type": "string"}, "text": {"type": "string"}, "blocks": {"type": "array", "items": block_schema}, "text_format": {"type": "string", "enum": list(TEXT_FORMATS)}, "request_id": {"type": "string"}}, ["channel", "ts"]),
         ("slack_message_delete", "delete_message", {"channel": {"type": "string"}, "ts": {"type": "string"}, "request_id": {"type": "string"}}, ["channel", "ts"]),
         ("slack_reaction_add", "reaction_add", {"channel": {"type": "string"}, "ts": {"type": "string"}, "name": {"type": "string"}, "request_id": {"type": "string"}}, ["channel", "ts", "name"]),
         ("slack_reaction_remove", "reaction_remove", {"channel": {"type": "string"}, "ts": {"type": "string"}, "name": {"type": "string"}, "request_id": {"type": "string"}}, ["channel", "ts", "name"]),
