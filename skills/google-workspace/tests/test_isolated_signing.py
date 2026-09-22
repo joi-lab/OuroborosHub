@@ -44,3 +44,4 @@ def test_signing_through_extension_children(tmp_path):
     assert result.returncode == 0, result.stdout + result.stderr
     assert "verified 3 auth and 3 document calls in isolated children" in result.stdout
     assert "verified 3 renewable OAuth auth and 3 document calls in isolated children" in result.stdout
+    assert "verified complete compact Docs result across the child boundary; pretty control rejected" in result.stdout

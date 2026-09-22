@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 
 def _format_json(data: Any) -> str:
     """Format dictionary/list into compact JSON string."""
-    return json.dumps(data, indent=2, ensure_ascii=False)
+    return json.dumps(data, separators=(",", ":"), ensure_ascii=False)
 
 
 def _get_client_sa_json(api: PluginAPI) -> Optional[str]:

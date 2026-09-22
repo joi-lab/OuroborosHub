@@ -6,6 +6,8 @@ from pathlib import Path
 import shutil
 import sys
 
+from workspace_fixtures import nested_document
+
 
 def main():
     repo, source_skill, temp_root = map(Path, sys.argv[1:])
@@ -16,7 +18,7 @@ def main():
     from cryptography.hazmat.primitives import serialization
     from cryptography.hazmat.primitives.asymmetric import rsa
     from ouroboros import extension_loader
-    from ouroboros.extension_process_runner import dispatch_extension_tool_subprocess
+    from ouroboros.extension_process_runner import dispatch_extension_tool_subprocess, ExtensionProcessError, _RESULT_CAP
     from ouroboros.skill_loader import (
         SkillReviewState, find_skill, save_enabled, save_review_state, save_skill_grants,
     )
@@ -34,13 +36,16 @@ def main():
     for name in ("SKILL.md", "auth.py", "client.py"):
         shutil.copyfile(source_skill / name, skill / name)
     shutil.copyfile(source_skill / "plugin.py", skill / "original_plugin.py")
+    shutil.copyfile(source_skill / "tests" / "workspace_fixtures.py", skill / "fixture_data.py")
     # Mock only network I/O; the original plugin, JWT signer, client, manifest,
     # native dependency, registration and process dispatch are all exercised.
     (skill / "plugin.py").write_text('''
 import base64
+import json
 from urllib.parse import parse_qs
 import httpx
 from . import original_plugin, auth
+from .fixture_data import nested_document
 
 _Client = httpx.Client
 
@@ -69,6 +74,8 @@ def _respond(request):
                                        "mimeType": "application/vnd.google-apps.document"})
     if request.url.path == "/drive/v3/files/fixture_doc/export":
         return httpx.Response(200, text="Disposable connector test content")
+    if request.url.path == "/v1/documents/fixture_nested":
+        return httpx.Response(200, json=nested_document())
     raise AssertionError("Unexpected network request: " + str(request.url))
 
 def _client(*args, **kwargs):
@@ -80,6 +87,12 @@ def register(api):
     _credential = auth.parse_service_account_info(api.get_settings(["GOOGLE_SERVICE_ACCOUNT_JSON"])["GOOGLE_SERVICE_ACCOUNT_JSON"])
     httpx.Client = _client
     original_plugin.register(api)
+    handler = original_plugin._make_docs_read(api)
+    def pretty_control(document_id):
+        return json.dumps(json.loads(handler(document_id)), indent=2, ensure_ascii=False)
+    api.register_tool("fixture_pretty_read", pretty_control,
+                      description="Negative control for the child result boundary.",
+                      schema={"type": "object", "properties": {"document_id": {"type": "string"}}, "required": ["document_id"]})
 ''', encoding="utf-8")
     site = skill / ".ouroboros_env" / "python" / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}" / "site-packages"
     site.mkdir(parents=True)
@@ -128,6 +141,24 @@ def register(api):
                 else:
                     assert result["text"] == "Disposable connector test content"
         print("verified 3 renewable OAuth auth and 3 document calls in isolated children")
+        document = nested_document()
+        expected = {"document_id": document["documentId"], "title": document["title"],
+                    "revision_id": document["revisionId"], "body": document["body"], "document": document}
+        pretty = json.dumps(expected, indent=2, ensure_ascii=False)
+        assert len(json.dumps({"ok": True, "result": pretty}, ensure_ascii=False).encode("utf-8")) > _RESULT_CAP
+        control = extension_loader.get_tool(extension_loader.extension_surface_name(loaded.name, "fixture_pretty_read"))
+        try:
+            dispatch_extension_tool_subprocess(control, ctx, {"document_id": "fixture_nested"})
+        except ExtensionProcessError as exc:
+            assert "exceeded safety cap" in str(exc), str(exc)
+        else:
+            raise AssertionError("Pretty result must exceed the real child boundary")
+        tool = extension_loader.get_tool(extension_loader.extension_surface_name(loaded.name, "docs_read"))
+        assert tool["out_of_process"]
+        result = dispatch_extension_tool_subprocess(tool, ctx, {"document_id": "fixture_nested"})
+        assert json.loads(result) == expected
+        assert len(json.dumps({"ok": True, "result": result}, ensure_ascii=False).encode("utf-8")) < _RESULT_CAP
+        print("verified complete compact Docs result across the child boundary; pretty control rejected")
     finally:
         extension_loader.unload_extension(loaded.name)
 

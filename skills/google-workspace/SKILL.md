@@ -1,6 +1,6 @@
 ---
 name: google-workspace
-version: 0.2.1
+version: 0.2.2
 type: extension
 entry: plugin.py
 runtime: python3
