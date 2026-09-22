@@ -171,7 +171,7 @@ class MailClient:
                 raise ValueError("Supported actions: list, create, copy, move, flags")
             return {"ok": True, "uid": int(uid), "uidvalidity": validity}
 
-    def draft(self, *, to, subject, body, folder="Drafts", reply_to_message_id="", references=None,
+    def draft(self, *, to, subject, body="", folder="Drafts", reply_to_message_id="", references=None,
               cc=(), bcc=(), html_body="", body_type="plain", attachments=()):
         recipients = [x.strip() for x in (to if isinstance(to, (list, tuple)) else str(to).split(",")) if str(x).strip()]
         cc = [x.strip() for x in (cc if isinstance(cc, (list, tuple)) else str(cc or "").split(",")) if str(x).strip()]

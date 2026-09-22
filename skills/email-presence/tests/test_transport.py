@@ -276,6 +276,17 @@ def test_draft_is_saved_without_smtp(rig):
     assert not client.sent
 
 
+def test_draft_without_optional_body_is_saved_without_smtp(rig):
+    _clock, box, client, _store, _host, _runtime = rig
+    appended = []
+    box.append = lambda *args: (appended.append(args) or ("OK", [b"APPENDUID 7 20"]))
+    receipt = client.draft(to="a@example.org", subject="Draft")
+    assert receipt["ok"]
+    assert appended[0][1] == "(\\Draft)"
+    assert b"Subject: Draft" in appended[0][3]
+    assert not client.sent
+
+
 def test_message_arriving_in_activation_second_is_not_dropped(rig):
     clock, box, client, store, host, runtime = rig
     clock[0] += 0.75

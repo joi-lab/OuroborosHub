@@ -529,6 +529,7 @@ def test_plugin_registration_and_settings_save(tmp_path, monkeypatch):
     assert form_comp["type"] == "form"
     assert form_comp["route"] == "settings/save"
     assert form_comp["method"] == "POST"
+    assert mock_api.routes["settings/save"]["methods"] == ("GET", "POST")
 
     # Test settings save route handler
     save_handler = mock_api.routes["settings/save"]["handler"]
@@ -547,6 +548,33 @@ def test_plugin_registration_and_settings_save(tmp_path, monkeypatch):
     # Test resolve folder and template ID using the saved settings
     assert plugin._resolve_folder_id(mock_api, None) == "folder_default_123"
     assert plugin._resolve_template_id(mock_api, "weekly_report") == "doc_tmpl_456"
+
+
+def test_settings_hydration_roundtrip_preserves_other_fields(tmp_path):
+    from starlette.applications import Starlette
+    from starlette.routing import Route
+    from starlette.testclient import TestClient
+
+    class API:
+        def get_state_dir(self):
+            return str(tmp_path)
+        def log(self, *args):
+            pass
+
+    saved = {"DEFAULT_FOLDER_ID": "folder_1", "TEMPLATES_JSON": '{"report": "doc_1"}'}
+    path = tmp_path / "settings.json"
+    app = Starlette(routes=[Route("/settings/save", plugin._make_settings_save(API()), methods=["GET", "POST"])])
+    with TestClient(app) as client:
+        assert client.get("/settings/save").json() == {"DEFAULT_FOLDER_ID": "", "TEMPLATES_JSON": ""}
+        assert not path.exists()
+        path.write_text(json.dumps({**saved, "GOOGLE_OAUTH_REFRESH_TOKEN": "must-not-return"}), encoding="utf-8")
+        before = path.read_bytes()
+        response = client.get("/settings/save")
+        assert response.status_code == 200 and response.json() == saved
+        assert path.read_bytes() == before
+        response = client.post("/settings/save", json={**response.json(), "DEFAULT_FOLDER_ID": "folder_2"})
+        assert response.status_code == 200
+        assert client.get("/settings/save").json() == {**saved, "DEFAULT_FOLDER_ID": "folder_2"}
 
 
 def test_drive_search_query_and_shared_drive_options():

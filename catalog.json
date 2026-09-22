@@ -516,8 +516,8 @@
         },
         {
           "path": "lib/client.py",
-          "sha256": "4a4b8674bcdf316c4dcad2d8ae2f54c826788608f6b08798d6da53c8f462059a",
-          "size": 11287
+          "sha256": "21406bab0e6549efccd17d67256ebd30c8a3c26bf6d6e32db78a79e43bbbe0e7",
+          "size": 11290
         },
         {
           "path": "lib/delivery.py",
@@ -546,8 +546,8 @@
         },
         {
           "path": "plugin.py",
-          "sha256": "9dc317f532624ef948728131a49ab37fcb6e599f99b34508761f9ec267c0426a",
-          "size": 11019
+          "sha256": "8d00db48727a8280646dbc8db51cfdd9fc713a3c5564e155c3fc0420614bfc31",
+          "size": 11465
         },
         {
           "path": "scripts/email_daemon.py",
@@ -591,8 +591,8 @@
         },
         {
           "path": "tests/test_plugin.py",
-          "sha256": "b178f0f4d9ce53d504c98878060577a686451b2fb32eca984da5e311bbe764a7",
-          "size": 1793
+          "sha256": "0da026f00c9bf8266780acd75f8afeb6c421091137d8986bb3985b2bb6c49cb7",
+          "size": 4994
         },
         {
           "path": "tests/test_store.py",
@@ -601,8 +601,8 @@
         },
         {
           "path": "tests/test_transport.py",
-          "sha256": "66912ad3070bf3f5f7a0ae7554dc6ea400cbe91acb0d69d93c2b26aaf0fbe407",
-          "size": 11898
+          "sha256": "964979584d5f706d39dfb1fce87c7af6159decffeb8bb2979681cc980c9414fc",
+          "size": 12328
         }
       ],
       "name": "email-presence",
@@ -660,8 +660,8 @@
         },
         {
           "path": "plugin.py",
-          "sha256": "6a32d50d2fa3d66c717327225fed2f4eb6b2349d552dabf1478c9dd7f219ead3",
-          "size": 37516
+          "sha256": "2f002214f4674aa1bc8295611e6a33a3a3036ec8c88adc928a3327279dbc8671",
+          "size": 37809
         },
         {
           "path": "tests/__init__.py",
@@ -675,8 +675,8 @@
         },
         {
           "path": "tests/test_google_workspace.py",
-          "sha256": "e52677893d8e1afa7e83d10e86fc05f9a2fd814a199a4ada036cc486edf1d5e7",
-          "size": 30686
+          "sha256": "c3f29b6ae520fe0f1de86e81135fb2fb8f4b800521331ab624f6514bb7207d9d",
+          "size": 32071
         },
         {
           "path": "tests/test_isolated_signing.py",

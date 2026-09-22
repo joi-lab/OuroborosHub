@@ -365,6 +365,10 @@ def _make_sheets_batch_update(api: PluginAPI):
 
 def _make_settings_save(api: PluginAPI):
     async def settings_save(request: Any) -> Any:
+        if getattr(request, "method", "POST") == "GET":
+            current = _get_local_settings(api)
+            values = {key: current.get(key, "") for key in ("DEFAULT_FOLDER_ID", "TEMPLATES_JSON")}
+            return StarletteJSONResponse(values) if StarletteJSONResponse is not None else values
         try:
             payload = await request.json()
         except Exception as exc:
@@ -681,7 +685,7 @@ def register(api: PluginAPI) -> None:
     api.register_route(
         path="settings/save",
         handler=_make_settings_save(api),
-        methods=("POST",),
+        methods=("GET", "POST"),
     )
 
     # 3. Register Settings Section
@@ -745,7 +749,7 @@ def register(api: PluginAPI) -> None:
                             "text": (
                                 "1. **Choose credentials**: Add `GOOGLE_SERVICE_ACCOUNT_JSON`, or the `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET` and `GOOGLE_OAUTH_REFRESH_TOKEN` granted by your user OAuth flow, under **Settings → Secrets**. A temporary `GOOGLE_OAUTH_ACCESS_TOKEN` also works.\n"
                                 "2. **Verify access**: Call `workspace_auth_status(auth_mode='oauth')` for the user route or `auth_mode='service_account'` for the shared-resource route; then read the intended document. Service accounts do not inherit domain-wide sharing.\n"
-                                "3. **Set Defaults**: Use the settings form below to configure `DEFAULT_FOLDER_ID` and template mappings."
+                                "3. **Set Defaults**: Open Settings to configure `DEFAULT_FOLDER_ID` and template mappings."
                             ),
                         }
                     ],
