@@ -223,11 +223,11 @@ class OutboundWorker:
         item = self.store.claim_outbox(lease_seconds=120.0)
         if item is None:
             return reported
-        if item.kind == "mutation":
-            return await self._process_mutation(item) or reported
         item = dataclasses.replace(item, provider_account_id=(
             item.provider_account_id or str(self.store.runtime_value("workspace_id", ""))
         ))
+        if item.kind == "mutation":
+            return await self._process_mutation(item) or reported
         try:
             channel = item.resolved_channel or await self.slack.resolve_target(item.target)
             self.store.set_resolved_target(item, channel, item.provider_account_id)
@@ -339,10 +339,34 @@ class OutboundWorker:
                     path=str(payload.get("path") or ""),
                     params=payload.get("params") if isinstance(payload.get("params"), dict) else {},
                     body=payload.get("body") if isinstance(payload.get("body"), dict) else {},
+                    effect="write",
                 )
             else:
                 raise SlackApiError("unsupported_mutation")
-            self.store.complete_outbox(item.row_id, item.lease_token, result=result)
+            report = None
+            provider_message = result.get("message") if isinstance(result, dict) else None
+            if (operation == "generic_api" and isinstance(provider_message, dict)
+                    and (payload.get("result_kind") == "message" or
+                         (payload.get("result_kind", "auto") == "auto" and payload.get("path") == "chat.postMessage"))):
+                # A provider-returned message plus exact channel/ts proves this
+                # write produced speech; other generic effects remain operation
+                # facts and never become invented spoken history.
+                channel = str(result.get("channel") or "")
+                timestamp = str(result.get("ts") or provider_message.get("ts") or "")
+                message_text = provider_message.get("text")
+                if channel and timestamp and isinstance(message_text, str):
+                    self.store.set_resolved_target(item, channel, item.provider_account_id)
+                    body = payload.get("body") if isinstance(payload.get("body"), dict) else {}
+                    text_format = ("markdown" if "markdown_text" in body else
+                                   "plain" if body.get("mrkdwn") is False else "mrkdwn")
+                    item = dataclasses.replace(item, resolved_channel=channel, text=message_text,
+                                               text_format=text_format)
+                    report = _delivery_report(item, "delivered", result=result)
+                    if report:
+                        report["message"].update(operation=payload.get("path"), provider_message_id=timestamp)
+            self.store.complete_outbox(item.row_id, item.lease_token,
+                                       provider_message_ts=str(result.get("ts") or "") if isinstance(result, dict) else "",
+                                       report_payload=report, result=result)
             cleanup_artifact()
             return True
         except asyncio.CancelledError:
@@ -353,8 +377,18 @@ class OutboundWorker:
             log.warning("Slack mutation %s is uncertain after provider acceptance boundary: %s", item.request_id, exc)
             return True
         except SlackApiError as exc:
+            if exc.status_code == 429 or exc.error == "ratelimited":
+                if item.attempts >= _MAX_OUTBOX_ATTEMPTS:
+                    self.store.fail_outbox(item.row_id, item.lease_token, exc.error, state="failed",
+                                           result={"uncertain": False})
+                    cleanup_artifact()
+                else:
+                    self.store.retry_outbox(item.row_id, item.lease_token, exc.error,
+                                            delay_seconds=exc.retry_after or min(60.0, 2.0 ** min(item.attempts, 5)))
+                return True
             provider_may_have_applied = exc.status_code >= 500 or exc.status_code in {0, 408} or exc.error in {
                 "fatal_error", "internal_error", "request_timeout", "service_unavailable",
+                "invalid_json", "invalid_response",
             }
             if provider_may_have_applied:
                 self.store.fail_outbox(item.row_id, item.lease_token, exc.error, state="uncertain",
@@ -378,6 +412,10 @@ class OutboundWorker:
             self.store.retry_outbox(item.row_id, item.lease_token, exc.error, delay_seconds=exc.retry_after or min(60.0, 2.0 ** min(item.attempts, 5)))
             return True
         except Exception as exc:
+            if item.operation == "generic_api":
+                self.store.fail_outbox(item.row_id, item.lease_token, str(exc), state="uncertain",
+                                       result={"uncertain": True})
+                return True
             if item.attempts >= _MAX_OUTBOX_ATTEMPTS:
                 self.store.fail_outbox(item.row_id, item.lease_token, str(exc), state="uncertain", result={"uncertain": True})
                 cleanup_artifact()

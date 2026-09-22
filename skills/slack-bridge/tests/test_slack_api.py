@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from urllib.parse import parse_qs
 
 import httpx
 import pytest
@@ -137,6 +138,24 @@ async def _external_upload_stages_three_provider_phases_and_keeps_completion_unc
         slack = SlackClient("xoxb-test", "xapp-test", http_client=http)
         result = await slack.upload_file(path=source, filename="hello.txt", channel="C1", thread_ts="1.0")
     assert result["files"][0]["id"] == "F1"
-    assert calls[0][0] == "POST" and json.loads(calls[0][2])["length"] == len(b"immutable bytes")
+    assert calls[0][0] == "POST"
+    assert calls[0][3]["content-type"].startswith("application/x-www-form-urlencoded")
+    assert parse_qs(calls[0][2].decode("utf-8")) == {
+        "filename": ["hello.txt"], "length": [str(len(b"immutable bytes"))],
+    }
     assert calls[1][1] == "https://uploads.example/upload"
     assert json.loads(calls[2][2])["channel_id"] == "C1"
+
+
+def test_dedicated_bookmark_declares_slack_link_type():
+    async def run():
+        observed = {}
+        def provider(request):
+            observed.update(json.loads(request.content))
+            return httpx.Response(200, json={"ok": True, "bookmark": {"id": "Bk1"}})
+        async with httpx.AsyncClient(transport=httpx.MockTransport(provider)) as http:
+            slack = SlackClient("xoxb-test", "xapp-test", http_client=http)
+            result = await slack.bookmark(channel="C1", title="test", link="https://example.org")
+        assert result["bookmark"]["id"] == "Bk1"
+        assert observed == {"channel_id": "C1", "title": "test", "type": "link", "link": "https://example.org"}
+    asyncio.run(run())

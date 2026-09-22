@@ -156,7 +156,10 @@ class MailClient:
             if validity != int(uidvalidity or 0) or not uid or int(uid) < 1:
                 raise ValueError("A current UID and UIDVALIDITY from search/read are required")
             if action in {"copy", "move"}:
-                if action == "move" and b"MOVE" not in box.capabilities:
+                if action == "move" and not any(
+                    (cap.decode("ascii", errors="ignore") if isinstance(cap, bytes) else str(cap)).upper() == "MOVE"
+                    for cap in box.capabilities
+                ):
                     raise RuntimeError("Server does not support atomic UID MOVE; use copy and flags explicitly")
                 self._ok(box.uid(action.upper(), str(int(uid)), self.quote(destination)), action)
             elif action == "flags":
@@ -168,7 +171,7 @@ class MailClient:
                 raise ValueError("Supported actions: list, create, copy, move, flags")
             return {"ok": True, "uid": int(uid), "uidvalidity": validity}
 
-    def draft(self, *, to, subject, body, folder="Drafts", reply_to_message_id="", references=None,
+    def draft(self, *, to, subject, body="", folder="Drafts", reply_to_message_id="", references=None,
               cc=(), bcc=(), html_body="", body_type="plain", attachments=()):
         recipients = [x.strip() for x in (to if isinstance(to, (list, tuple)) else str(to).split(",")) if str(x).strip()]
         cc = [x.strip() for x in (cc if isinstance(cc, (list, tuple)) else str(cc or "").split(",")) if str(x).strip()]

@@ -357,6 +357,18 @@ class TelegramTransportRuntime:
             )
             raise
         except Exception as exc:
+            if (lease.payload.get("kind") == "operation" and isinstance(exc, TelegramApiError)
+                    and exc.error_code == 0):
+                # The provider may have accepted this mutation before the
+                # response was lost. Do not execute a second physical edit or
+                # reaction merely because this lease can be reclaimed.
+                payload = self.store.outbox_payload(lease.delivery_id)
+                report = delivery_report(lease.delivery_id, payload, part_id="status",
+                                         state="uncertain", error=_error(exc))
+                self.store.mark_outbox_failed(lease.delivery_id, reason=_error(exc),
+                                              report=report, state="uncertain")
+                self._last_error = _error(exc)
+                return True
             if lease.attempts >= _MAX_OUTBOX_ATTEMPTS:
                 payload = self.store.outbox_payload(lease.delivery_id)
                 state = "failed" if isinstance(exc, TelegramApiError) and exc.error_code else "uncertain"
@@ -441,9 +453,11 @@ async def _deliver(
         parameters = payload.get("parameters")
         if not isinstance(parameters, dict):
             raise ValueError("Telegram operation parameters are required")
+        if "_operation_result" in payload:
+            return {"kind": kind, "method": method, "result": payload["_operation_result"]}
         result = await client.operation(method, dict(parameters))
         report = delivery_report(
-            lease.delivery_id, payload, part_id="operation", state="delivered",
+            lease.delivery_id, payload, part_id="0", state="delivered",
             receipt=result, text=str(payload.get("text") or ""), fmt="plain",
         )
         store.checkpoint_outbox(

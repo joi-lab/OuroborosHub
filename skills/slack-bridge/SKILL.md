@@ -1,7 +1,7 @@
 ---
 name: slack-bridge
 description: Slack presence transport with durable delivery, directory discovery, provider updates, file transfer, message actions, and provider context.
-version: 1.3.0
+version: 1.3.1
 type: extension
 entry: plugin.py
 plugin_api: "2.0"
@@ -61,7 +61,9 @@ tools:
   - name: slack_bookmark_remove
     description: Queue removing a bookmark by exact provider bookmark ID.
   - name: slack_api
-    description: Call an actual Slack Web API method with GET reads or durable POST writes.
+    description: Call an actual Slack Web API method with a model-selected read or durable write effect.
+  - name: slack_receipt
+    description: Inspect provider outcome, uncertainty and Host history-report status by request ID.
 ---
 
 # Slack Bridge
@@ -186,13 +188,21 @@ is added by the transport.
 have a dedicated convenience tool. The `path` is one actual Slack Web API
 method name (for example, `conversations.list` or `chat.postMessage`), and
 the existing bot credential is supplied by the client; callers never provide
-or persist a token. `GET` calls are ordinary provider reads and return the
-provider response directly. `POST` calls are queued in the same durable
-mutation outbox as the dedicated actions, with a stable `request_id` when the
+or persist a token. The model selects the provider effect separately from the
+HTTP transport method: `effect="read"` executes a read immediately, while
+`effect="write"` (the default) queues either GET or POST in the durable
+mutation outbox. Slack documents some writes over GET, so the HTTP verb cannot
+establish read-only behavior. Writes use a stable `request_id` when the
 caller supplies one, provider receipts on completion, and an explicit
 `uncertain` result when the response may have been lost after acceptance.
-Generic writes therefore retain the normal custody path and cannot silently
-bypass delivery records through a raw chat endpoint. The method/path validator
+Use `slack_receipt` with that request ID to inspect each durable part's provider
+result, failure or uncertainty and the separate Host history-report state.
+For `chat.postMessage`, confirmed provider message/channel/timestamp facts
+create a speech delivery report through the existing Host history path. For
+other provider methods, select `result_kind="message"` only when the write
+creates speech; the report still requires those actual provider facts.
+`result_kind="operation"` retains the operation receipt without creating
+new speech. The method/path validator
 rejects full URLs, traversal and malformed method names while leaving the
 provider's own scopes, method validation and errors authoritative.
 

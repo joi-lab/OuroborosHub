@@ -9,6 +9,8 @@ import pytest
 from telegram_bot.api import TelegramApiError
 from telegram_bot.custody import CustodyStore
 from telegram_bot.events import parse_telegram_update
+from telegram_bot.delivery import delivery_report
+from telegram_bot.tools import make_operation_tool
 from telegram_bot.host import PresenceHostClient, PresenceHostError
 from test_formatted_delivery import Provider, runtime, send_tool, ready_again
 
@@ -77,6 +79,54 @@ def test_report_ack_loss_restart_never_resends_and_payload_is_frozen(tmp_path):
         assert report["conversation_id"] == "-42" and report["account_id"] == "9"
         assert report["origin"] == {"kind": "tool", "task_id": "task1", "source_event_id": "source1"}
         assert restarted.store.next_delivery_report() is None
+    asyncio.run(run())
+
+
+def test_operation_report_matches_host_validator_and_keeps_source_in_message(tmp_path):
+    validator = pytest.importorskip("ouroboros.presence_delivery").validate_delivery
+    payload = {
+        "kind": "operation", "chat_id": "-42", "method": "editMessageText",
+        "parameters": {"chat_id": "-42", "message_id": 7, "text": "fixed"},
+        "text": "fixed", "original_delivery_id": "telegram-send:original",
+        "_reporting": {"version": 1, "account_id": "999",
+                       "origin": {"kind": "tool", "task_id": "task-1"}},
+    }
+    report = delivery_report("telegram-operation:edit", payload,
+                             part_id="0", state="delivered",
+                             receipt={"message_id": 7}, text="fixed", fmt="plain")
+    assert validator(report) == report
+    assert report["message"]["original_delivery_id"] == "telegram-send:original"
+    assert report["message"]["replacement_text"] == "fixed"
+    assert report["origin"] == {"kind": "tool", "task_id": "task-1"}
+    assert report["text"] == ""  # an edit does not create new spoken text
+
+
+def test_registered_operation_runtime_report_is_host_valid_and_original_is_unchanged(tmp_path):
+    validator = pytest.importorskip("ouroboros.presence_delivery").validate_delivery
+    async def run():
+        provider, host = Provider(), ReportingHost()
+        w = worker(tmp_path, provider, host)
+        store = w.store
+        store.enqueue_outbox("telegram-send:original", {"kind": "message", "chat_id": "-42", "text": "old"})
+        original_before = store.outbox_payload("telegram-send:original")
+        operation = make_operation_tool(SimpleNamespace(get_state_dir=lambda: str(tmp_path)))
+        queued = operation(method="editMessageText", chat_id="-42", message_id=7,
+                           text="fixed", request_id="edit", original_delivery_id="telegram-send:original")
+        assert queued["state"] == "queued"
+        assert await w.process_one_outbox()  # original send
+        assert await w.process_one_outbox()  # edit
+        assert store.outbox_payload("telegram-send:original")["text"] == original_before["text"]
+        receipt = store.delivery_receipt("telegram-operation:edit")
+        assert receipt["state"] == "delivered"
+        report = receipt["history_reports"][0]["payload"]
+        assert validator(report) == report
+        assert report["part_id"] == "0" and report["text"] == ""
+        assert report["message"]["original_delivery_id"] == "telegram-send:original"
+        assert report["message"]["replacement_text"] == "fixed"
+        assert report["origin"] == {"kind": "tool"}
+        await w.process_one_delivery_report()
+        await w.process_one_delivery_report()
+        assert any(row["delivery_id"] == "telegram-operation:edit" for row in host.calls)
     asyncio.run(run())
 
 

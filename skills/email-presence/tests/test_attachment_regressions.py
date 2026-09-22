@@ -1,5 +1,6 @@
 """Regression coverage for attachment custody and SMTP envelope semantics."""
 import importlib.util
+import json
 import sys
 import types
 from contextlib import contextmanager
@@ -174,6 +175,33 @@ def test_email_read_stages_the_same_attachment_artifact(tmp_path, monkeypatch):
     staged = result.get("staged_files") or result.get("attachments")
     source = _source_path(staged)
     assert source is not None and source.read_bytes() in {b"read me", raw}
+
+
+def test_email_read_plain_mail_stages_raw_source_without_binary_json(tmp_path, monkeypatch):
+    raw = _raw_mail("<plain-read@example.org>")
+    root = Path(__file__).resolve().parents[1]
+    package = types.ModuleType("email_plain_read_regression")
+    package.__path__ = [str(root)]
+    sys.modules[package.__name__] = package
+    spec = importlib.util.spec_from_file_location(package.__name__ + ".plugin", root / "plugin.py")
+    plugin = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(plugin)
+
+    class ReadClient:
+        def __init__(self, _settings):
+            self.settings = {}
+        def read(self, **_kwargs):
+            return {"folder": "INBOX", "uid": 1, "uidvalidity": 7,
+                    "message_id": "<plain-read@example.org>", "body": "plain text",
+                    "attachments": [], "_raw_source": raw}
+
+    monkeypatch.setattr(plugin, "MailClient", ReadClient)
+    api = _PluginAPI(tmp_path)
+    plugin.register(api)
+    value = api.tools["email_read"](uid=1, uidvalidity=7)
+    assert "_raw_source" not in value and value["attachments"] == []
+    assert Path(value["source_artifact"]["path"]).read_bytes() == raw
+    assert json.loads(json.dumps(value))["body"] == "plain text"
 
 
 class RecordingSMTPClient(MailClient):

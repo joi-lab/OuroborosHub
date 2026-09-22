@@ -81,10 +81,8 @@ def register(api):
     def read(**kwargs):
         kwargs.setdefault("folder", client().settings.get("EMAIL_DEFAULT_FOLDER") or "INBOX")
         message = client().read(include_attachment_data=True, **kwargs)
-        if message.get("attachments"):
-            staged = store().stage_inbound_attachments(message)
-            message["staged_files"] = staged
-            message["attachments"] = [{k: v for k, v in item.items() if k != "path"} for item in staged]
+        if message.get("_raw_source") is not None or message.get("attachments"):
+            store().stage_inbound_attachments(message)
         return message
 
     def draft(**kwargs):
@@ -155,13 +153,19 @@ def register(api):
 
     async def save(request):
         try:
+            current = _load(api)
+            if request.method == "GET":
+                return JSONResponse({
+                    "binding_id": current.get("binding_id") or "",
+                    "folder": current.get("folder") or api.get_settings(["EMAIL_DEFAULT_FOLDER"]).get("EMAIL_DEFAULT_FOLDER") or "INBOX",
+                    "poll_interval_sec": current.get("poll_interval_sec") or 30,
+                })
             body = await request.json()
             if not isinstance(body, dict):
                 raise ValueError("Expected JSON object")
-            current = _load(api)
             if "binding_id" in body:
                 current["binding_id"] = normalize_binding_id(body["binding_id"])
-            if "poll_interval_sec" in body:
+            if body.get("poll_interval_sec") is not None and str(body["poll_interval_sec"]).strip():
                 current["poll_interval_sec"] = max(5, min(3600, int(body["poll_interval_sec"])))
             if "folder" in body:
                 current["folder"] = str(body["folder"]).strip() or "INBOX"
@@ -174,7 +178,7 @@ def register(api):
         return JSONResponse({"ok": True, "message": "Saved. Toggle the skill to restart its companion."})
 
     api.register_route("status", status, methods=("GET",))
-    api.register_route("settings/save", save, methods=("POST",))
+    api.register_route("settings/save", save, methods=("GET", "POST"))
     api.register_ui_tab("email_presence", title="Email Presence", render={
         "kind": "declarative", "schema_version": 1, "components": [
             {"type": "action", "target": "status", "route": "status", "method": "GET", "label": "Refresh delivery status", "fields": []},

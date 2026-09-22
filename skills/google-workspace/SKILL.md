@@ -1,6 +1,6 @@
 ---
 name: google-workspace
-version: 0.2.0
+version: 0.2.1
 type: extension
 entry: plugin.py
 runtime: python3
@@ -15,6 +15,9 @@ permissions:
 env_from_settings:
   - GOOGLE_SERVICE_ACCOUNT_JSON
   - GOOGLE_OAUTH_ACCESS_TOKEN
+  - GOOGLE_OAUTH_CLIENT_ID
+  - GOOGLE_OAUTH_CLIENT_SECRET
+  - GOOGLE_OAUTH_REFRESH_TOKEN
 requires:
   - "httpx>=0.24.0"
   - "cryptography>=41.0.0"
@@ -29,12 +32,13 @@ timeout_sec: 60
 
 # Google Workspace Skill
 
-Universal, standalone extension skill providing Google Sheets, Docs, and Drive integration using explicit OAuth bearer or Service Account credentials.
+Universal, standalone extension skill providing Google Sheets, Docs, and Drive integration using renewable user OAuth or Service Account credentials.
 
 ## Features
 - **Google Sheets**: Discover workbook metadata and tabs, read/update/append ranges, and apply structural batch updates.
 - **Google Docs**: Structured read, batch update with readback, and create new blank/template documents.
 - **Google Drive**: Search/list with pagination and Shared Drive options; upload/download/export bounded binary artifacts.
+- **General API**: `workspace_request` accepts provider-shaped requests across Drive v3, Docs v1 and Sheets v4, sharing the existing client and credentials.
 - **Settings & UI Tab**: Configure default working folders and template mappings.
 
 Google Sheets CSV export in `drive_read_text` contains only the first tab;
@@ -43,4 +47,21 @@ Use `sheets_info` to discover tabs and `sheets_read` for their explicit ranges.
 Metadata omitted by Google (such as owners for shared-drive files) remains absent.
 
 ## Authentication
-Configure either `GOOGLE_SERVICE_ACCOUNT_JSON` or an explicit `GOOGLE_OAUTH_ACCESS_TOKEN` in Settings. Share specific Google Drive folders or files with the service account email. The authentication status probe can verify an explicitly supplied delegation subject; operational tools use the explicitly selected OAuth or service-account route and never infer a subject.
+For persistent user access, configure and grant `GOOGLE_OAUTH_CLIENT_ID`,
+`GOOGLE_OAUTH_CLIENT_SECRET` and `GOOGLE_OAUTH_REFRESH_TOKEN` in Settings → Secrets,
+then pass `auth_mode="oauth"`. Obtain the refresh token through an owner-approved
+Google OAuth consent flow with offline access; this skill does not start login.
+`GOOGLE_OAUTH_ACCESS_TOKEN` remains optional for short-lived access and is reused
+until Google rejects it or a cached refreshed token expires. Renewable tokens are
+cached in memory; each isolated tool process can refresh from the granted secrets.
+
+Alternatively grant `GOOGLE_SERVICE_ACCOUNT_JSON` and share resources with that
+service account. The default remains `auth_mode="service_account"`; the skill
+never silently changes identity or falls back between routes. An explicit
+`subject` is supported by the authentication probe for domain-wide delegation.
+
+`workspace_auth_status` performs a Drive user read and returns `configured`,
+`verified` and the actual provider `actor`. Success verifies that request only,
+not access to a particular file or write permission. Read the intended resource
+with the same `auth_mode` to verify its access. Resource ID parameters accept
+common Google Docs, Sheets and Drive links as well as bare IDs.

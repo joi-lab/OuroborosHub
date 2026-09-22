@@ -387,16 +387,26 @@ class CustodyStore:
                 ),
             )
 
-    def mark_outbox_failed(self, delivery_id: str, *, reason: str, report=None) -> None:
+    def mark_outbox_failed(self, delivery_id: str, *, reason: str, report=None,
+                           state: str = "failed") -> None:
+        if state not in {"failed", "uncertain"}:
+            raise ValueError("terminal outbox state must be failed or uncertain")
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute("SELECT payload_json FROM outbox WHERE delivery_id=? AND state='leased'",
+                               (delivery_id,)).fetchone() if state == "uncertain" else None
+            payload = json.loads(row[0]) if row is not None else None
+            if payload is not None:
+                payload["_terminal_outcome"] = "uncertain"
             conn.execute(
                 """
                 UPDATE outbox
-                SET state='failed', lease_until=0, failed_at=?, last_error=?
+                SET state='failed', lease_until=0, failed_at=?, last_error=?,
+                    payload_json=COALESCE(?,payload_json)
                 WHERE delivery_id=? AND state='leased'
                 """,
-                (time.time(), str(reason)[:500], delivery_id),
+                (time.time(), str(reason)[:500], _json(payload) if payload is not None else None,
+                 delivery_id),
             )
             self._add_reports(conn, delivery_id, [report] if report else [])
             conn.commit()
@@ -480,13 +490,14 @@ class CustodyStore:
             ).fetchone()
         if row is None:
             return {"state": "not_found"}
+        payload = json.loads(row["payload_json"])
         return {
-            "state": str(row["state"]),
+            "state": "uncertain" if payload.get("_terminal_outcome") == "uncertain" else str(row["state"]),
             "attempts": int(row["attempts"]),
             "delivered_at": _timestamp(row["delivered_at"]),
             "provider_receipt": json.loads(row["provider_receipt_json"] or "{}"),
             "error": str(row["last_error"]),
-            "delivery_reporting": json.loads(row["payload_json"]).get("_reporting", {"version": 0, "status": "legacy_unconfirmed"}),
+            "delivery_reporting": payload.get("_reporting", {"version": 0, "status": "legacy_unconfirmed"}),
             "history_reports": json.loads(row["reports_json"]),
         }
 
@@ -525,7 +536,12 @@ class CustodyStore:
                 "outbox_waiting": outbox.get("pending", 0),
                 "outbox_leased": outbox.get("leased", 0),
                 "outbox_delivered": outbox.get("delivered", 0),
-                "outbox_failed": outbox.get("failed", 0),
+                "outbox_failed": outbox.get("failed", 0) - conn.execute(
+                    "SELECT COUNT(*) FROM outbox WHERE state='failed' AND json_extract(payload_json,'$._terminal_outcome')='uncertain'"
+                ).fetchone()[0],
+                "outbox_uncertain": conn.execute(
+                    "SELECT COUNT(*) FROM outbox WHERE state='failed' AND json_extract(payload_json,'$._terminal_outcome')='uncertain'"
+                ).fetchone()[0],
                 "work_waiting": work.get("pending", 0),
                 "work_leased": work.get("leased", 0),
                 "work_terminal": sum(

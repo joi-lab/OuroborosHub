@@ -18,10 +18,10 @@ except ImportError:
     StarletteJSONResponse = None
 
 try:
-    from .auth import parse_service_account_info, get_access_token
+    from .auth import parse_service_account_info
     from .client import GoogleWorkspaceClient, VALUE_RENDER_OPTIONS
 except ImportError:
-    from auth import parse_service_account_info, get_access_token
+    from auth import parse_service_account_info
     from client import GoogleWorkspaceClient, VALUE_RENDER_OPTIONS
 
 if TYPE_CHECKING:
@@ -51,14 +51,16 @@ def _get_client_sa_json(api: PluginAPI) -> Optional[str]:
         raise RuntimeError(f"Error reading GOOGLE_SERVICE_ACCOUNT_JSON from host settings: {exc}") from exc
 
 
-def _get_oauth_access_token(api: PluginAPI) -> Optional[str]:
-    """Read an explicitly granted OAuth bearer token, without deriving one."""
-    try:
-        settings_dict = api.get_settings(["GOOGLE_OAUTH_ACCESS_TOKEN"])
-        val = settings_dict.get("GOOGLE_OAUTH_ACCESS_TOKEN")
-        return str(val).strip() if val and str(val).strip() else None
-    except Exception as exc:
-        raise RuntimeError(f"Error reading GOOGLE_OAUTH_ACCESS_TOKEN from host settings: {exc}") from exc
+def _get_oauth_credentials(api: PluginAPI) -> Dict[str, Optional[str]]:
+    """Read only the user OAuth secrets explicitly granted to this skill."""
+    names = {
+        "access_token": "GOOGLE_OAUTH_ACCESS_TOKEN",
+        "client_id": "GOOGLE_OAUTH_CLIENT_ID",
+        "client_secret": "GOOGLE_OAUTH_CLIENT_SECRET",
+        "refresh_token": "GOOGLE_OAUTH_REFRESH_TOKEN",
+    }
+    settings = api.get_settings(list(names.values()))
+    return {key: str(settings.get(name) or "").strip() or None for key, name in names.items()}
 
 
 def _make_client(api: PluginAPI, auth_mode: str = "service_account", subject: Optional[str] = None) -> GoogleWorkspaceClient:
@@ -69,10 +71,10 @@ def _make_client(api: PluginAPI, auth_mode: str = "service_account", subject: Op
     """
     mode = str(auth_mode or "service_account").strip().lower()
     if mode == "oauth":
-        token = _get_oauth_access_token(api)
-        if not token:
-            raise RuntimeError("Missing 'GOOGLE_OAUTH_ACCESS_TOKEN'. Configure an explicit OAuth route for this tool.")
-        return GoogleWorkspaceClient(access_token=token)
+        credentials = _get_oauth_credentials(api)
+        if not credentials["access_token"] and not all(credentials[key] for key in ("client_id", "client_secret", "refresh_token")):
+            raise RuntimeError("Configure and grant GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET and GOOGLE_OAUTH_REFRESH_TOKEN, or a short-lived GOOGLE_OAUTH_ACCESS_TOKEN.")
+        return GoogleWorkspaceClient(**credentials)
     if mode != "service_account":
         raise ValueError("auth_mode must be 'service_account' or 'oauth'.")
     return GoogleWorkspaceClient(raw_sa_info=_get_client_sa_json(api), subject=subject)
@@ -134,29 +136,42 @@ def _resolve_template_id(api: PluginAPI, template_id: Optional[str]) -> Optional
 
 def _make_workspace_auth_status(api: PluginAPI):
     def workspace_auth_status(auth_mode: str = "service_account", subject: str = "") -> str:
-        """Verify one explicit Google auth route without making a Workspace change."""
+        """Verify the actual Google actor with Drive about.user, without writes."""
         mode = str(auth_mode or "service_account").strip().lower()
+        payload: Dict[str, Any] = {
+            "status": "error", "auth_mode": mode, "configured": False,
+            "verified": False, "actor": None, "resource_access": "not_checked",
+        }
         try:
-            if mode == "oauth":
-                token = _get_oauth_access_token(api)
-                if not token:
-                    raise RuntimeError("Missing 'GOOGLE_OAUTH_ACCESS_TOKEN'.")
-                return _format_json({"status": "ready", "auth_mode": "oauth", "message": "Explicit OAuth bearer token is configured."})
-            if mode != "service_account":
-                raise ValueError("auth_mode must be 'service_account' or 'oauth'.")
-            sa_json = _get_client_sa_json(api)
-            if not sa_json:
-                raise RuntimeError("Missing 'GOOGLE_SERVICE_ACCOUNT_JSON'. Please configure it for the service_account route.")
-            sa_info = parse_service_account_info(sa_json)
-            token = get_access_token(sa_json, force_refresh=True, subject=(subject.strip() or None))
-            if not token:
-                raise RuntimeError("Failed to obtain OAuth2 access token from Google.")
-            payload = {"status": "ready", "auth_mode": "service_account", "client_email": sa_info.get("client_email"), "project_id": sa_info.get("project_id"), "delegated_subject": subject.strip() or None, "message": "Google Workspace Service Account authentication verified successfully."}
-            return _format_json(payload)
+            with _make_client(api, mode, subject.strip() or None) as client:
+                if mode == "service_account":
+                    info = parse_service_account_info(client.raw_sa_info)
+                    payload.update(client_email=info.get("client_email"), project_id=info.get("project_id"),
+                                   delegated_subject=subject.strip() or None)
+                else:
+                    payload["refresh_configured"] = bool(client.client_id and client.client_secret and client.refresh_token)
+                payload["configured"] = True
+                result = client.workspace_request("drive", "GET", "about", query={"fields": "user"})
+                actor = result.get("data", {}).get("user")
+                if not isinstance(actor, dict) or not (actor.get("emailAddress") or actor.get("permissionId")):
+                    raise RuntimeError("Google Drive did not return a verifiable user identity.")
+                payload.update(status="ready", verified=True, actor=actor,
+                               verification_scope="drive.about.user",
+                               message="Google Drive verified this actor. Individual file access and write permissions require separate checks.")
         except Exception as exc:
-            raise RuntimeError(f"Google Workspace authentication preflight failed: {exc}") from exc
+            payload["message"] = str(exc)
+        return _format_json(payload)
 
     return workspace_auth_status
+
+
+def _make_workspace_request(api: PluginAPI):
+    def workspace_request(service: str, method: str, path: str,
+                          query: Optional[Dict[str, Any]] = None, json_body: Optional[Any] = None,
+                          auth_mode: str = "service_account") -> str:
+        with _make_client(api, auth_mode) as client:
+            return _format_json(client.workspace_request(service, method, path, query, json_body))
+    return workspace_request
 
 
 def _make_sheets_info(api: PluginAPI):
@@ -350,6 +365,10 @@ def _make_sheets_batch_update(api: PluginAPI):
 
 def _make_settings_save(api: PluginAPI):
     async def settings_save(request: Any) -> Any:
+        if getattr(request, "method", "POST") == "GET":
+            current = _get_local_settings(api)
+            values = {key: current.get(key, "") for key in ("DEFAULT_FOLDER_ID", "TEMPLATES_JSON")}
+            return StarletteJSONResponse(values) if StarletteJSONResponse is not None else values
         try:
             payload = await request.json()
         except Exception as exc:
@@ -416,7 +435,7 @@ def register(api: PluginAPI) -> None:
     api.register_tool(
         name="workspace_auth_status",
         handler=_make_workspace_auth_status(api),
-        description="Verify Google Service Account credentials and OAuth2 token connectivity without making changes.",
+        description="Verify the selected OAuth or Service Account actor with a read-only Google Drive user request. File permissions remain separate.",
         schema={
             "type": "object",
             "properties": {
@@ -424,7 +443,20 @@ def register(api: PluginAPI) -> None:
                 "subject": {"type": "string", "description": "Optional explicit domain-wide delegation subject. Never inferred from settings."},
             },
         },
-        timeout_sec=30,
+        timeout_sec=90,
+    )
+
+    api.register_tool(
+        name="workspace_request",
+        handler=_make_workspace_request(api),
+        description="Call any Drive v3, Docs v1 or Sheets v4 REST operation with the selected identity. Supply a relative API path, query and JSON body; Google enforces scopes and permissions. No automatic retry after transport errors.",
+        schema={"type": "object", "properties": {
+            "service": {"type": "string", "enum": ["drive", "docs", "sheets"]},
+            "method": {"type": "string", "description": "HTTP method, e.g. GET, POST, PATCH, PUT, DELETE."},
+            "path": {"type": "string", "description": "Relative to service API root, e.g. files/ID/permissions or documents/ID:batchUpdate."},
+            "query": {"type": "object"}, "json_body": {},
+            "auth_mode": {"type": "string", "enum": ["service_account", "oauth"], "default": "service_account"},
+        }, "required": ["service", "method", "path"]}, timeout_sec=90,
     )
 
     api.register_tool(
@@ -653,7 +685,7 @@ def register(api: PluginAPI) -> None:
     api.register_route(
         path="settings/save",
         handler=_make_settings_save(api),
-        methods=("POST",),
+        methods=("GET", "POST"),
     )
 
     # 3. Register Settings Section
@@ -704,9 +736,9 @@ def register(api: PluginAPI) -> None:
             "components": [
                 {
                     "type": "callout",
-                    "title": "Google Workspace Service Account Integration",
+                    "title": "Google Workspace Integration",
                     "tone": "info",
-                    "text": "Access Google Sheets, Docs, and Drive via Service Account authentication. Only resources explicitly shared with the service account email are accessible.",
+                    "text": "Access Sheets, Docs and Drive using an explicitly selected OAuth user or service account. Verify the authenticated actor and the actual resource access separately.",
                 },
                 {
                     "type": "group",
@@ -715,9 +747,9 @@ def register(api: PluginAPI) -> None:
                         {
                             "type": "markdown",
                             "text": (
-                                "1. **Configure Secret**: Add `GOOGLE_SERVICE_ACCOUNT_JSON` under **Settings → Secrets**.\n"
-                                "2. **Share Folders**: In Google Drive, share your target folder or document with the service account's `client_email`.\n"
-                                "3. **Set Defaults**: Use the settings form below to configure `DEFAULT_FOLDER_ID` and template mappings."
+                                "1. **Choose credentials**: Add `GOOGLE_SERVICE_ACCOUNT_JSON`, or the `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET` and `GOOGLE_OAUTH_REFRESH_TOKEN` granted by your user OAuth flow, under **Settings → Secrets**. A temporary `GOOGLE_OAUTH_ACCESS_TOKEN` also works.\n"
+                                "2. **Verify access**: Call `workspace_auth_status(auth_mode='oauth')` for the user route or `auth_mode='service_account'` for the shared-resource route; then read the intended document. Service accounts do not inherit domain-wide sharing.\n"
+                                "3. **Set Defaults**: Open Settings to configure `DEFAULT_FOLDER_ID` and template mappings."
                             ),
                         }
                     ],
@@ -733,9 +765,13 @@ def register(api: PluginAPI) -> None:
                                 "- `sheets_read(spreadsheet_id, range, max_rows=5000, value_render_option='FORMATTED_VALUE')`: Read values or formulas from a selected range.\n"
                                 "- `sheets_append(spreadsheet_id, range, rows)`: Append rows to Google Sheets.\n"
                                 "- `docs_create(title, folder_id, template_id)`: Create or duplicate Google Docs.\n"
-                                "- `drive_list(folder_id)`: List files in shared folders.\n"
+                                "- `drive_list(...)`: Search by name or content and paginate accessible files.\n"
                                 "- `drive_read_text(file_id)`: Export text from Docs, Sheets, or plain text files.\n"
-                                "- `workspace_auth_status()`: Verify service account setup."
+                                "- `docs_read` / `docs_update`: Read document structure and apply provider batch requests.\n"
+                                "- `sheets_update` / `sheets_batch_update`: Update values or workbook structure.\n"
+                                "- `drive_download` / `drive_export` / `drive_upload`: Exchange file bytes.\n"
+                                "- `workspace_request`: Use Drive, Docs or Sheets REST operations with the selected credentials.\n"
+                                "- `workspace_auth_status`: Verify the selected route and return its actual actor."
                             ),
                         }
                     ],

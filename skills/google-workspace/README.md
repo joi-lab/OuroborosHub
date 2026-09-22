@@ -1,6 +1,6 @@
 # Google Workspace Skill (`google-workspace`)
 
-A universal, standalone, public extension skill for Ouroboros providing Google Sheets, Google Docs, and Google Drive integration via Google Cloud Service Accounts.
+A universal, standalone, public extension skill for Ouroboros providing Google Sheets, Google Docs, and Google Drive integration via renewable user OAuth or Google Cloud Service Accounts.
 
 ---
 
@@ -9,7 +9,8 @@ A universal, standalone, public extension skill for Ouroboros providing Google S
 - **Google Sheets (`sheets_info`, `sheets_read`, `sheets_update`, `sheets_append`, `sheets_batch_update`)**: Discover tabs, read/update/append ranges, and apply structural requests.
 - **Google Docs (`docs_create`, `docs_read`, `docs_update`)**: Create blank/template documents, read structured body data, and batch-update with optional readback.
 - **Google Drive (`drive_list`, `drive_read_text`, `drive_download`, `drive_export`, `drive_upload`)**: Search and paginate across folders or Shared Drives, export text, and exchange bounded binary artifacts through skill state.
-- **Preflight Check (`workspace_auth_status`)**: Validate service account credentials and OAuth2 connectivity without side effects or leaking token material.
+- **General API (`workspace_request`)**: Send standard JSON requests across Drive v3, Docs v1 and Sheets v4 using the same selected identity.
+- **Preflight Check (`workspace_auth_status`)**: Verify the actual Google Drive actor without modifying Workspace data or returning credentials.
 - **Settings & UI Tab**: Configure default working folders and template name mappings.
 
 ---
@@ -27,26 +28,65 @@ This skill uses **pure REST via `httpx` and `cryptography`** rather than the off
 
 ## Setup & Configuration
 
-1. **Create a Google Cloud Service Account**:
-   - Enable **Google Sheets API**, **Google Docs API**, and **Google Drive API** in your Google Cloud Console.
-   - Create a Service Account and generate/download a **JSON key file**.
+Enable Google Drive, Docs and Sheets APIs in the Google Cloud project used by
+your chosen credential route. Configure secrets under **Settings → Secrets** and
+grant only the keys for that route to this skill. Secrets belong to the host's
+granted settings, never the skill's folder or template settings form.
 
-2. **Add to Settings**:
-   - In Ouroboros, navigate to **Settings → Secrets**.
-   - Add either `GOOGLE_SERVICE_ACCOUNT_JSON` or an explicit `GOOGLE_OAUTH_ACCESS_TOKEN` secret.
-   - Grant the selected secret to the `google-workspace` skill. Auth mode is selected per tool call; the authentication status probe accepts a delegation subject only when explicitly supplied.
+### Persistent user OAuth
 
-3. **Share Files or Folders**:
-   - Copy the `client_email` address from your Service Account JSON (e.g. `my-sa@my-project.iam.gserviceaccount.com`).
-   - In Google Drive, share only the specific folders or documents you want the agent to access with this email.
+1. Use an owner-approved Google OAuth client and consent flow with offline access
+   to obtain a refresh token for the user and required scopes. The skill does not
+   launch consent, sign in, switch accounts or request new scopes.
+2. Configure and grant `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET`, and
+   `GOOGLE_OAUTH_REFRESH_TOKEN`. These three optional manifest keys form the
+   renewable route together. Updating a skill payload requires current review and
+   grants for the new content; an old bearer-only grant does not grant these keys.
+3. Pass `auth_mode="oauth"` to tools. The skill refreshes at Google's fixed token
+   endpoint, caches access tokens in memory by the complete credential fingerprint,
+   and honors the returned expiry. Isolated tool processes can independently
+   refresh using the same persistent host secrets.
+4. Run `workspace_auth_status(auth_mode="oauth")`, check the returned actor, then
+   read the intended document with the same mode. OAuth acts as that user within
+   both granted scopes and resource permissions. The Drive user probe does not
+   certify every file, every API, or write access.
+
+`GOOGLE_OAUTH_ACCESS_TOKEN` alone remains supported for short-lived use; an
+expired token cannot renew without all three refresh credentials. An explicitly
+supplied access token is reused initially. A definite API 401 triggers at most
+one refresh and request retry; timeouts and other HTTP errors never trigger an
+automatic mutation retry. A revoked/expired refresh grant returns an error and
+requires owner action. Google app publishing status, organization policies and
+revocation affect refresh-token validity; a refresh token is not a permanent
+entitlement. Neither credentials nor refreshed tokens are written to skill state.
+
+### Service account
+
+Create a service account JSON key, configure and grant
+`GOOGLE_SERVICE_ACCOUNT_JSON`, and share the intended Drive files/folders with its
+`client_email`. `auth_mode="service_account"` remains the default for compatibility.
+OAuth is selected explicitly and never falls back to the service account. The
+status probe's optional `subject` checks explicit domain-wide delegation only;
+operational tools do not infer delegation from an email address.
 
 ---
 
 ## Tool Reference
 
 ### `workspace_auth_status(auth_mode="service_account", subject="")`
-- **Description**: Verifies one explicit credential route. `auth_mode="oauth"` checks the granted bearer token; `subject` is used only for an explicitly requested service-account delegation check.
-- **Returns**: `{"status": "ready", "client_email": "...", "project_id": "..."}`.
+- **Description**: Calls Drive `about?fields=user` through the explicitly selected route. No Workspace write occurs; renewable routes may exchange credentials for an access token.
+- **Returns**: `status`, `auth_mode`, `configured`, `verified`, `actor`, `resource_access="not_checked"`, and a message. A configured but invalid token reports `verified=false`, never `ready`. Successful probes include `verification_scope="drive.about.user"`; service-account configuration metadata stays separate from the actual provider actor.
+
+### `workspace_request(service, method, path, query=None, json_body=None, auth_mode="service_account")`
+- **Services**: `drive` starts at `https://www.googleapis.com/drive/v3`, `docs` at `https://docs.googleapis.com/v1`, and `sheets` at `https://sheets.googleapis.com/v4`.
+- **Parameters**: Standard HTTP method, API-relative path, query object, and optional JSON body. Provider operations and permissions are decided by the caller and Google; this tool adds no operation allowlist.
+- **Examples**: `service="drive", method="GET", path="files/ID", query={"fields":"id,name,capabilities"}`; `service="drive", method="POST", path="files/ID/permissions", json_body={"type":"user","role":"reader","emailAddress":"reader@example.com"}`; `service="docs", method="POST", path="documents/ID:batchUpdate", json_body={"requests":[...]}`.
+- **Returns**: `status_code` plus the provider `data` for JSON, `text` for a text response, or just the status for an empty response. Use the existing download/export/upload tools for binary artifacts. Query fields, pagination and write preconditions follow the provider API.
+
+All existing tool names remain available. Their resource ID parameters accept
+bare IDs or ordinary Google Docs, Sheets, Drive file/folder and `open?id=...`
+links. A general request path remains API-relative; it is not a document URL.
+All operational tools accept `auth_mode` with the same explicit route semantics.
 
 ### `sheets_info(spreadsheet_id)`
 - **Description**: Read spreadsheet title, locale, timezone, URL, and tab IDs, titles, order, type, visibility and grid properties. Does not fetch cell values or formatting.
@@ -79,6 +119,7 @@ This skill uses **pure REST via `httpx` and `cryptography`** rather than the off
   - `folder_id` (string, optional): Target Google Drive folder ID (or uses configured default).
   - `template_id` (string, optional): Template Document ID or template alias name to copy from.
 - **Returns**: JSON object with `document_id`, `title`, `url`, `folder_id`.
+- **Placement**: A blank document with a target folder is created directly in that folder through Drive. If the folder is missing or inaccessible, creation fails without creating a root document as a fallback. Template copying and creation without a target folder remain supported.
 
 ### `docs_read` and `docs_update`
 - **Description**: Read structured Docs body data and apply standard Docs `batchUpdate` requests. Updates read the document back by default and accept an optional `write_control`.
@@ -132,14 +173,14 @@ payload and uploads it with an explicit MIME type.
 2. **Verification**:
    - Tests use disposable RSA keys and mocked Google responses. They do not certify permissions or API enablement in a particular Google project; run `workspace_auth_status` after setup.
    - Native signing is imported during execution, after extension registration. Loading native cryptography during registration and retaining its classes after isolated-dependency cleanup can cause `Expected instance of hashes.HashAlgorithm` on the first tool call, even when the host and isolated package versions match.
-   - Run `python -m pytest -q skills/google-workspace/tests` from the Hub checkout. Set `OUROBOROS_SOURCE_DIR` to an Ouroboros source checkout to include repeated authentication and document reads through the real isolated child loader. This integration test uses temporary state, local test grants, mocked HTTP, and signature verification; it does not change a live installation.
+   - Run `PYTHONPATH=skills/google-workspace python -m pytest -q skills/google-workspace/tests` from the Hub checkout. Set `OUROBOROS_SOURCE_DIR` to an Ouroboros source checkout to include repeated authentication and document reads through the real isolated child loader. This integration test uses temporary state, local test grants, mocked HTTP, and signature verification; it does not change a live installation.
 
 ---
 
 ## Security Boundaries
 
-- **Strict Access Control**: Service accounts can only view or modify items explicitly shared with their email address.
-- **Credential Protection**: The granted `GOOGLE_SERVICE_ACCOUNT_JSON` is never returned in tool responses, logged, or shared.
+- **Provider Access Control**: OAuth uses the selected user's granted scopes and resource permissions. Service accounts use resources available to their own identity or an explicitly delegated subject.
+- **Credential Protection**: Granted Google credentials and access tokens are never returned by authentication status or persisted in skill state. Refresh failures report the OAuth error code without echoing the response body.
 - **Endpoint Protection**: OAuth2 token exchanges are strictly pinned to verified Google OAuth domains.
 - **Zero Core Mutation**: Confined to `data/skills/external/google-workspace/` and its state directory.
 
@@ -149,3 +190,6 @@ payload and uploads it with an explicit MIME type.
 - [Sheets metadata without grid data](https://developers.google.com/workspace/sheets/api/reference/rest/v4/spreadsheets/get)
 - [Values rendering options](https://developers.google.com/workspace/sheets/api/reference/rest/v4/ValueRenderOption)
 - [Export formats and first-sheet CSV scope](https://developers.google.com/workspace/drive/api/guides/ref-export-formats)
+
+- [User OAuth offline access and refresh](https://developers.google.com/identity/protocols/oauth2/web-server#offline)
+- [Drive authenticated user](https://developers.google.com/workspace/drive/api/reference/rest/v3/about/get)

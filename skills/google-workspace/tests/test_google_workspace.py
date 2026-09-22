@@ -256,20 +256,14 @@ def test_docs_create_blank():
             return httpx.Response(200, json={"access_token": "mock_token", "expires_in": 3600})
         if request.method == "POST" and "docs.googleapis.com/v1/documents" in url_str:
             return httpx.Response(200, json={"documentId": "doc12345", "title": "My New Document"})
-        if request.method == "GET" and "drive/v3/files/doc12345" in url_str:
-            return httpx.Response(200, json={"parents": ["root_parent_id"]})
-        if request.method == "PATCH" and "drive/v3/files/doc12345" in url_str:
-            assert "addParents=folder789" in str(request.url.params) or request.url.params.get("addParents") == "folder789"
-            assert "removeParents=root_parent_id" in str(request.url.params) or request.url.params.get("removeParents") == "root_parent_id"
-            return httpx.Response(200, json={"id": "doc12345"})
         return httpx.Response(404, text="Not Found")
 
     mock_client = httpx.Client(transport=httpx.MockTransport(handle_request))
     with GoogleWorkspaceClient(raw_sa_info=VALID_SA_JSON_STR, http_client=mock_client) as client:
-        res = client.docs_create(title="My New Document", folder_id="folder789")
+        res = client.docs_create(title="My New Document")
         assert res["document_id"] == "doc12345"
         assert res["url"] == "https://docs.google.com/document/d/doc12345/edit"
-        assert res["folder_id"] == "folder789"
+        assert res["folder_id"] is None
 
 
 def test_docs_create_from_template():
@@ -497,7 +491,7 @@ def test_plugin_registration_and_settings_save(tmp_path, monkeypatch):
     plugin.register(mock_api)
 
     # Check registered tools
-    expected_tools = {"workspace_auth_status", "sheets_info", "sheets_read", "sheets_append", "docs_create", "drive_list", "drive_read_text"}
+    expected_tools = {"workspace_request", "workspace_auth_status", "sheets_info", "sheets_read", "sheets_append", "docs_create", "drive_list", "drive_read_text"}
     assert expected_tools.issubset(set(mock_api.tools.keys()))
     render_schema = mock_api.tools["sheets_read"]["schema"]["properties"]["value_render_option"]
     assert render_schema["enum"] == ["FORMATTED_VALUE", "UNFORMATTED_VALUE", "FORMULA"]
@@ -535,6 +529,7 @@ def test_plugin_registration_and_settings_save(tmp_path, monkeypatch):
     assert form_comp["type"] == "form"
     assert form_comp["route"] == "settings/save"
     assert form_comp["method"] == "POST"
+    assert mock_api.routes["settings/save"]["methods"] == ("GET", "POST")
 
     # Test settings save route handler
     save_handler = mock_api.routes["settings/save"]["handler"]
@@ -553,6 +548,33 @@ def test_plugin_registration_and_settings_save(tmp_path, monkeypatch):
     # Test resolve folder and template ID using the saved settings
     assert plugin._resolve_folder_id(mock_api, None) == "folder_default_123"
     assert plugin._resolve_template_id(mock_api, "weekly_report") == "doc_tmpl_456"
+
+
+def test_settings_hydration_roundtrip_preserves_other_fields(tmp_path):
+    from starlette.applications import Starlette
+    from starlette.routing import Route
+    from starlette.testclient import TestClient
+
+    class API:
+        def get_state_dir(self):
+            return str(tmp_path)
+        def log(self, *args):
+            pass
+
+    saved = {"DEFAULT_FOLDER_ID": "folder_1", "TEMPLATES_JSON": '{"report": "doc_1"}'}
+    path = tmp_path / "settings.json"
+    app = Starlette(routes=[Route("/settings/save", plugin._make_settings_save(API()), methods=["GET", "POST"])])
+    with TestClient(app) as client:
+        assert client.get("/settings/save").json() == {"DEFAULT_FOLDER_ID": "", "TEMPLATES_JSON": ""}
+        assert not path.exists()
+        path.write_text(json.dumps({**saved, "GOOGLE_OAUTH_REFRESH_TOKEN": "must-not-return"}), encoding="utf-8")
+        before = path.read_bytes()
+        response = client.get("/settings/save")
+        assert response.status_code == 200 and response.json() == saved
+        assert path.read_bytes() == before
+        response = client.post("/settings/save", json={**response.json(), "DEFAULT_FOLDER_ID": "folder_2"})
+        assert response.status_code == 200
+        assert client.get("/settings/save").json() == {**saved, "DEFAULT_FOLDER_ID": "folder_2"}
 
 
 def test_drive_search_query_and_shared_drive_options():

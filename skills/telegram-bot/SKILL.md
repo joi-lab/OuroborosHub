@@ -2,7 +2,7 @@
 name: telegram-bot
 description: Durable Telegram transport for generic Ouroboros presences, with exact actor and conversation
   provenance, media staging, and provider receipts.
-version: 0.4.0
+version: 0.4.1
 type: extension
 plugin_api: '2.0'
 runtime: python3
@@ -89,6 +89,10 @@ ui_tab:
       - type: metric
         label: Outbox failed
         path: outbox_failed
+        target: status
+      - type: metric
+        label: Outbox uncertain
+        path: outbox_uncertain
         target: status
       - type: metric
         label: Telegram offset
@@ -213,12 +217,19 @@ is not proof of provider delivery.
 that update an own message: `editMessageText` and `setMessageReaction`. It
 accepts Bot API-shaped parameters and retains a new operation identity plus an
 optional `original_delivery_id` source reference, so an edit/reaction never
-rewrites the original outbound delivery history. A reaction update contains
+rewrites the original outbound delivery history. Inspect its result with
+`telegram_receipt(operation="operation", request_id=...)`. The original
+delivery reference stays in provider message facts; Host origin retains its
+standard `kind`/task/source-event provenance. A reaction update contains
 only Telegram's reaction objects; this skill does not invent a forum topic ID
 when the provider's reaction update omits one. Supply a known local topic ID
 only for `editMessageText` when the caller has it. Provider rights, reaction
 administration requirements, and errors remain authoritative; a queued row is
 not a delivery claim.
+An ambiguous transport result for an edit/reaction is terminally `uncertain` in
+its own operation receipt, without an automatic second provider call. A
+confirmed operation is checkpointed before its row completes, so restart
+finishes from that receipt rather than repeating the provider mutation.
 
 The outbox runs independently while a Presence turn is reasoning. The model may
 call `telegram_send` for an intermediate acknowledgement, continue working, and

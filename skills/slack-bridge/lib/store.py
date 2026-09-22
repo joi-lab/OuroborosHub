@@ -484,8 +484,11 @@ class BridgeStore:
         if not operation:
             raise ValueError("Slack mutation operation is required")
         now = time.time()
-        target = str(payload.get("channel") or payload.get("channel_id") or "mutation")
-        thread_ts = str(payload.get("thread_ts") or "")
+        arguments = payload.get("body") if payload.get("method") == "POST" else payload.get("params")
+        arguments = arguments if isinstance(arguments, Mapping) else {}
+        target = str(payload.get("channel") or payload.get("channel_id")
+                     or arguments.get("channel") or arguments.get("channel_id") or "mutation")
+        thread_ts = str(payload.get("thread_ts") or arguments.get("thread_ts") or "")
         with self._connect() as db:
             db.execute(
                 """INSERT OR IGNORE INTO outbox
@@ -623,6 +626,26 @@ class BridgeStore:
         with self._connect() as db:
             row = db.execute("SELECT value_json FROM runtime_state WHERE key=?", (key,)).fetchone()
         return json.loads(row[0]) if row else default
+
+    def delivery_receipt(self, request_id: str) -> dict[str, Any]:
+        with self._connect() as db:
+            rows = db.execute(
+                """SELECT kind,operation,chunk_index,state,attempts,target,resolved_channel,
+                          provider_message_ts,result_json,last_error,report_state,report_error
+                   FROM outbox WHERE request_id=? ORDER BY chunk_index""",
+                (str(request_id),),
+            ).fetchall()
+        if not rows:
+            return {"state": "not_found", "request_id": str(request_id)}
+        parts = [{"part_id": str(row["chunk_index"]), "state": str(row["state"]),
+                  "attempts": int(row["attempts"]), "target": str(row["target"]),
+                  "resolved_channel": str(row["resolved_channel"]),
+                  "provider_message_ts": str(row["provider_message_ts"]),
+                  "provider_result": json.loads(row["result_json"] or "{}"),
+                  "error": str(row["last_error"]), "history_report_state": str(row["report_state"]),
+                  "history_report_error": str(row["report_error"])} for row in rows]
+        return {"request_id": str(request_id), "kind": str(rows[0]["kind"]),
+                "operation": str(rows[0]["operation"]), "parts": parts}
 
     def retry_outbox(
         self,
