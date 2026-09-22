@@ -477,7 +477,9 @@ class BridgeStore:
             db.commit()
         return len(clean_chunks)
 
-    def enqueue_mutation(self, *, request_id: str, operation: str, payload: Mapping[str, Any]) -> bool:
+    def enqueue_mutation(self, *, request_id: str, operation: str, payload: Mapping[str, Any],
+                         origin: Mapping[str, Any] | None = None,
+                         delivery_reporting_version: int = 0) -> bool:
         request_id, operation = str(request_id or uuid.uuid4().hex), str(operation or "").strip()
         if not operation:
             raise ValueError("Slack mutation operation is required")
@@ -487,10 +489,13 @@ class BridgeStore:
         with self._connect() as db:
             db.execute(
                 """INSERT OR IGNORE INTO outbox
-                   (request_id,chunk_index,chunk_count,target,thread_ts,text,ordering_key,kind,operation,payload_json,created_at,updated_at)
-                   VALUES(?,0,1,?,?, '', ?, 'mutation', ?, ?, ?, ?)""",
+                   (request_id,chunk_index,chunk_count,target,thread_ts,text,ordering_key,kind,operation,payload_json,
+                    origin_json,delivery_reporting_version,created_at,updated_at)
+                   VALUES(?,0,1,?,?, '', ?, 'mutation', ?, ?, ?, ?, ?, ?)""",
                 (request_id, target, thread_ts, f"{target}:{thread_ts}", operation,
-                 json.dumps(dict(payload), ensure_ascii=False), now, now),
+                 json.dumps(dict(payload), ensure_ascii=False),
+                 json.dumps(dict(origin or {}), ensure_ascii=False),
+                 1 if delivery_reporting_version == 1 else 0, now, now),
             )
             inserted = db.total_changes > 0
         return inserted

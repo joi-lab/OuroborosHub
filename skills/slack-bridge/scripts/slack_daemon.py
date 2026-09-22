@@ -78,6 +78,8 @@ async def _run() -> None:
             slack=slack,
             host=create_host_adapter(str(settings.get("binding_id") or "").strip()),
             bot_user_id=bot_user_id,
+            bot_id=str(auth.get("bot_id") or ""),
+            app_id=str(auth.get("app_id") or ""),
             inbound_workers=_bounded_int(
                 settings.get("SLACK_INBOUND_WORKERS"), 4, minimum=1, maximum=16
             ),

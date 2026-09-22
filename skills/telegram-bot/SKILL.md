@@ -111,6 +111,8 @@ tools:
   description: Queue a proactive Telegram text, photo, or document for durable delivery.
 - name: telegram_moderate
   description: Queue exact-message deletion or member restriction, ban, or unban with durable receipts.
+- name: telegram_operation
+  description: Queue an own-message edit or reaction through the Telegram Bot API with durable receipts.
 - name: telegram_receipt
   description: Inspect delivery state and provider receipts for a queued Telegram operation.
 ---
@@ -206,6 +208,17 @@ are ordinary Telegram `ChatPermissions`, so restrictions can also be lifted.
 Reuse `request_id` when retrying the same action, and inspect `telegram_receipt`
 with `operation="moderate"` (or `"send"`) for the provider outcome. A queue receipt
 is not proof of provider delivery.
+
+`telegram_operation` extends the same outbox for the two provider operations
+that update an own message: `editMessageText` and `setMessageReaction`. It
+accepts Bot API-shaped parameters and retains a new operation identity plus an
+optional `original_delivery_id` source reference, so an edit/reaction never
+rewrites the original outbound delivery history. A reaction update contains
+only Telegram's reaction objects; this skill does not invent a forum topic ID
+when the provider's reaction update omits one. Supply a known local topic ID
+only for `editMessageText` when the caller has it. Provider rights, reaction
+administration requirements, and errors remain authoritative; a queued row is
+not a delivery claim.
 
 The outbox runs independently while a Presence turn is reasoning. The model may
 call `telegram_send` for an intermediate acknowledgement, continue working, and

@@ -287,6 +287,48 @@ class TelegramClient:
             raise ValueError("unsupported Telegram moderation action")
         return bool(await self._call(endpoint, parameters))
 
+    async def edit_message_text(
+        self, chat_id: str, message_id: int, text: str, *,
+        parse_mode: str = "", topic_id: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        parameters: Dict[str, Any] = {
+            "chat_id": str(chat_id), "message_id": int(message_id), "text": str(text),
+        }
+        if parse_mode:
+            parameters["parse_mode"] = str(parse_mode)
+        if topic_id is not None:
+            parameters["message_thread_id"] = int(topic_id)
+        result = await self._call("editMessageText", parameters)
+        return result if isinstance(result, dict) else {"result": result}
+
+    async def set_message_reaction(
+        self, chat_id: str, message_id: int, reaction: List[Dict[str, Any]],
+        *, is_big: bool = False,
+    ) -> bool:
+        parameters: Dict[str, Any] = {
+            "chat_id": str(chat_id), "message_id": int(message_id),
+            "reaction": reaction, "is_big": bool(is_big),
+        }
+        return bool(await self._call("setMessageReaction", parameters))
+
+    async def operation(self, method: str, parameters: Dict[str, Any]) -> Dict[str, Any]:
+        """Run one explicitly supported model-selected own-message operation."""
+        if method == "editMessageText":
+            result = await self.edit_message_text(
+                str(parameters["chat_id"]), int(parameters["message_id"]),
+                str(parameters["text"]), parse_mode=str(parameters.get("parse_mode") or ""),
+            )
+            return result
+        if method == "setMessageReaction":
+            value = parameters.get("reaction")
+            if not isinstance(value, list) or any(not isinstance(item, dict) for item in value):
+                raise ValueError("reaction must be a list of Telegram reaction objects")
+            return {"ok": await self.set_message_reaction(
+                str(parameters["chat_id"]), int(parameters["message_id"]), value,
+                is_big=bool(parameters.get("is_big", False)),
+            )}
+        raise ValueError("unsupported Telegram operation")
+
     async def send_media(
         self,
         kind: str,

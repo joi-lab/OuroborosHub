@@ -12,7 +12,14 @@ from typing import Any
 from starlette.responses import JSONResponse
 
 from .lib.host_adapter import HostContractError, normalize_binding_id
-from .lib.slack_api import SlackConfigurationError, TEXT_FORMATS, chunk_message, normalize_text_format
+from .lib.slack_api import (
+    SlackApiError,
+    SlackClient,
+    SlackConfigurationError,
+    TEXT_FORMATS,
+    chunk_message,
+    normalize_text_format,
+)
 from .lib.store import BridgeStore
 from .lib.read_tools import register_read_tools
 
@@ -137,10 +144,24 @@ def _safe_name(value: str, fallback: str = "file") -> str:
     return clean[:180] or fallback
 
 
-def _enqueue_mutation(api: Any, operation: str, payload: dict[str, Any], request_id: str = "") -> dict[str, Any]:
+def _tool_origin(ctx: Any) -> dict[str, str]:
+    origin = {"kind": "tool"}
+    if getattr(ctx, "task_id", None):
+        origin["task_id"] = str(ctx.task_id)
+    metadata = getattr(ctx, "task_metadata", {})
+    event = metadata.get("presence", {}).get("event", {}) if isinstance(metadata, dict) else {}
+    if isinstance(event, dict) and event.get("source_event_id"):
+        origin["source_event_id"] = str(event["source_event_id"])
+    return origin
+
+
+def _enqueue_mutation(api: Any, operation: str, payload: dict[str, Any], request_id: str = "", ctx: Any = None) -> dict[str, Any]:
     request_id = str(request_id or uuid.uuid4().hex)
     store = BridgeStore(_state_dir(api))
-    inserted = store.enqueue_mutation(request_id=request_id, operation=operation, payload=payload)
+    inserted = store.enqueue_mutation(
+        request_id=request_id, operation=operation, payload=payload,
+        origin=_tool_origin(ctx), delivery_reporting_version=store.runtime_value("presence_delivery_version", 0),
+    )
     return {"ok": True, "state": "queued", "request_id": request_id,
             "operation": operation, "deduplicated": not inserted,
             "uncertainty": "Provider result is recorded after the companion runs; a lost response is reported as uncertain."}
@@ -181,7 +202,7 @@ def _make_file_upload(api: Any):
         payload = {"path": str(staged), "filename": source.name, "title": title,
                    "channel": str(channel_id or ""), "thread_ts": str(thread_ts or ""),
                    "initial_comment": initial_comment}
-        result = _enqueue_mutation(api, "upload_file", payload, receipt)
+        result = _enqueue_mutation(api, "upload_file", payload, receipt, ctx)
         if result["deduplicated"]:
             staged.unlink(missing_ok=True)
         return result
@@ -204,9 +225,35 @@ def _make_file_download(api: Any):
     return download
 
 
+def _make_generic_api(api: Any):
+    async def generic_api(
+        ctx: Any = None,
+        *, method: str = "GET", path: str = "", params: dict[str, Any] | None = None,
+        body: dict[str, Any] | None = None, request_id: str = "",
+    ) -> dict[str, Any]:
+        try:
+            selected, endpoint = SlackClient.normalize_method_path(method, path)
+            if selected == "GET":
+                settings = api.get_settings(["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN"])
+                async with SlackClient(
+                    settings.get("SLACK_BOT_TOKEN", ""), settings.get("SLACK_APP_TOKEN", ""),
+                    require_app_token=False,
+                ) as slack:
+                    result = await slack.generic_request(method=selected, path=endpoint, params=params or {})
+                return {"ok": True, "state": "read", "source": endpoint, "response": result}
+            if "token" in (params or {}) or "token" in (body or {}):
+                raise SlackConfigurationError("generic Slack API payload must not include token")
+            payload = {"method": selected, "path": endpoint, "params": params or {}, "body": body or {}}
+            return _enqueue_mutation(api, "generic_api", payload, request_id, ctx)
+        except (SlackConfigurationError, SlackApiError) as exc:
+            return {"ok": False, "error": {"code": getattr(exc, "error", "configuration_or_argument"), "message": str(exc)}}
+
+    return generic_api
+
+
 def _make_action(api: Any, operation: str):
-    def action(*, request_id: str = "", **payload: Any) -> dict[str, Any]:
-        return _enqueue_mutation(api, operation, payload, request_id)
+    def action(ctx: Any = None, *, request_id: str = "", **payload: Any) -> dict[str, Any]:
+        return _enqueue_mutation(api, operation, payload, request_id, ctx)
     return action
 
 
@@ -222,6 +269,27 @@ def _register_mutation_tools(api: Any) -> None:
     }
     api.register_tool("slack_file_upload", _make_file_upload(api), description="Stage immutable bytes and queue Slack External Upload API delivery.", schema=upload_schema, timeout_sec=30)
     api.register_tool("slack_file_download", _make_file_download(api), description="Download one Slack file by exact provider file ID into the skill state artifact directory.", schema={"type": "object", "properties": {"file_id": {"type": "string"}}, "required": ["file_id"], "additionalProperties": False}, timeout_sec=60)
+    api.register_tool(
+        "slack_api",
+        _make_generic_api(api),
+        description=(
+            "Call one actual Slack Web API method with the existing bot credential. "
+            "GET reads execute directly; POST writes are queued through the durable mutation outbox "
+            "and retain provider receipts or uncertainty. Never include token in params/body."
+        ),
+        schema={
+            "type": "object", "additionalProperties": False,
+            "properties": {
+                "method": {"type": "string", "enum": ["GET", "POST"], "default": "GET"},
+                "path": {"type": "string", "description": "Slack Web API method such as conversations.list or chat.postMessage."},
+                "params": {"type": "object", "additionalProperties": True},
+                "body": {"type": "object", "additionalProperties": True},
+                "request_id": {"type": "string", "description": "Stable dedupe key required for retryable POST writes."},
+            },
+            "required": ["path"],
+        },
+        timeout_sec=60,
+    )
     action_specs = [
         ("slack_message_edit", "update_message", {"channel": {"type": "string"}, "ts": {"type": "string"}, "text": {"type": "string"}, "blocks": {"type": "array"}, "text_format": {"type": "string", "enum": list(TEXT_FORMATS)}, "request_id": {"type": "string"}}, ["channel", "ts"]),
         ("slack_message_delete", "delete_message", {"channel": {"type": "string"}, "ts": {"type": "string"}, "request_id": {"type": "string"}}, ["channel", "ts"]),

@@ -361,6 +361,66 @@ def test_upload_completion_transport_loss_is_terminally_uncertain(tmp_path):
     assert status["mutations_uncertain"] == 1 and status["mutations_pending"] == 0
 
 
+def test_generic_write_transport_loss_is_uncertain_without_false_delivery(tmp_path):
+    class _GenericUncertainSlack(_Slack):
+        async def generic_request(self, **_payload):
+            raise SlackMutationUncertain("provider_response_lost")
+
+    store = BridgeStore(tmp_path)
+    store.enqueue_mutation(
+        request_id="generic-uncertain", operation="generic_api",
+        payload={"method": "POST", "path": "chat.postMessage", "body": {"channel": "C1", "text": "hello"}},
+    )
+    assert asyncio.run(OutboundWorker(store, _GenericUncertainSlack()).process_once()) is True
+    status = store.status()
+    assert status["mutations_uncertain"] == 1 and status["mutations_delivered"] == 0
+
+
+def test_generic_slack_api_post_is_registered_and_uses_existing_mutation_outbox(tmp_path):
+    module = _load_plugin()
+    api = _Api(tmp_path)
+    module.register(api)
+    handler, metadata = api.tools["slack_api"]
+    assert metadata["schema"]["properties"]["method"]["enum"] == ["GET", "POST"]
+    result = asyncio.run(handler(
+        method="POST", path="chat.postMessage", body={"channel": "C1", "text": "hello"}, request_id="generic-1"
+    ))
+    assert result["state"] == "queued"
+    item = BridgeStore(tmp_path).claim_outbox()
+    assert item is not None and item.kind == "mutation" and item.operation == "generic_api"
+    assert item.payload["path"] == "chat.postMessage"
+    rejected = asyncio.run(handler(method="POST", path="chat.postMessage", body={"token": "secret"}, request_id="generic-secret"))
+    assert rejected["ok"] is False and "token" in rejected["error"]["message"]
+
+
+def test_generic_slack_api_registered_get_read_returns_provider_response(tmp_path):
+    module = _load_plugin()
+
+    class _GenericClient:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        @staticmethod
+        def normalize_method_path(method, path):
+            return method.upper(), path.removeprefix("/api/")
+
+        async def generic_request(self, **_kwargs):
+            return {"ok": True, "channels": [{"id": "C1"}]}
+
+    module.SlackClient = _GenericClient
+    api = _Api(tmp_path)
+    module.register(api)
+    handler, _metadata = api.tools["slack_api"]
+    result = asyncio.run(handler(method="GET", path="/api/conversations.list", params={"limit": 1}))
+    assert result == {"ok": True, "state": "read", "source": "conversations.list", "response": {"ok": True, "channels": [{"id": "C1"}]}}
+
+
 def test_settings_accept_only_canonical_binding_ids(tmp_path) -> None:
     async def run() -> None:
         module = _load_plugin()

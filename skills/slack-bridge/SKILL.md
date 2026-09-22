@@ -60,6 +60,8 @@ tools:
     description: Queue adding a bookmark to an exact Slack conversation.
   - name: slack_bookmark_remove
     description: Queue removing a bookmark by exact provider bookmark ID.
+  - name: slack_api
+    description: Call an actual Slack Web API method with GET reads or durable POST writes.
 ---
 
 # Slack Bridge
@@ -177,6 +179,22 @@ events using the authenticated identity, preserving self-deduplication and
 avoiding reply loops. These updates use the existing ordered inbox, host
 adapter, and LLM-selected silent/message outcomes; no keyword or semantic gate
 is added by the transport.
+
+## Generic Slack Web API access
+
+`slack_api` is the narrow provider escape hatch for methods that do not yet
+have a dedicated convenience tool. The `path` is one actual Slack Web API
+method name (for example, `conversations.list` or `chat.postMessage`), and
+the existing bot credential is supplied by the client; callers never provide
+or persist a token. `GET` calls are ordinary provider reads and return the
+provider response directly. `POST` calls are queued in the same durable
+mutation outbox as the dedicated actions, with a stable `request_id` when the
+caller supplies one, provider receipts on completion, and an explicit
+`uncertain` result when the response may have been lost after acceptance.
+Generic writes therefore retain the normal custody path and cannot silently
+bypass delivery records through a raw chat endpoint. The method/path validator
+rejects full URLs, traversal and malformed method names while leaving the
+provider's own scopes, method validation and errors authoritative.
 
 Profile, conversation, history and thread reads use GET query parameters because
 Slack's read methods do not reliably consume JSON POST arguments; message sends

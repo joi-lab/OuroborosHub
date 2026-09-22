@@ -43,6 +43,7 @@ class RuntimeClient(TelegramClient):
         self.token = token
         self.downloads = []
         self.sent = []
+        self.operations = []
 
     async def delete_webhook(self):
         return True
@@ -77,6 +78,10 @@ class RuntimeClient(TelegramClient):
     async def send_document(self, chat_id, file_path, **kwargs):
         self.sent.append(("document", chat_id, str(file_path), kwargs))
         return {"message_id": 3}
+
+    async def operation(self, method, parameters):
+        self.operations.append((method, parameters))
+        return {"message_id": parameters["message_id"], "method": method}
 
 
 def test_accepted_submission_stages_then_removes_provider_temp(tmp_path):
@@ -165,6 +170,36 @@ async def _outbox_worker_delivers_all_supported_provider_kinds(tmp_path):
     assert await runtime.process_one_outbox()
     assert [item[0] for item in clients[0].sent] == ["message", "photo", "document"]
     assert runtime.store.status_snapshot()["outbox_delivered"] == 3
+
+
+def test_outbox_worker_delivers_own_edit_and_reaction_operations(tmp_path):
+    asyncio.run(_outbox_worker_delivers_own_edit_and_reaction_operations(tmp_path))
+
+
+async def _outbox_worker_delivers_own_edit_and_reaction_operations(tmp_path):
+    clients = []
+
+    def factory(token):
+        client = RuntimeClient(token)
+        clients.append(client)
+        return client
+
+    runtime = TelegramTransportRuntime(
+        state_dir=tmp_path, token_provider=lambda: "token", logger=Logger(),
+        submitter=AcceptingSubmitter(), client_factory=factory,
+    )
+    runtime.store.enqueue_outbox(
+        "edit", {"kind": "operation", "chat_id": "1", "method": "editMessageText",
+                  "parameters": {"chat_id": "1", "message_id": 8, "text": "fixed"}, "text": "fixed"},
+    )
+    runtime.store.enqueue_outbox(
+        "reaction", {"kind": "operation", "chat_id": "1", "method": "setMessageReaction",
+                      "parameters": {"chat_id": "1", "message_id": 8, "reaction": []}},
+    )
+    assert await runtime.process_one_outbox()
+    assert await runtime.process_one_outbox()
+    assert [item[0] for item in clients[0].operations] == ["editMessageText", "setMessageReaction"]
+    assert runtime.store.status_snapshot()["outbox_delivered"] == 2
 
 
 class DeferredSubmitter:

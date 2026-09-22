@@ -299,6 +299,13 @@ class OutboundWorker:
 
     async def _process_mutation(self, item: OutboxItem) -> bool:
         payload = item.payload
+        artifact = pathlib.Path(str(payload.get("path") or "")) if item.operation == "upload_file" else None
+        def cleanup_artifact() -> None:
+            if artifact is not None:
+                try:
+                    artifact.unlink(missing_ok=True)
+                except OSError:
+                    log.warning("Slack staged mutation artifact cleanup failed: %s", artifact)
         try:
             operation = item.operation
             if operation == "upload_file":
@@ -326,14 +333,23 @@ class OutboundWorker:
                 result = await self.slack.bookmark(**payload, add=True)
             elif operation == "bookmark_remove":
                 result = await self.slack.bookmark(**payload, add=False)
+            elif operation == "generic_api":
+                result = await self.slack.generic_request(
+                    method=str(payload.get("method") or "POST"),
+                    path=str(payload.get("path") or ""),
+                    params=payload.get("params") if isinstance(payload.get("params"), dict) else {},
+                    body=payload.get("body") if isinstance(payload.get("body"), dict) else {},
+                )
             else:
                 raise SlackApiError("unsupported_mutation")
             self.store.complete_outbox(item.row_id, item.lease_token, result=result)
+            cleanup_artifact()
             return True
         except asyncio.CancelledError:
             raise
         except SlackMutationUncertain as exc:
             self.store.fail_outbox(item.row_id, item.lease_token, exc.error, state="uncertain", result={"uncertain": True})
+            cleanup_artifact()
             log.warning("Slack mutation %s is uncertain after provider acceptance boundary: %s", item.request_id, exc)
             return True
         except SlackApiError as exc:
@@ -343,16 +359,28 @@ class OutboundWorker:
             if provider_may_have_applied:
                 self.store.fail_outbox(item.row_id, item.lease_token, exc.error, state="uncertain",
                                        result={"uncertain": True})
+                cleanup_artifact()
+                return True
+            if item.operation == "generic_api" or exc.error in {
+                "already_reacted", "message_not_found", "cant_update_message", "missing_scope",
+                "not_in_channel", "channel_not_found", "invalid_arguments", "invalid_auth",
+                "not_allowed_token_type", "file_not_found", "invalid_channel",
+            }:
+                self.store.fail_outbox(item.row_id, item.lease_token, exc.error, state="failed",
+                                       result={"uncertain": False})
+                cleanup_artifact()
                 return True
             if item.attempts >= _MAX_OUTBOX_ATTEMPTS:
                 self.store.fail_outbox(item.row_id, item.lease_token, exc.error, state="failed",
                                        result={"uncertain": False})
+                cleanup_artifact()
                 return True
             self.store.retry_outbox(item.row_id, item.lease_token, exc.error, delay_seconds=exc.retry_after or min(60.0, 2.0 ** min(item.attempts, 5)))
             return True
         except Exception as exc:
             if item.attempts >= _MAX_OUTBOX_ATTEMPTS:
                 self.store.fail_outbox(item.row_id, item.lease_token, str(exc), state="uncertain", result={"uncertain": True})
+                cleanup_artifact()
                 return True
             self.store.retry_outbox(item.row_id, item.lease_token, str(exc), delay_seconds=min(60.0, 2.0 ** min(item.attempts, 5)))
             return True
