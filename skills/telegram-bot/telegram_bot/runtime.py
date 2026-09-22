@@ -436,6 +436,22 @@ async def _deliver(
             str(payload["action"]), dict(payload["parameters"])
         )
         return {"kind": kind, "action": payload["action"], "result": result}
+    if kind == "operation":
+        method = str(payload.get("method") or "")
+        parameters = payload.get("parameters")
+        if not isinstance(parameters, dict):
+            raise ValueError("Telegram operation parameters are required")
+        result = await client.operation(method, dict(parameters))
+        report = delivery_report(
+            lease.delivery_id, payload, part_id="operation", state="delivered",
+            receipt=result, text=str(payload.get("text") or ""), fmt="plain",
+        )
+        store.checkpoint_outbox(
+            lease.delivery_id,
+            {**payload, "_operation_result": result},
+            report=report,
+        )
+        return {"kind": kind, "method": method, "result": result}
     if kind not in {"photo", "document"}:
         raise ValueError(f"unsupported Telegram outbox kind: {kind}")
     if payload.get("_sent_media"):

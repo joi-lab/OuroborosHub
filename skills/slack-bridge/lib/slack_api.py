@@ -105,16 +105,17 @@ class SlackClient:
         app_token: str,
         *,
         http_client: httpx.AsyncClient | None = None,
+        require_app_token: bool = True,
     ) -> None:
         self.bot_token = str(bot_token or "").strip()
         self.app_token = str(app_token or "").strip()
         if not self.bot_token:
             raise SlackConfigurationError("SLACK_BOT_TOKEN is missing")
-        if not self.app_token:
+        if require_app_token and not self.app_token:
             raise SlackConfigurationError("SLACK_APP_TOKEN is missing")
         if not self.bot_token.startswith("xoxb-"):
             raise SlackConfigurationError("SLACK_BOT_TOKEN must be a bot token")
-        if not self.app_token.startswith("xapp-"):
+        if self.app_token and not self.app_token.startswith("xapp-"):
             raise SlackConfigurationError("SLACK_APP_TOKEN must be an app-level token")
         self._owns_http = http_client is None
         self._http = http_client or httpx.AsyncClient(
@@ -223,6 +224,31 @@ class SlackClient:
                 details=data if isinstance(data, dict) else {},
             )
         return data
+
+    @staticmethod
+    def normalize_method_path(method: str, path: str) -> tuple[str, str]:
+        """Validate a generic Web API operation without allowing URL escape."""
+        selected = str(method or "").strip().upper()
+        if selected not in {"GET", "POST"}:
+            raise SlackConfigurationError("generic Slack API method must be GET or POST")
+        endpoint = str(path or "").strip()
+        if endpoint.startswith("https://") or endpoint.startswith("http://"):
+            raise SlackConfigurationError("generic Slack API path must stay on slack.com/api")
+        endpoint = endpoint.removeprefix("/api/").removeprefix("/api/").strip("/")
+        if not endpoint or ".." in endpoint or any(char.isspace() for char in endpoint):
+            raise SlackConfigurationError("generic Slack API path is invalid")
+        if not re.fullmatch(r"[A-Za-z0-9_.-]+", endpoint):
+            raise SlackConfigurationError("generic Slack API path must be one Slack Web API method")
+        return selected, endpoint
+
+    async def generic_request(self, *, method: str, path: str,
+                              params: Mapping[str, Any] | None = None,
+                              body: Mapping[str, Any] | None = None) -> dict[str, Any]:
+        selected, endpoint = self.normalize_method_path(method, path)
+        payload = dict(params or {}) if selected == "GET" else dict(body or {})
+        if "token" in payload:
+            raise SlackConfigurationError("generic Slack API payload must not include token")
+        return await self._request(selected, endpoint, payload, token=self.bot_token)
 
     async def auth_test(self) -> dict[str, Any]:
         return await self._post("auth.test", {}, token=self.bot_token)
@@ -487,6 +513,9 @@ class SlackClient:
         url = str(info.get("url_private_download") or info.get("url_private") or "").strip()
         if not url:
             raise SlackApiError("missing_private_file_url")
+        # Keep provider identity in the artifact path so two files with the
+        # same display name cannot replace each other's immutable bytes.
+        destination = pathlib.Path(destination) / _safe_filename(file_id, "file")
         staged = await self.stage_private_files(
             [{"file_id": file_id, "name": info.get("name") or info.get("title") or file_id,
               "mimetype": info.get("mimetype"), "size": info.get("size"), "url_private": url}],
@@ -524,7 +553,11 @@ class SlackClient:
         try:
             return await self._post("files.completeUploadExternal", payload, token=self.bot_token)
         except SlackApiError as exc:
-            raise SlackMutationUncertain(exc.error, status_code=exc.status_code, details=exc.details) from exc
+            if exc.status_code >= 500 or exc.status_code in {0, 408} or exc.error in {
+                "fatal_error", "internal_error", "request_timeout", "service_unavailable",
+            }:
+                raise SlackMutationUncertain(exc.error, status_code=exc.status_code, details=exc.details) from exc
+            raise
 
     async def resolve_target(self, target: str) -> str:
         clean = str(target or "").strip()

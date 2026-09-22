@@ -148,6 +148,40 @@ def test_telegram_send_queues_text_and_deduplicates(tmp_path):
     api.unload()
 
 
+def test_telegram_operation_queues_edit_and_reaction_with_new_identity(tmp_path):
+    skill_dir = __import__("pathlib").Path(__file__).resolve().parents[1]
+    spec = importlib.util.spec_from_file_location(
+        "telegram_bot_extension_operation_test", skill_dir / "plugin.py",
+        submodule_search_locations=[str(skill_dir)],
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    api = FakeApi(tmp_path)
+    module.register(api)
+    operations = {name: handler for name, handler, _metadata in api.tools}
+    edit = operations["telegram_operation"](
+        method="editMessageText", chat_id="-10042", message_id=9,
+        text="corrected", topic_id=7, original_delivery_id="telegram-send:old",
+        request_id="op-edit-1",
+    )
+    reaction = operations["telegram_operation"](
+        method="setMessageReaction", chat_id="-10042", message_id=9,
+        reaction=[{"type": "emoji", "emoji": "👍"}], request_id="op-react-1",
+    )
+    assert edit["state"] == "queued" and reaction["state"] == "queued"
+    store = CustodyStore(tmp_path / "custody.sqlite3")
+    first = store.claim_outbox()
+    assert first is not None and first.payload["kind"] == "operation"
+    assert first.payload["method"] == "editMessageText"
+    assert first.payload["_reporting"]["origin"]["original_delivery_id"] == "telegram-send:old"
+    store.mark_delivered(first.delivery_id, provider_receipt={"message_id": 9})
+    second = store.claim_outbox()
+    assert second is not None and second.payload["method"] == "setMessageReaction"
+    api.unload()
+
+
 def test_binding_can_be_saved_and_read_through_widget_routes(tmp_path):
     skill_dir = __import__("pathlib").Path(__file__).resolve().parents[1]
     spec = importlib.util.spec_from_file_location(

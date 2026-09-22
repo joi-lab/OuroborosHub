@@ -18,8 +18,10 @@ from .telegram_bot.host import PresenceHostClient
 from .telegram_bot.runtime import TelegramTransportRuntime
 from .telegram_bot.tools import (
     make_moderation_tool,
+    make_operation_tool,
     make_receipt_tool,
     MODERATION_SCHEMA,
+    TELEGRAM_OPERATION_SCHEMA,
 )
 
 
@@ -397,6 +399,15 @@ def register(api: Any) -> None:
         schema=MODERATION_SCHEMA,
     )
     api.register_tool(
+        "telegram_operation",
+        make_operation_tool(api),
+        description=(
+            "Queue an own-message Telegram edit or reaction through the existing outbox. "
+            "Use exact numeric chat/message IDs and a new request_id; reactions do not invent forum topic IDs."
+        ),
+        schema=TELEGRAM_OPERATION_SCHEMA,
+    )
+    api.register_tool(
         "telegram_receipt",
         make_receipt_tool(api),
         description="Read durable delivery state, provider receipt or error for a Telegram send/moderation request.",
@@ -404,7 +415,7 @@ def register(api: Any) -> None:
             "type": "object",
             "properties": {
                 "request_id": {"type": "string"},
-                "operation": {"type": "string", "enum": ["send", "moderate"]},
+                "operation": {"type": "string", "enum": ["send", "moderate", "operation"]},
             },
             "required": ["request_id"],
         },

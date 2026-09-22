@@ -16,6 +16,24 @@ def test_chunking_is_bounded_and_lossless() -> None:
     assert "".join(chunks) == text
 
 
+def test_generic_web_api_reads_keep_method_path_and_reject_url_escape():
+    asyncio.run(_test_generic_web_api_reads_keep_method_path_and_reject_url_escape())
+
+
+async def _test_generic_web_api_reads_keep_method_path_and_reject_url_escape():
+    observed = {}
+    def handler(request: httpx.Request) -> httpx.Response:
+        observed.update(method=request.method, path=request.url.path, params=dict(request.url.params), auth=request.headers.get("authorization"))
+        return httpx.Response(200, json={"ok": True, "channels": [{"id": "C1"}]})
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        slack = SlackClient("xoxb-test", "xapp-test", http_client=http)
+        result = await slack.generic_request(method="GET", path="/api/conversations.list", params={"limit": 1})
+    assert result["channels"][0]["id"] == "C1"
+    assert observed == {"method": "GET", "path": "/api/conversations.list", "params": {"limit": "1"}, "auth": "Bearer xoxb-test"}
+    with pytest.raises(SlackConfigurationError):
+        SlackClient.normalize_method_path("POST", "https://evil.example/api/chat.postMessage")
+
+
 def test_missing_or_wrong_token_types_fail_before_network() -> None:
     with pytest.raises(SlackConfigurationError, match="SLACK_BOT_TOKEN"):
         SlackClient("", "xapp-good")

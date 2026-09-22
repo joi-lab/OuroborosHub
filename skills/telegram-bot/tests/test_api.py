@@ -69,3 +69,26 @@ async def _send_photo_and_document_use_distinct_multipart_fields(tmp_path):
     assert [call[2] for call in transport.multipart_calls] == ["photo", "document"]
     assert transport.multipart_calls[0][1]["message_thread_id"] == "3"
     assert "reply_parameters" in transport.multipart_calls[1][1]
+
+
+def test_edit_and_reaction_operations_use_bot_api_method_shapes():
+    asyncio.run(_edit_and_reaction_operations_use_bot_api_method_shapes())
+
+
+async def _edit_and_reaction_operations_use_bot_api_method_shapes():
+    transport = FakeTransport()
+    client = TelegramClient("token", transport=transport)
+    edited = await client.operation("editMessageText", {
+        "chat_id": "-42", "message_id": 7, "text": "corrected",
+        "parse_mode": "HTML", "message_thread_id": 3,
+    })
+    reacted = await client.operation("setMessageReaction", {
+        "chat_id": "-42", "message_id": 7,
+        "reaction": [{"type": "emoji", "emoji": "👍"}], "is_big": False,
+    })
+    assert edited["message_id"] == 1 and reacted["ok"] is True
+    assert transport.json_calls[-2][1] == {
+        "chat_id": "-42", "message_id": 7, "text": "corrected",
+        "parse_mode": "HTML",
+    }
+    assert transport.json_calls[-1][1]["reaction"] == [{"type": "emoji", "emoji": "👍"}]
