@@ -511,43 +511,43 @@
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "d6cbd1f3645a54f6086eed1f523963098cf63ad16579c12ce11eb543ace649b8",
-          "size": 7887
+          "sha256": "d302253606044e24ac8d9f68943ab06090ca05eabd8ef189b6019383e00d85fe",
+          "size": 8707
         },
         {
           "path": "lib/client.py",
-          "sha256": "8195a393cf76ce8e65e2c3dbbad97a003a5b2679dc7e5fa4170dbefc72a68bad",
-          "size": 10018
+          "sha256": "978e6265aea667af92a6e6823ff1e8023c2f1c59f7f9fc68865aa498853378fb",
+          "size": 11127
         },
         {
           "path": "lib/delivery.py",
-          "sha256": "308c16ad27321eac195eca07b5814661d1aca75ab87ed43d2d8377a4a98f5cee",
-          "size": 2046
+          "sha256": "f761cd05a87fc88ce14de51f822f9ef92c371921aba17ce62a800fcac158373c",
+          "size": 2111
         },
         {
           "path": "lib/host_adapter.py",
-          "sha256": "be20a4efc9da353dab8ffa3eb4630f7a43b36994e06d0833c535c3a5072cac42",
-          "size": 10401
+          "sha256": "3ccb063099ba41c7672d47336d8f79b06260a82e915f66bcddddd18c0b1ee7d6",
+          "size": 10613
         },
         {
           "path": "lib/mime.py",
-          "sha256": "9ec2ca0941c7b89bde94eb293ec3230b34e52dce5b3fa9fe884fc13a41a028e5",
-          "size": 5054
+          "sha256": "fcb000a725a56bf94ceb3393d9dbd89bf530f4f49ab816c4018ac79a44e3df87",
+          "size": 10080
         },
         {
           "path": "lib/runtime.py",
-          "sha256": "c0394d342458309fae129cd57ca0b0c999a65681d8dff25ec0b1bc5261edeff2",
-          "size": 10693
+          "sha256": "2a266bdd61e45eeca4144689050b49905008ec8a5abd188bf04290a2b8efafd8",
+          "size": 13740
         },
         {
           "path": "lib/store.py",
-          "sha256": "1d7c9a1bb4cac8375150d6cab6c319732d4baa0aaf387d19a8e1c38c6fac98a5",
-          "size": 17413
+          "sha256": "3593de76b0e17d4fc45bc0cecc588ec16b1c0ef86b465abf160ddf403672d4e2",
+          "size": 31328
         },
         {
           "path": "plugin.py",
-          "sha256": "c740068bb6c540e4128cb76f12309bc6f85128aecc5a5a32b24465eca8a77537",
-          "size": 7770
+          "sha256": "a9446f9d49b05bb3172766a9c5a3836778a160717de89f4114ae1ed0d4c834f2",
+          "size": 11136
         },
         {
           "path": "scripts/email_daemon.py",
@@ -555,9 +555,19 @@
           "size": 1486
         },
         {
+          "path": "tests/test_attachment_regressions.py",
+          "sha256": "f04fbf8e03d2dd9aa895942c2db43c60cceb4079a9643af30f862d40b29a33a3",
+          "size": 12143
+        },
+        {
           "path": "tests/test_auth.py",
           "sha256": "421dc29db26086515ad15116d2bde0be88e1b4148845079ea40ed5712b057d0d",
           "size": 2066
+        },
+        {
+          "path": "tests/test_capabilities.py",
+          "sha256": "2fb2b2b9cbe29a459ae412945329072cd3b87dc7991885a33da07dee4619cce4",
+          "size": 5248
         },
         {
           "path": "tests/test_context.py",
@@ -598,7 +608,7 @@
       "name": "email-presence",
       "slug": "email-presence",
       "type": "extension",
-      "version": "0.2.0"
+      "version": "0.3.1"
     },
     {
       "description": "GDELT Cloud geopolitical intelligence: conflict events, news stories, entity graph, energy infrastructure, macro-finance, prediction markets, and web research via MCP Progressive Discovery.",
@@ -625,13 +635,13 @@
       "files": [
         {
           "path": "README.md",
-          "sha256": "2e394b8451b117a5509ffd6ef0d1a114f6d189970aa85194d12e77c9029434b4",
-          "size": 9194
+          "sha256": "7d4f44732d16299a1f1fa71c983a13d55d557b51a843d56b087c294275c17598",
+          "size": 10913
         },
         {
           "path": "SKILL.md",
-          "sha256": "6c007505719725255c9193b5acfe8cf16ea5e9333d57608e9fc3c731a6d130a3",
-          "size": 1617
+          "sha256": "e69578a092b0a2c4386dbb95c1e9a60881d92de35788450c4a96c860c71ec101",
+          "size": 1926
         },
         {
           "path": "__init__.py",
@@ -645,13 +655,13 @@
         },
         {
           "path": "client.py",
-          "sha256": "81f208fe77348268ea613f0aa58abde85d30854d1188c318a2d0ca721a134f90",
-          "size": 19095
+          "sha256": "fb540fc77d0ccc38b431ee147c96153245c4bef8c726fa3eabb870924ab4cf87",
+          "size": 28968
         },
         {
           "path": "plugin.py",
-          "sha256": "d36959f4b35060c1e09c5d8f1c5141bc1dba4173f39164624b81e025931efd42",
-          "size": 22603
+          "sha256": "b4d511c2ce29388779004a6a1c824fb3d5ed0203c19b81a74612da3c34ab9b4d",
+          "size": 34902
         },
         {
           "path": "tests/__init__.py",
@@ -665,8 +675,8 @@
         },
         {
           "path": "tests/test_google_workspace.py",
-          "sha256": "5bdff48aaadff48ac82adc68feae6981164136737be11643f46672183c9be604",
-          "size": 26649
+          "sha256": "babd25f296272e0c72e3da71855a1a73a31e83f5434de1755263b76204aeb7d1",
+          "size": 31256
         },
         {
           "path": "tests/test_isolated_signing.py",
@@ -681,7 +691,7 @@
       "name": "google-workspace",
       "slug": "google-workspace",
       "type": "extension",
-      "version": "0.1.2"
+      "version": "0.2.0"
     },
     {
       "description": "Comprehensive, charming, and fully playable Happy Farm game widget with crops, livestock, economy, orders, day-night/weather cycles, and audio.",
@@ -1234,8 +1244,8 @@
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "f42a6852d31077e7a81126163ea6b8e507a8ddf2209737b7eb1c2cd150e2f802",
-          "size": 11597
+          "sha256": "ad425e353cb87db5b7a1010510b80a5690c157f91250959a967ea1c584c37c54",
+          "size": 15839
         },
         {
           "path": "lib/__init__.py",
@@ -1244,13 +1254,13 @@
         },
         {
           "path": "lib/events.py",
-          "sha256": "543c43946c0c3c60d890033569c0b858c1aa0867a46449fe74775975fce43f4f",
-          "size": 5013
+          "sha256": "7a4d791b88e9c073eacfba44bbb1c8296a285f9f89aa72f436a0772e852cc30f",
+          "size": 7277
         },
         {
           "path": "lib/host_adapter.py",
-          "sha256": "9a1d7698658932953fd50cc4f50791bdaab11dacce299425ca1dfb6557b1762f",
-          "size": 16034
+          "sha256": "8965558a0d43cde4c878ca798ba50cfcb16db61e4467803da6a4f580e443e43b",
+          "size": 16152
         },
         {
           "path": "lib/provider_context.py",
@@ -1259,43 +1269,43 @@
         },
         {
           "path": "lib/read_tools.py",
-          "sha256": "7d4555356a0ea380a737b97ec4a473840ea0dc481d810b4b345a6e2989d06e1b",
-          "size": 4198
+          "sha256": "98ef22d640f23a1da23d9e54dccbe1ebc3e0c996ca51ca431620cc5b0f3c7055",
+          "size": 8456
         },
         {
           "path": "lib/runtime.py",
-          "sha256": "d0c547d9d6dff042c58d55406ac4617a3b128e9ce8a9d156bce4c6720b33e86a",
-          "size": 15656
+          "sha256": "5f65fc416a97616bac2ef26a30d43a190620bb174f9770eb3632bf5da2582ac0",
+          "size": 19378
         },
         {
           "path": "lib/slack_api.py",
-          "sha256": "50b2f164c65ffbfa5d19aa9fbcd7dcaaf8d190c496c8f40270acc93105edb7d5",
-          "size": 14284
+          "sha256": "8e5deee76c825004c817f60279ec30d586b6028a1961d22ea208283a45a361f7",
+          "size": 25071
         },
         {
           "path": "lib/socket_mode.py",
-          "sha256": "b2e7a7e37d5187244c562f16d056f5ad78544a67101b92e2b785a3737ea99cc9",
-          "size": 5220
+          "sha256": "004db481f582501fcb9efd813718ce00ae0a1fe23a193032d4038a82cbac29bb",
+          "size": 5424
         },
         {
           "path": "lib/store.py",
-          "sha256": "b187f3d56a66aedd1e23e008088a627237bd17092282014492b575ad60d086c7",
-          "size": 30623
+          "sha256": "bfb1f7c0d5c7913da8ae9d18bc396e9f82520adea6911d8d1894242f3d735bb5",
+          "size": 33418
         },
         {
           "path": "manifest.json",
-          "sha256": "c57f8b7dbd5b46813fcc30a31b22656d63fbe6a57ac0e0aecfa9126f0b38f4c1",
-          "size": 918
+          "sha256": "a7e5290ce30052778320acc397bc4c593fd2d3f511a929a4bed0e9b6cfaf5b29",
+          "size": 1169
         },
         {
           "path": "plugin.py",
-          "sha256": "1d11daae18c06b0732eb907ca6407276d87770c90dcb533de123b6d758e5d922",
-          "size": 13979
+          "sha256": "f5b66854895c5d11751395998b219d267f8e3a058080363204e705cf140821d9",
+          "size": 21303
         },
         {
           "path": "scripts/slack_daemon.py",
-          "sha256": "d31e7d77b2202b58baf2c066f77252c73c4d9aab706ec555576cb870f11f3d32",
-          "size": 4099
+          "sha256": "6270dfdb756c979b61e86450d3eea5f66ceedf56dd63933966d27a80f07cd1cd",
+          "size": 4199
         },
         {
           "path": "tests/conftest.py",
@@ -1309,8 +1319,8 @@
         },
         {
           "path": "tests/test_events_store.py",
-          "sha256": "60fa2939ea793fb63602c5ddc821dc2484ba2fe22fe283895bd050bc47393a17",
-          "size": 8092
+          "sha256": "55e292bc58a2b5c5713dd057f2ddcb373d54b9e9c2799fcc0f769e287a1d80a4",
+          "size": 11280
         },
         {
           "path": "tests/test_host_adapter.py",
@@ -1329,13 +1339,13 @@
         },
         {
           "path": "tests/test_read_tools.py",
-          "sha256": "0c50693068f8c81dcf185f67312be7038538a9ce194f8bcbfe92d5c899a6201b",
-          "size": 7417
+          "sha256": "7c59af2167bda36d9be5c2b7696b5e61c94a3893e741eb50179d5c24d030f572",
+          "size": 7699
         },
         {
           "path": "tests/test_slack_api.py",
-          "sha256": "0c9517a8443cc04b4c5ccf980581f4aa382bd910bba837fa6c1dde91e9997e60",
-          "size": 2145
+          "sha256": "7e0dc61aa5ae890e59c7917d0ac477c9df61293f1e17a03c06b6181488ac243c",
+          "size": 5790
         },
         {
           "path": "tests/test_socket_mode.py",
@@ -1344,14 +1354,14 @@
         },
         {
           "path": "tests/test_workers_plugin.py",
-          "sha256": "c13706a39b67c3a77a61a7d353f9b3c1fb707a2c98f83b79f2f1941ec4a397bd",
-          "size": 13486
+          "sha256": "0f070ddb31671d38e6c90004d41c50a83ccc83b7de3977935d8bd067c0673b9a",
+          "size": 14988
         }
       ],
       "name": "slack-bridge",
       "slug": "slack-bridge",
       "type": "extension",
-      "version": "1.2.0"
+      "version": "1.3.0"
     },
     {
       "description": "Inspect, filter, sort, group, and aggregate CSV and XLSX tables while reporting truncation and non-numeric values honestly.",
@@ -1409,8 +1419,8 @@
         },
         {
           "path": "SKILL.md",
-          "sha256": "f270077fecf7d640fe7eb8d722118ba26a77e9a88300ab0b1b0549b75c937c60",
-          "size": 10179
+          "sha256": "78abd1d703f21b2f55f0b9d8547229198e4bbacfb62055c824cfcc622886d901",
+          "size": 10747
         },
         {
           "path": "plugin.py",
@@ -1424,8 +1434,8 @@
         },
         {
           "path": "telegram_bot/api.py",
-          "sha256": "48d7dbabde051490226bd048e3618df906f6421a4a0be06a5d7fd3e301b41bf4",
-          "size": 16158
+          "sha256": "5035ab5df09e43569d813acf8364b3b73950884151bba8285755c5ab493c9dcc",
+          "size": 16421
         },
         {
           "path": "telegram_bot/custody.py",
@@ -1439,8 +1449,8 @@
         },
         {
           "path": "telegram_bot/events.py",
-          "sha256": "d843a2cb4d5f4d5b8b55bcdd3e4d847a56cc6c280b8d50539eee22227e2d9b63",
-          "size": 6321
+          "sha256": "1faebf622482edfb91c6aed6b0b42a81903cf762f16adeac9528d629ebc51fda",
+          "size": 9379
         },
         {
           "path": "telegram_bot/formatting.py",
@@ -1489,8 +1499,8 @@
         },
         {
           "path": "tests/test_events.py",
-          "sha256": "514aca0bf5689441a76dbc681fe3c6d0b8f2893e51c12e125afb819a6bf61e07",
-          "size": 3923
+          "sha256": "a58e93bbf439979aa456a22b38192bb1971cbe28e8654ad5be7fb3a993018ef3",
+          "size": 4557
         },
         {
           "path": "tests/test_formatted_delivery.py",
@@ -1526,7 +1536,7 @@
       "name": "telegram-bot",
       "slug": "telegram-bot",
       "type": "extension",
-      "version": "0.3.0"
+      "version": "0.4.0"
     },
     {
       "description": "Token Observatory — Liquid Glass dashboard for recorded Ouroboros token usage, tasks and models.",

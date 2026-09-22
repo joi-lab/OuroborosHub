@@ -2,17 +2,25 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
 import logging
 import smtplib
 import time
 from dataclasses import replace
-from email.utils import getaddresses
+from datetime import datetime, timezone
 
-from .host_adapter import HostBindingTerminalError
 from .delivery import email_report
+from .host_adapter import HostBindingTerminalError
+from .mime import extract_body
 
 log = logging.getLogger("email_presence")
+
+
+def _wire_text(message):
+    """Extract the visible body without calling get_content on multipart MIME."""
+    body = message.get_body(preferencelist=("plain", "html"))
+    if body is not None and body.get_content_type() == "text/plain":
+        return body.get_content()
+    return extract_body(message)
 
 
 class EmailRuntime:
@@ -34,10 +42,12 @@ class EmailRuntime:
                 # IMAP n:* includes the last UID even when n is beyond it.
                 if uid <= cursor["uid"]:
                     continue
-                message = self.client.fetch(box, self.folder, uid, validity)
+                message = self.client.fetch(box, self.folder, uid, validity, include_attachment_data=True)
                 cursor["uid"] = uid
                 key = self.store.cursor_key(self.account, self.folder)
                 if not cursor.get("rescan") or message["internal_date"] >= cursor["activated_at"]:
+                    if message.get("attachments") or message.get("_raw_source") is not None:
+                        self.store.stage_inbound_attachments(message)
                     _, inserted = self.store.ingest(message, cursor_key=key, cursor=cursor)
                     count += int(inserted)
                 else:
@@ -46,6 +56,26 @@ class EmailRuntime:
                 self.store.put(self.store.cursor_key(self.account, self.folder), cursor)
             self.store.put("poll_health", {"ok": True, "checked_at": time.time(), "new_messages": count})
             return count
+
+    def _stage_inbound_best_effort(self, message):
+        """Compatibility seam; staging policy lives in EmailStore."""
+        if hasattr(self.store, "stage_inbound_attachments"):
+            return self.store.stage_inbound_attachments(message)
+        # Tiny adapter for older test doubles; production policy remains in
+        # EmailStore and cannot be bypassed by the runtime.
+        staged, omitted = [], []
+        for index, item in enumerate(message.get("attachments") or ()):
+            try:
+                staged.extend(self.store._stage_files([item], bucket="inbound", identity=f"{message.get('message_id') or message.get('uid')}:{index}"))
+            except Exception as exc:
+                descriptor = {key: value for key, value in dict(item).items() if key not in {"data", "path"}}
+                descriptor.update(content_available=False, stage_error=type(exc).__name__, error=type(exc).__name__)
+                omitted.append(descriptor)
+        message["staged_files"] = staged
+        message["attachments"] = [{key: value for key, value in item.items() if key != "path"} for item in staged] + omitted
+        if omitted:
+            message["attachment_stage_note"] = "Some attachment bytes were not staged; the full RFC822 source artifact is available."
+        return staged
 
     def _reply(self, item, texts, suffix, mode=0, turn_ref=""):
         text = "\n".join(texts).strip()
@@ -99,21 +129,28 @@ class EmailRuntime:
             reporting["account_id"] = str(message["From"])
             # MailClient constructs ordinary messages; match send_message's
             # envelope parsing while retaining the original named To header.
-            recipient_headers = [message[name] for name in ("To", "Bcc", "Cc") if message[name] is not None]
-            envelope_recipients = [address for _, address in getaddresses(recipient_headers)]
-            reporting["wire"] = {"text": message.get_content(), "subject": str(message["Subject"]),
-                                 "recipients": envelope_recipients, "to": str(message["To"] or "")}
+            envelope_recipients = list(item.envelope_recipients)
+            reporting["wire"] = {"text": _wire_text(message), "subject": str(message["Subject"]),
+                                 "recipients": envelope_recipients, "to": str(message["To"] or ""),
+                                 "cc": str(message["Cc"] or "")}
             self.store.set_reporting(item, reporting)
             item = replace(item, reporting=reporting)
             with self.client.smtp() as smtp:
                 if not self.store.mark_sending(item):
                     return True
                 sending = True
-                refused = smtp.send_message(message)
+                # Bcc is deliberately absent from MIME headers. Pass the
+                # durable envelope explicitly when present; legacy test/fake
+                # SMTP clients still receive the old one-argument call.
+                if item.bcc:
+                    refused = smtp.send_message(message, to_addrs=envelope_recipients)
+                else:
+                    refused = smtp.send_message(message)
                 if refused:
                     accepted = [address for address in envelope_recipients if address not in refused]
                     reports = [email_report(item, "accepted", recipients=accepted)] if accepted else []
                     reports.append(email_report(item, "failed", recipients=list(refused), refused=refused))
+                    self.store.record_recipient_outcome(item.row_id, item.lease_token, accepted=accepted, refused=refused)
                     self.store.uncertain_outbox(item.row_id, item.lease_token,
                                                "Some recipients were refused; accepted recipients must not be resent automatically", reports=reports)
                 else:
@@ -124,6 +161,17 @@ class EmailRuntime:
             if isinstance(exc, smtplib.SMTPRecipientsRefused):
                 codes = [value[0] for value in exc.recipients.values()]
                 code = 450 if codes and all(400 <= c < 500 for c in codes) else 550
+                refused = exc.recipients
+                envelope = list(item.envelope_recipients)
+                accepted = [address for address in envelope if address not in refused]
+                if accepted:
+                    self.store.record_recipient_outcome(item.row_id, item.lease_token, accepted=accepted, refused=refused)
+                    reports = [email_report(item, "accepted", recipients=accepted),
+                               email_report(item, "failed", recipients=list(refused), refused=refused)]
+                    self.store.uncertain_outbox(item.row_id, item.lease_token,
+                                               "Some recipients were refused; accepted recipients must not be resent automatically",
+                                               reports=reports)
+                    return True
             if code < 500 and item.attempts < 5:
                 self.store.retry_outbox(item.row_id, item.lease_token, type(exc).__name__, 5)
             else:

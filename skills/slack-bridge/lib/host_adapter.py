@@ -139,6 +139,8 @@ def slack_presence_event(item: InboxItem) -> dict[str, Any]:
                 }
                 for file in item.files
             ],
+            "blocks": list(item.structured.get("blocks") or []),
+            "provider_facts": dict(item.structured),
         },
         "text": item.text,
     }

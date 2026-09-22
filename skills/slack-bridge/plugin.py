@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
 import pathlib
+import re
+import shutil
 import time
 import uuid
 from typing import Any
@@ -128,6 +131,111 @@ def _make_status(api: Any):
     return status
 
 
+def _safe_name(value: str, fallback: str = "file") -> str:
+    leaf = pathlib.PurePath(str(value or "")).name
+    clean = re.sub(r"[^A-Za-z0-9._ -]+", "_", leaf).strip(" .")
+    return clean[:180] or fallback
+
+
+def _enqueue_mutation(api: Any, operation: str, payload: dict[str, Any], request_id: str = "") -> dict[str, Any]:
+    request_id = str(request_id or uuid.uuid4().hex)
+    store = BridgeStore(_state_dir(api))
+    inserted = store.enqueue_mutation(request_id=request_id, operation=operation, payload=payload)
+    return {"ok": True, "state": "queued", "request_id": request_id,
+            "operation": operation, "deduplicated": not inserted,
+            "uncertainty": "Provider result is recorded after the companion runs; a lost response is reported as uncertain."}
+
+
+def _make_file_upload(api: Any):
+    def upload(
+        ctx: Any = None,
+        *,
+        file_path: str = "",
+        channel_id: str = "",
+        thread_ts: str = "",
+        title: str = "",
+        initial_comment: str = "",
+        request_id: str = "",
+    ) -> dict[str, Any]:
+        source = pathlib.Path(str(file_path or "")).expanduser()
+        if not source.is_file():
+            return {"ok": False, "error": "file_path must point to a regular file"}
+        if source.stat().st_size <= 0:
+            return {"ok": False, "error": "file must not be empty"}
+        if source.stat().st_size > 50 * 1024 * 1024:
+            return {"ok": False, "error": "file exceeds 50 MiB staging limit"}
+        receipt = str(request_id or uuid.uuid4().hex)
+        staged_root = _state_dir(api) / "outbound" / "files"
+        staged_root.mkdir(parents=True, exist_ok=True)
+        # A caller retrying the same request_id must never overwrite bytes
+        # already referenced by the first durable outbox row.
+        staged = staged_root / f"{receipt}-{uuid.uuid4().hex[:12]}-{_safe_name(source.name)}"
+        temporary = staged.with_name(staged.name + f".part.{os.getpid()}")
+        try:
+            shutil.copyfile(source, temporary)
+            os.replace(temporary, staged)
+        except OSError as exc:
+            if temporary.exists():
+                temporary.unlink()
+            return {"ok": False, "error": f"could not stage immutable file bytes: {exc}"}
+        payload = {"path": str(staged), "filename": source.name, "title": title,
+                   "channel": str(channel_id or ""), "thread_ts": str(thread_ts or ""),
+                   "initial_comment": initial_comment}
+        result = _enqueue_mutation(api, "upload_file", payload, receipt)
+        if result["deduplicated"]:
+            staged.unlink(missing_ok=True)
+        return result
+
+    return upload
+
+
+def _make_file_download(api: Any):
+    async def download(*, file_id: str = "") -> dict[str, Any]:
+        try:
+            settings = api.get_settings(["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN"])
+            from .lib.slack_api import SlackClient
+            async with SlackClient(settings.get("SLACK_BOT_TOKEN", ""), settings.get("SLACK_APP_TOKEN", "")) as slack:
+                destination = _state_dir(api) / "downloads"
+                staged = await slack.download_file(file_id, destination=destination)
+                return {"ok": True, "source": "files.info+url_private", "file": staged.as_dict()}
+        except Exception as exc:
+            return {"ok": False, "error": {"code": type(exc).__name__, "message": str(exc)}}
+
+    return download
+
+
+def _make_action(api: Any, operation: str):
+    def action(*, request_id: str = "", **payload: Any) -> dict[str, Any]:
+        return _enqueue_mutation(api, operation, payload, request_id)
+    return action
+
+
+def _register_mutation_tools(api: Any) -> None:
+    upload_schema = {
+        "type": "object", "additionalProperties": False,
+        "properties": {
+            "file_path": {"type": "string", "description": "Path to bytes readable by this task; bytes are copied into skill state before enqueue."},
+            "channel_id": {"type": "string"}, "thread_ts": {"type": "string"},
+            "title": {"type": "string"}, "initial_comment": {"type": "string"},
+            "request_id": {"type": "string"},
+        }, "required": ["file_path"],
+    }
+    api.register_tool("slack_file_upload", _make_file_upload(api), description="Stage immutable bytes and queue Slack External Upload API delivery.", schema=upload_schema, timeout_sec=30)
+    api.register_tool("slack_file_download", _make_file_download(api), description="Download one Slack file by exact provider file ID into the skill state artifact directory.", schema={"type": "object", "properties": {"file_id": {"type": "string"}}, "required": ["file_id"], "additionalProperties": False}, timeout_sec=60)
+    action_specs = [
+        ("slack_message_edit", "update_message", {"channel": {"type": "string"}, "ts": {"type": "string"}, "text": {"type": "string"}, "blocks": {"type": "array"}, "text_format": {"type": "string", "enum": list(TEXT_FORMATS)}, "request_id": {"type": "string"}}, ["channel", "ts"]),
+        ("slack_message_delete", "delete_message", {"channel": {"type": "string"}, "ts": {"type": "string"}, "request_id": {"type": "string"}}, ["channel", "ts"]),
+        ("slack_reaction_add", "reaction_add", {"channel": {"type": "string"}, "ts": {"type": "string"}, "name": {"type": "string"}, "request_id": {"type": "string"}}, ["channel", "ts", "name"]),
+        ("slack_reaction_remove", "reaction_remove", {"channel": {"type": "string"}, "ts": {"type": "string"}, "name": {"type": "string"}, "request_id": {"type": "string"}}, ["channel", "ts", "name"]),
+        ("slack_pin_add", "pin_add", {"channel": {"type": "string"}, "ts": {"type": "string"}, "request_id": {"type": "string"}}, ["channel", "ts"]),
+        ("slack_pin_remove", "pin_remove", {"channel": {"type": "string"}, "ts": {"type": "string"}, "request_id": {"type": "string"}}, ["channel", "ts"]),
+        ("slack_bookmark_add", "bookmark_add", {"channel": {"type": "string"}, "title": {"type": "string"}, "link": {"type": "string"}, "emoji": {"type": "string"}, "request_id": {"type": "string"}}, ["channel", "title", "link"]),
+        ("slack_bookmark_remove", "bookmark_remove", {"channel": {"type": "string"}, "bookmark_id": {"type": "string"}, "request_id": {"type": "string"}}, ["channel", "bookmark_id"]),
+    ]
+    for name, operation, properties, required in action_specs:
+        api.register_tool(name, _make_action(api, operation), description=f"Queue Slack {operation.replace('_', ' ')} and preserve its provider receipt.", schema={"type": "object", "properties": properties, "required": required, "additionalProperties": False}, timeout_sec=30)
+
+
 def _make_settings_save(api: Any):
     async def settings_save(request: Any) -> JSONResponse:
         try:
@@ -179,6 +287,7 @@ def _make_settings_save(api: Any):
 def register(api: Any) -> None:
     api.register_companion_process("slack_socket_mode")
     register_read_tools(api)
+    _register_mutation_tools(api)
     api.register_tool(
         "slack_send",
         _make_slack_send(api),
@@ -308,6 +417,20 @@ def register(api: Any) -> None:
                             "type": "metric",
                             "label": "Outbox failed",
                             "path": "outbox_failed",
+                            "tone": "danger",
+                            "target": "status",
+                        },
+                        {
+                            "type": "metric",
+                            "label": "Mutations pending",
+                            "path": "mutations_pending",
+                            "tone": "neutral",
+                            "target": "status",
+                        },
+                        {
+                            "type": "metric",
+                            "label": "Mutations uncertain",
+                            "path": "mutations_uncertain",
                             "tone": "danger",
                             "target": "status",
                         },

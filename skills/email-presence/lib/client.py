@@ -1,14 +1,14 @@
 """Standard IMAP/SMTP operations shared by mailbox tools and the companion."""
 from __future__ import annotations
 
-from contextlib import contextmanager
 import imaplib
-from email.policy import SMTP
 import os
 import re
 import smtplib
 import ssl
 import time
+from contextlib import contextmanager
+from email.policy import SMTP
 
 import httpx
 
@@ -107,12 +107,12 @@ class MailClient:
         data = self._ok(box.uid("SEARCH", None, *criteria), "search")
         return sorted(int(x) for x in (data[0] or b"").split())
 
-    def fetch(self, box, folder, uid, validity):
+    def fetch(self, box, folder, uid, validity, *, include_attachment_data=False):
         data = self._ok(box.uid("FETCH", str(int(uid)), "(BODY.PEEK[] INTERNALDATE FLAGS)"), "fetch")
         part = next((p for p in data if isinstance(p, tuple) and isinstance(p[1], bytes)), None)
         if part is None:
             raise RuntimeError(f"IMAP UID {uid} disappeared before it could be read")
-        message = parse_message(part[1], folder=folder, uid=uid)
+        message = parse_message(part[1], folder=folder, uid=uid, include_attachment_data=include_attachment_data)
         date = imaplib.Internaldate2tuple(part[0])
         if date is None:
             raise RuntimeError("IMAP FETCH omitted INTERNALDATE")
@@ -134,12 +134,12 @@ class MailClient:
             message.pop("body", None)
         return {"folder": folder, "uidvalidity": validity, "total": len(uids), "messages": messages}
 
-    def read(self, *, uid, uidvalidity, folder="INBOX", mark_as_read=False):
+    def read(self, *, uid, uidvalidity, folder="INBOX", mark_as_read=False, include_attachment_data=False):
         with self.imap(folder, readonly=not mark_as_read) as box:
             validity, _ = self.metadata(box)
             if validity != int(uidvalidity):
                 raise ValueError("Mailbox UIDVALIDITY changed; search again before addressing a message")
-            message = self.fetch(box, folder, uid, validity)
+            message = self.fetch(box, folder, uid, validity, include_attachment_data=include_attachment_data)
             if mark_as_read:
                 self._ok(box.uid("STORE", str(int(uid)), "+FLAGS.SILENT", "(\\Seen)"), "store")
             return message
@@ -168,11 +168,16 @@ class MailClient:
                 raise ValueError("Supported actions: list, create, copy, move, flags")
             return {"ok": True, "uid": int(uid), "uidvalidity": validity}
 
-    def draft(self, *, to, subject, body, folder="Drafts", reply_to_message_id="", references=None):
-        recipients = [x.strip() for x in to.split(",") if x.strip()]
+    def draft(self, *, to, subject, body, folder="Drafts", reply_to_message_id="", references=None,
+              cc=(), bcc=(), html_body="", body_type="plain", attachments=()):
+        recipients = [x.strip() for x in (to if isinstance(to, (list, tuple)) else str(to).split(",")) if str(x).strip()]
+        cc = [x.strip() for x in (cc if isinstance(cc, (list, tuple)) else str(cc or "").split(",")) if str(x).strip()]
+        bcc = [x.strip() for x in (bcc if isinstance(bcc, (list, tuple)) else str(bcc or "").split(",")) if str(x).strip()]
         message = build_message(sender=self._get("EMAIL_USER"), recipients=recipients,
                                 subject=subject, body=body, in_reply_to=reply_to_message_id,
-                                references=references or [])
+                                references=references or [], cc=list(cc or ()), bcc=list(bcc or ()),
+                                html_body=html_body, body_type=body_type, attachments=attachments,
+                                include_bcc_header=True)
         with self.imap() as box:
             data = self._ok(box.append(self.quote(folder), "(\\Draft)",
                                       imaplib.Time2Internaldate(time.time()), message.as_bytes(policy=SMTP)), "append draft")
@@ -199,9 +204,13 @@ class MailClient:
             client.close()
 
     def message(self, item):
-        return build_message(sender=self._get("EMAIL_USER"), recipients=list(item.recipients),
+        recipients = list(getattr(item, "to", ()) or item.recipients)
+        return build_message(sender=self._get("EMAIL_USER"), recipients=recipients,
                              subject=item.subject, body=item.body, in_reply_to=item.in_reply_to,
-                             references=item.references, message_id=item.message_id)
+                             references=item.references, message_id=item.message_id,
+                             cc=list(getattr(item, "cc", ()) or ()), bcc=list(getattr(item, "bcc", ()) or ()),
+                             html_body=getattr(item, "html_body", ""), body_type=getattr(item, "body_type", "plain"),
+                             attachments=list(getattr(item, "attachments", ()) or ()))
 
     def test_connection(self):
         with self.imap():

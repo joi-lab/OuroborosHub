@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote
@@ -27,7 +28,7 @@ DRIVE_FILE_FIELDS = (
 )
 
 # Pattern for valid Google Drive/Docs/Sheets resource IDs (alphanumeric, dashes, underscores)
-RESOURCE_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_\-]{4,128}$")
+RESOURCE_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_\-]{1,256}$")
 
 # MIME types supported for text extraction
 SUPPORTED_TEXT_MIME_PREFIXES = ("text/",)
@@ -78,8 +79,15 @@ class GoogleWorkspaceClient:
         self,
         raw_sa_info: Optional[str] = None,
         http_client: Optional[httpx.Client] = None,
+        *,
+        access_token: Optional[str] = None,
+        subject: Optional[str] = None,
     ) -> None:
         self.raw_sa_info = raw_sa_info
+        # OAuth bearer tokens are accepted only when explicitly supplied.  A
+        # service-account JWT is never silently converted into delegation.
+        self.access_token = str(access_token or "").strip() or None
+        self.subject = str(subject or "").strip() or None
         self._external_client = http_client is not None
         self.client = http_client or httpx.Client(timeout=DEFAULT_TIMEOUT)
 
@@ -94,11 +102,15 @@ class GoogleWorkspaceClient:
         self.close()
 
     def _get_headers(self, force_refresh: bool = False) -> Dict[str, str]:
-        token = get_access_token(
-            raw_info=self.raw_sa_info,
-            http_client=self.client,
-            force_refresh=force_refresh,
-        )
+        if self.access_token:
+            token = self.access_token
+        else:
+            token = get_access_token(
+                raw_info=self.raw_sa_info,
+                http_client=self.client,
+                force_refresh=force_refresh,
+                subject=self.subject,
+            )
         return {
             "Authorization": f"Bearer {token}",
             "Accept": "application/json",
@@ -268,6 +280,45 @@ class GoogleWorkspaceClient:
             "updated_cells": updates.get("updatedCells", 0),
         }
 
+    def sheets_update(
+        self,
+        spreadsheet_id: str,
+        range_name: str,
+        values: List[List[Any]],
+        value_input_option: str = "USER_ENTERED",
+    ) -> Dict[str, Any]:
+        """Update a rectangular range using the Sheets values API."""
+        clean_sid = _validate_resource_id(spreadsheet_id, "spreadsheet_id")
+        if not range_name or not str(range_name).strip():
+            raise ValueError("range_name is required.")
+        if not isinstance(values, list) or any(not isinstance(row, list) for row in values):
+            raise ValueError("values must be a list of rows.")
+        encoded_range = quote(str(range_name).strip(), safe="!:")
+        url = f"{SHEETS_BASE_URL}/{clean_sid}/values/{encoded_range}"
+        resp = self._request(
+            "PUT", url,
+            params={"valueInputOption": str(value_input_option or "USER_ENTERED")},
+            json_body={"range": str(range_name).strip(), "majorDimension": "ROWS", "values": values},
+        )
+        data = resp.json()
+        return {
+            "spreadsheet_id": clean_sid,
+            "updated_range": data.get("updatedRange"),
+            "updated_rows": data.get("updatedRows", 0),
+            "updated_columns": data.get("updatedColumns", 0),
+            "updated_cells": data.get("updatedCells", 0),
+        }
+
+    def sheets_batch_update(self, spreadsheet_id: str, requests: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Apply structural Sheets operations (add sheet, format, resize, etc.)."""
+        clean_sid = _validate_resource_id(spreadsheet_id, "spreadsheet_id")
+        if not isinstance(requests, list) or any(not isinstance(item, dict) for item in requests):
+            raise ValueError("requests must be a list of JSON objects.")
+        url = f"{SHEETS_BASE_URL}/{clean_sid}:batchUpdate"
+        resp = self._request("POST", url, json_body={"requests": requests})
+        data = resp.json()
+        return {"spreadsheet_id": clean_sid, "replies": data.get("replies", [])}
+
     # --- Docs API ---
 
     def docs_create(
@@ -296,26 +347,47 @@ class GoogleWorkspaceClient:
             data = resp.json()
             doc_id = data["id"]
         else:
-            # Create blank doc via Docs v1 API
-            resp = self._request("POST", DOCS_BASE_URL, json_body={"title": title})
-            data = resp.json()
-            doc_id = data["documentId"]
-
-            # If folder_id specified, move the newly created doc to the folder via Drive v3
             if clean_folder:
-                get_meta_url = f"{DRIVE_BASE_URL}/{doc_id}"
-                get_resp = self._request("GET", get_meta_url, params={"fields": "parents", "supportsAllDrives": "true"})
-                current_parents = get_resp.json().get("parents", [])
-
-                update_url = f"{DRIVE_BASE_URL}/{doc_id}"
-                update_params: Dict[str, Any] = {
-                    "addParents": clean_folder,
-                    "supportsAllDrives": "true",
-                }
-                if current_parents:
-                    update_params["removeParents"] = ",".join(current_parents)
-
-                self._request("PATCH", update_url, params=update_params, json_body={})
+                # Drive files.create accepts parents at creation time, including
+                # Shared Drive folders.  This avoids a transient root document
+                # and the service-account move failure that followed it.
+                create_url = f"{DRIVE_BASE_URL}"
+                try:
+                    resp = self._request(
+                        "POST", create_url,
+                        params={"supportsAllDrives": "true", "fields": "id,name,mimeType,parents"},
+                        json_body={
+                            "name": title,
+                            "mimeType": "application/vnd.google-apps.document",
+                            "parents": [clean_folder],
+                        },
+                    )
+                    data = resp.json()
+                    doc_id = data["id"]
+                except RuntimeError as exc:
+                    # Keep compatibility with older API mocks/tenants that do
+                    # not expose Drive files.create.  Permission failures are
+                    # surfaced; only a not-found endpoint falls back.
+                    if "Google API error (404" not in str(exc):
+                        raise
+                    resp = self._request("POST", DOCS_BASE_URL, json_body={"title": title})
+                    data = resp.json()
+                    doc_id = data["documentId"]
+                    # Legacy fallback only: old tenants that do not expose
+                    # Drive files.create still need the historical move path.
+                    get_resp = self._request(
+                        "GET", f"{DRIVE_BASE_URL}/{doc_id}",
+                        params={"fields": "parents", "supportsAllDrives": "true"},
+                    )
+                    current_parents = get_resp.json().get("parents", [])
+                    update_params: Dict[str, Any] = {"addParents": clean_folder, "supportsAllDrives": "true"}
+                    if current_parents:
+                        update_params["removeParents"] = ",".join(current_parents)
+                    self._request("PATCH", f"{DRIVE_BASE_URL}/{doc_id}", params=update_params, json_body={})
+            else:
+                resp = self._request("POST", DOCS_BASE_URL, json_body={"title": title})
+                data = resp.json()
+                doc_id = data["documentId"]
 
         doc_url = f"https://docs.google.com/document/d/{doc_id}/edit"
         return {
@@ -333,6 +405,13 @@ class GoogleWorkspaceClient:
         folder_id: Optional[str] = None,
         page_size: int = 50,
         page_token: Optional[str] = None,
+        query: Optional[str] = None,
+        name: Optional[str] = None,
+        full_text: Optional[str] = None,
+        corpora: Optional[str] = None,
+        drive_id: Optional[str] = None,
+        spaces: Optional[str] = None,
+        order_by: Optional[str] = None,
     ) -> Dict[str, Any]:
         """List files and folders shared with the Service Account or inside a folder."""
         page_size = max(1, min(page_size, 100))
@@ -341,6 +420,14 @@ class GoogleWorkspaceClient:
         q_parts = ["trashed = false"]
         if clean_folder:
             q_parts.append(f"'{clean_folder}' in parents")
+        if query and str(query).strip():
+            q_parts.append(str(query).strip())
+        if name and str(name).strip():
+            escaped = str(name).strip().replace("'", r"\'")
+            q_parts.append(f"name = '{escaped}'")
+        if full_text and str(full_text).strip():
+            escaped = str(full_text).strip().replace("'", r"\'")
+            q_parts.append(f"fullText contains '{escaped}'")
 
         params: Dict[str, Any] = {
             "q": " and ".join(q_parts),
@@ -351,6 +438,14 @@ class GoogleWorkspaceClient:
         }
         if page_token:
             params["pageToken"] = page_token
+        if corpora:
+            params["corpora"] = str(corpora)
+        if drive_id:
+            params["driveId"] = _validate_resource_id(drive_id, "drive_id")
+        if spaces:
+            params["spaces"] = str(spaces)
+        if order_by:
+            params["orderBy"] = str(order_by)
 
         resp = self._request("GET", DRIVE_BASE_URL, params=params)
         data = resp.json()
@@ -372,7 +467,96 @@ class GoogleWorkspaceClient:
             "count": len(files_list),
             "files": files_list,
             "next_page_token": data.get("nextPageToken"),
+            "query": params["q"],
         }
+
+    def drive_download(
+        self,
+        file_id: str,
+        export_mime_type: Optional[str] = None,
+        max_bytes: int = 50 * 1024 * 1024,
+    ) -> Dict[str, Any]:
+        """Download or export binary Drive content with an explicit byte bound."""
+        clean_fid = _validate_resource_id(file_id, "file_id")
+        max_bytes = max(1, int(max_bytes))
+        meta = self._request(
+            "GET", f"{DRIVE_BASE_URL}/{clean_fid}",
+            params={"fields": "id,name,mimeType,size", "supportsAllDrives": "true"},
+        ).json()
+        mime_type = str(meta.get("mimeType") or "application/octet-stream")
+        if export_mime_type:
+            url = f"{DRIVE_BASE_URL}/{clean_fid}/export"
+            params = {"mimeType": str(export_mime_type)}
+            output_mime = str(export_mime_type)
+        else:
+            url = f"{DRIVE_BASE_URL}/{clean_fid}"
+            params = {"alt": "media", "supportsAllDrives": "true"}
+            output_mime = mime_type
+        response = self._request("GET", url, params=params)
+        content = response.content
+        if len(content) > max_bytes:
+            raise ValueError(f"Downloaded file exceeds max_bytes ({max_bytes}).")
+        return {"file_id": clean_fid, "name": meta.get("name", clean_fid), "mime_type": output_mime, "content": content, "size": len(content)}
+
+    def drive_export(self, file_id: str, mime_type: str, max_bytes: int = 50 * 1024 * 1024) -> Dict[str, Any]:
+        return self.drive_download(file_id, export_mime_type=mime_type, max_bytes=max_bytes)
+
+    def drive_upload(
+        self,
+        name: str,
+        content: bytes,
+        mime_type: str = "application/octet-stream",
+        folder_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Upload immutable bytes using Drive's multipart endpoint."""
+        if not str(name or "").strip():
+            raise ValueError("name is required.")
+        if not isinstance(content, (bytes, bytearray)):
+            raise ValueError("content must be bytes.")
+        parent = _validate_resource_id(folder_id, "folder_id") if folder_id else None
+        metadata: Dict[str, Any] = {"name": str(name).strip(), "mimeType": str(mime_type or "application/octet-stream")}
+        if parent:
+            metadata["parents"] = [parent]
+        headers = self._get_headers()
+        headers["Accept"] = "application/json"
+        files = {
+            "metadata": (None, json.dumps(metadata), "application/json; charset=UTF-8"),
+            "media": (str(name).strip(), bytes(content), metadata["mimeType"]),
+        }
+        url = "https://www.googleapis.com/upload/drive/v3/files"
+        params = {"uploadType": "multipart", "supportsAllDrives": "true"}
+        response = self.client.post(url, params=params, headers=headers, files=files)
+        if response.status_code == 401:
+            response = self.client.post(url, params=params, headers=self._get_headers(force_refresh=True), files=files)
+        if response.status_code >= 400:
+            raise RuntimeError(f"Google API error ({response.status_code} {response.reason_phrase}): {response.text[:1000]}")
+        data = response.json()
+        return {"file_id": data.get("id"), "name": data.get("name", name), "mime_type": data.get("mimeType", mime_type), "size": len(content), "parents": data.get("parents", [parent] if parent else [])}
+
+    # --- Structured Docs API ---
+
+    def docs_read(self, document_id: str) -> Dict[str, Any]:
+        clean_id = _validate_resource_id(document_id, "document_id")
+        data = self._request("GET", f"{DOCS_BASE_URL}/{clean_id}").json()
+        return {"document_id": clean_id, "title": data.get("title", ""), "revision_id": data.get("revisionId"), "body": data.get("body", {}), "document": data}
+
+    def docs_batch_update(self, document_id: str, requests: List[Dict[str, Any]], readback: bool = True,
+                          write_control: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        clean_id = _validate_resource_id(document_id, "document_id")
+        if not isinstance(requests, list) or any(not isinstance(item, dict) for item in requests):
+            raise ValueError("requests must be a list of JSON objects.")
+        payload: Dict[str, Any] = {"requests": requests}
+        if write_control:
+            payload["writeControl"] = write_control
+        response = self._request("POST", f"{DOCS_BASE_URL}/{clean_id}:batchUpdate", json_body=payload).json()
+        result = {"document_id": clean_id, "replies": response.get("replies", []), "write_control": response.get("writeControl")}
+        if readback:
+            result["readback"] = self.docs_read(clean_id)
+        return result
+
+    def docs_update(self, document_id: str, requests: List[Dict[str, Any]], readback: bool = True,
+                    write_control: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        return self.docs_batch_update(document_id, requests, readback=readback, write_control=write_control)
 
     def drive_read_text(self, file_id: str, max_chars: int = MAX_TEXT_EXPORT_CHARS) -> Dict[str, Any]:
         """Read or export the plain text content of a Google Doc, Sheet, or text file with bounded stream reading."""

@@ -37,6 +37,7 @@ class InboxItem:
     host_reference: str
     attempts: int
     provider_context: dict[str, Any] | None = None
+    structured: dict[str, Any] = field(default_factory=dict)
 
     @property
     def reply_thread_ts(self) -> str:
@@ -66,6 +67,9 @@ class OutboxItem:
     delivery_reporting_version: int = 0
     resolved_channel: str = ""
     provider_account_id: str = ""
+    kind: str = "text"
+    operation: str = ""
+    payload: dict[str, Any] = field(default_factory=dict)
 
 
 class BridgeStore:
@@ -118,6 +122,7 @@ class BridgeStore:
                     files_json TEXT NOT NULL DEFAULT '[]',
                     staged_files_json TEXT NOT NULL DEFAULT '[]',
                     raw_json TEXT NOT NULL,
+                    structured_json TEXT NOT NULL DEFAULT '{}',
                     host_reference TEXT NOT NULL DEFAULT '',
                     lease_token TEXT NOT NULL DEFAULT '',
                     lease_until REAL NOT NULL DEFAULT 0,
@@ -170,6 +175,8 @@ class BridgeStore:
             columns = {str(row["name"]) for row in db.execute("PRAGMA table_info(inbox)")}
             if "provider_context_json" not in columns:
                 db.execute("ALTER TABLE inbox ADD COLUMN provider_context_json TEXT NOT NULL DEFAULT ''")
+            if "structured_json" not in columns:
+                db.execute("ALTER TABLE inbox ADD COLUMN structured_json TEXT NOT NULL DEFAULT '{}'")
             outbox_columns = {str(row["name"]) for row in db.execute("PRAGMA table_info(outbox)")}
             if "text_format" not in outbox_columns:
                 # Pending rows were authored for Slack's native mrkdwn. Their
@@ -187,6 +194,10 @@ class BridgeStore:
                 ("report_attempts", "INTEGER NOT NULL DEFAULT 0"),
                 ("report_available_at", "REAL NOT NULL DEFAULT 0"),
                 ("report_error", "TEXT NOT NULL DEFAULT ''"),
+                ("kind", "TEXT NOT NULL DEFAULT 'text'"),
+                ("operation", "TEXT NOT NULL DEFAULT ''"),
+                ("payload_json", "TEXT NOT NULL DEFAULT '{}'"),
+                ("result_json", "TEXT NOT NULL DEFAULT ''"),
             ):
                 if name not in outbox_columns:
                     db.execute(f"ALTER TABLE outbox ADD COLUMN {name} {declaration}")
@@ -233,6 +244,9 @@ class BridgeStore:
             ),
             "raw_json": json.dumps(
                 raw_payload, ensure_ascii=False, separators=(",", ":")
+            ),
+            "structured_json": json.dumps(
+                event.structured if event else {}, ensure_ascii=False, separators=(",", ":")
             ),
             "created_at": now,
             "updated_at": now,
@@ -337,6 +351,7 @@ class BridgeStore:
             host_reference=str(row["host_reference"]),
             attempts=int(row["attempts"]),
             provider_context=json.loads(row["provider_context_json"]) if row["provider_context_json"] else None,
+            structured=json.loads(row["structured_json"] or "{}") if row["structured_json"] else {},
         )
 
     def set_provider_context(self, row_id: int, lease_token: str, value: Mapping[str, Any]) -> None:
@@ -462,6 +477,24 @@ class BridgeStore:
             db.commit()
         return len(clean_chunks)
 
+    def enqueue_mutation(self, *, request_id: str, operation: str, payload: Mapping[str, Any]) -> bool:
+        request_id, operation = str(request_id or uuid.uuid4().hex), str(operation or "").strip()
+        if not operation:
+            raise ValueError("Slack mutation operation is required")
+        now = time.time()
+        target = str(payload.get("channel") or payload.get("channel_id") or "mutation")
+        thread_ts = str(payload.get("thread_ts") or "")
+        with self._connect() as db:
+            db.execute(
+                """INSERT OR IGNORE INTO outbox
+                   (request_id,chunk_index,chunk_count,target,thread_ts,text,ordering_key,kind,operation,payload_json,created_at,updated_at)
+                   VALUES(?,0,1,?,?, '', ?, 'mutation', ?, ?, ?, ?)""",
+                (request_id, target, thread_ts, f"{target}:{thread_ts}", operation,
+                 json.dumps(dict(payload), ensure_ascii=False), now, now),
+            )
+            inserted = db.total_changes > 0
+        return inserted
+
     def claim_outbox(self, *, lease_seconds: float = 60.0) -> OutboxItem | None:
         now = time.time()
         token = uuid.uuid4().hex
@@ -504,6 +537,9 @@ class BridgeStore:
             delivery_reporting_version=int(claimed["delivery_reporting_version"]),
             resolved_channel=str(claimed["resolved_channel"]),
             provider_account_id=str(claimed["provider_account_id"]),
+            kind=str(claimed["kind"] or "text"),
+            operation=str(claimed["operation"] or ""),
+            payload=json.loads(claimed["payload_json"] or "{}"),
         )
 
     def set_resolved_target(self, item: OutboxItem, channel: str, account: str) -> None:
@@ -517,6 +553,7 @@ class BridgeStore:
         *,
         provider_message_ts: str = "",
         report_payload: Mapping[str, Any] | None = None,
+        result: Mapping[str, Any] | None = None,
     ) -> None:
         now = time.time()
         with self._connect() as db:
@@ -524,12 +561,12 @@ class BridgeStore:
                 """
                 UPDATE outbox
                 SET state='delivered', lease_token='', lease_until=0, last_error='',
-                    provider_message_ts=?, updated_at=?, report_payload_json=?,report_state=?
+                    provider_message_ts=?, updated_at=?, report_payload_json=?,report_state=?,result_json=?
                 WHERE id=? AND state='leased' AND lease_token=?
                 """,
                 (str(provider_message_ts), now,
                  json.dumps(report_payload, ensure_ascii=False) if report_payload else "",
-                 "pending" if report_payload else "", row_id, lease_token),
+                 "pending" if report_payload else "", json.dumps(dict(result or {}), ensure_ascii=False), row_id, lease_token),
             )
             if updated.rowcount != 1:
                 raise RuntimeError(
@@ -537,14 +574,15 @@ class BridgeStore:
                 )
 
     def fail_outbox(self, row_id: int, lease_token: str, error: str, *,
-                    state: str = "failed", report_payload: Mapping[str, Any] | None = None) -> None:
+                    state: str = "failed", report_payload: Mapping[str, Any] | None = None,
+                    result: Mapping[str, Any] | None = None) -> None:
         with self._connect() as db:
             changed = db.execute(
                 """UPDATE outbox SET state=?,lease_token='',lease_until=0,last_error=?,updated_at=?,
-                       report_payload_json=?,report_state=? WHERE id=? AND state='leased' AND lease_token=?""",
+                       report_payload_json=?,report_state=?,result_json=? WHERE id=? AND state='leased' AND lease_token=?""",
                 (state, str(error)[:1000], time.time(),
                  json.dumps(report_payload, ensure_ascii=False) if report_payload else "",
-                 "pending" if report_payload else "", row_id, lease_token),
+                 "pending" if report_payload else "", json.dumps(dict(result or {}), ensure_ascii=False), row_id, lease_token),
             )
             if changed.rowcount != 1:
                 raise RuntimeError("Slack outbox lease no longer belongs to this worker")
@@ -686,6 +724,10 @@ class BridgeStore:
                     "SELECT state, COUNT(*) AS count FROM outbox GROUP BY state"
                 ).fetchall()
             }
+            mutations = {
+                str(row["state"]): int(row["count"])
+                for row in db.execute("SELECT state,COUNT(*) AS count FROM outbox WHERE kind='mutation' GROUP BY state").fetchall()
+            }
             reports = {str(row["report_state"]): int(row["count"]) for row in db.execute(
                 "SELECT report_state,COUNT(*) AS count FROM outbox WHERE report_state<>'' GROUP BY report_state"
             )}
@@ -727,6 +769,10 @@ class BridgeStore:
             "outbox_delivered": outbox.get("delivered", 0),
             "outbox_failed": outbox.get("failed", 0),
             "outbox_uncertain": outbox.get("uncertain", 0),
+            "mutations_pending": mutations.get("pending", 0),
+            "mutations_delivered": mutations.get("delivered", 0),
+            "mutations_failed": mutations.get("failed", 0),
+            "mutations_uncertain": mutations.get("uncertain", 0),
             "delivery_reports_pending": reports.get("pending", 0) + reports.get("reporting", 0),
             "delivery_reports_acked": reports.get("acked", 0),
             "last_report_error": str(report_error[0]) if report_error else "",

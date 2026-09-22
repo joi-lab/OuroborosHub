@@ -6,6 +6,7 @@ and a declarative status UI tab.
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 from pathlib import Path
@@ -48,6 +49,33 @@ def _get_client_sa_json(api: PluginAPI) -> Optional[str]:
         except Exception:
             pass
         raise RuntimeError(f"Error reading GOOGLE_SERVICE_ACCOUNT_JSON from host settings: {exc}") from exc
+
+
+def _get_oauth_access_token(api: PluginAPI) -> Optional[str]:
+    """Read an explicitly granted OAuth bearer token, without deriving one."""
+    try:
+        settings_dict = api.get_settings(["GOOGLE_OAUTH_ACCESS_TOKEN"])
+        val = settings_dict.get("GOOGLE_OAUTH_ACCESS_TOKEN")
+        return str(val).strip() if val and str(val).strip() else None
+    except Exception as exc:
+        raise RuntimeError(f"Error reading GOOGLE_OAUTH_ACCESS_TOKEN from host settings: {exc}") from exc
+
+
+def _make_client(api: PluginAPI, auth_mode: str = "service_account", subject: Optional[str] = None) -> GoogleWorkspaceClient:
+    """Construct one of the two explicit Google auth routes.
+
+    ``subject`` is deliberately an operation argument.  Domain-wide delegation
+    is never activated from a setting or inferred from a service-account email.
+    """
+    mode = str(auth_mode or "service_account").strip().lower()
+    if mode == "oauth":
+        token = _get_oauth_access_token(api)
+        if not token:
+            raise RuntimeError("Missing 'GOOGLE_OAUTH_ACCESS_TOKEN'. Configure an explicit OAuth route for this tool.")
+        return GoogleWorkspaceClient(access_token=token)
+    if mode != "service_account":
+        raise ValueError("auth_mode must be 'service_account' or 'oauth'.")
+    return GoogleWorkspaceClient(raw_sa_info=_get_client_sa_json(api), subject=subject)
 
 
 def _get_local_settings(api: PluginAPI) -> Dict[str, Any]:
@@ -105,25 +133,26 @@ def _resolve_template_id(api: PluginAPI, template_id: Optional[str]) -> Optional
 
 
 def _make_workspace_auth_status(api: PluginAPI):
-    def workspace_auth_status() -> str:
-        """Verify Google Service Account credentials and OAuth2 token connectivity."""
-        sa_json = _get_client_sa_json(api)
-        if not sa_json:
-            raise RuntimeError(
-                "Missing 'GOOGLE_SERVICE_ACCOUNT_JSON'. Please configure in Settings -> Secrets and grant it to 'google-workspace'."
-            )
+    def workspace_auth_status(auth_mode: str = "service_account", subject: str = "") -> str:
+        """Verify one explicit Google auth route without making a Workspace change."""
+        mode = str(auth_mode or "service_account").strip().lower()
         try:
+            if mode == "oauth":
+                token = _get_oauth_access_token(api)
+                if not token:
+                    raise RuntimeError("Missing 'GOOGLE_OAUTH_ACCESS_TOKEN'.")
+                return _format_json({"status": "ready", "auth_mode": "oauth", "message": "Explicit OAuth bearer token is configured."})
+            if mode != "service_account":
+                raise ValueError("auth_mode must be 'service_account' or 'oauth'.")
+            sa_json = _get_client_sa_json(api)
+            if not sa_json:
+                raise RuntimeError("Missing 'GOOGLE_SERVICE_ACCOUNT_JSON'. Please configure it for the service_account route.")
             sa_info = parse_service_account_info(sa_json)
-            token = get_access_token(sa_json, force_refresh=True)
+            token = get_access_token(sa_json, force_refresh=True, subject=(subject.strip() or None))
             if not token:
                 raise RuntimeError("Failed to obtain OAuth2 access token from Google.")
-
-            return _format_json({
-                "status": "ready",
-                "client_email": sa_info.get("client_email"),
-                "project_id": sa_info.get("project_id"),
-                "message": "Google Workspace Service Account authentication verified successfully.",
-            })
+            payload = {"status": "ready", "auth_mode": "service_account", "client_email": sa_info.get("client_email"), "project_id": sa_info.get("project_id"), "delegated_subject": subject.strip() or None, "message": "Google Workspace Service Account authentication verified successfully."}
+            return _format_json(payload)
         except Exception as exc:
             raise RuntimeError(f"Google Workspace authentication preflight failed: {exc}") from exc
 
@@ -131,9 +160,8 @@ def _make_workspace_auth_status(api: PluginAPI):
 
 
 def _make_sheets_info(api: PluginAPI):
-    def sheets_info(spreadsheet_id: str) -> str:
-        sa_json = _get_client_sa_json(api)
-        with GoogleWorkspaceClient(raw_sa_info=sa_json) as client:
+    def sheets_info(spreadsheet_id: str, auth_mode: str = "service_account") -> str:
+        with _make_client(api, auth_mode) as client:
             return _format_json(client.sheets_info(spreadsheet_id=spreadsheet_id))
 
     return sheets_info
@@ -141,11 +169,10 @@ def _make_sheets_info(api: PluginAPI):
 
 def _make_sheets_read(api: PluginAPI):
     def sheets_read(spreadsheet_id: str, range: str, max_rows: int = 5000,
-                    value_render_option: str = "FORMATTED_VALUE") -> str:
+                    value_render_option: str = "FORMATTED_VALUE", auth_mode: str = "service_account") -> str:
         """Read cell values from a rectangular range in a Google Sheet."""
-        sa_json = _get_client_sa_json(api)
         try:
-            with GoogleWorkspaceClient(raw_sa_info=sa_json) as client:
+            with _make_client(api, auth_mode) as client:
                 res = client.sheets_read(spreadsheet_id=spreadsheet_id, range_name=range,
                                          max_rows=max_rows, value_render_option=value_render_option)
                 return _format_json(res)
@@ -156,11 +183,10 @@ def _make_sheets_read(api: PluginAPI):
 
 
 def _make_sheets_append(api: PluginAPI):
-    def sheets_append(spreadsheet_id: str, range: str, rows: List[List[Any]], value_input_option: str = "USER_ENTERED") -> str:
+    def sheets_append(spreadsheet_id: str, range: str, rows: List[List[Any]], value_input_option: str = "USER_ENTERED", auth_mode: str = "service_account") -> str:
         """Append rows of data to a spreadsheet table."""
-        sa_json = _get_client_sa_json(api)
         try:
-            with GoogleWorkspaceClient(raw_sa_info=sa_json) as client:
+            with _make_client(api, auth_mode) as client:
                 res = client.sheets_append(
                     spreadsheet_id=spreadsheet_id,
                     range_name=range,
@@ -175,14 +201,13 @@ def _make_sheets_append(api: PluginAPI):
 
 
 def _make_docs_create(api: PluginAPI):
-    def docs_create(title: str, folder_id: Optional[str] = None, template_id: Optional[str] = None) -> str:
+    def docs_create(title: str, folder_id: Optional[str] = None, template_id: Optional[str] = None, auth_mode: str = "service_account") -> str:
         """Create a new Google Document from scratch or by copying a template."""
-        sa_json = _get_client_sa_json(api)
         effective_folder_id = _resolve_folder_id(api, folder_id)
         effective_template_id = _resolve_template_id(api, template_id)
 
         try:
-            with GoogleWorkspaceClient(raw_sa_info=sa_json) as client:
+            with _make_client(api, auth_mode) as client:
                 res = client.docs_create(
                     title=title,
                     folder_id=effective_folder_id,
@@ -196,17 +221,21 @@ def _make_docs_create(api: PluginAPI):
 
 
 def _make_drive_list(api: PluginAPI):
-    def drive_list(folder_id: Optional[str] = None, page_size: int = 50, page_token: Optional[str] = None) -> str:
+    def drive_list(folder_id: Optional[str] = None, page_size: int = 50, page_token: Optional[str] = None,
+                  query: Optional[str] = None, name: Optional[str] = None, full_text: Optional[str] = None,
+                  corpora: Optional[str] = None, drive_id: Optional[str] = None, spaces: Optional[str] = None, order_by: Optional[str] = None,
+                  auth_mode: str = "service_account") -> str:
         """List files and folders shared with the Service Account or inside a folder."""
-        sa_json = _get_client_sa_json(api)
         effective_folder_id = _resolve_folder_id(api, folder_id)
 
         try:
-            with GoogleWorkspaceClient(raw_sa_info=sa_json) as client:
+            with _make_client(api, auth_mode) as client:
                 res = client.drive_list(
                     folder_id=effective_folder_id,
                     page_size=page_size,
                     page_token=page_token,
+                    query=query, name=name, full_text=full_text,
+                    corpora=corpora, drive_id=drive_id, spaces=spaces, order_by=order_by,
                 )
                 return _format_json(res)
         except Exception as exc:
@@ -216,17 +245,104 @@ def _make_drive_list(api: PluginAPI):
 
 
 def _make_drive_read_text(api: PluginAPI):
-    def drive_read_text(file_id: str, max_chars: int = 100000) -> str:
+    def drive_read_text(file_id: str, max_chars: int = 100000, auth_mode: str = "service_account") -> str:
         """Read or export the plain text content of a Google Doc, Sheet, or text file."""
-        sa_json = _get_client_sa_json(api)
         try:
-            with GoogleWorkspaceClient(raw_sa_info=sa_json) as client:
+            with _make_client(api, auth_mode) as client:
                 res = client.drive_read_text(file_id=file_id, max_chars=max_chars)
                 return _format_json(res)
         except Exception as exc:
             raise RuntimeError(f"drive_read_text failed: {exc}") from exc
 
     return drive_read_text
+
+
+def _stage_drive_bytes(api: PluginAPI, result: Dict[str, Any]) -> Dict[str, Any]:
+    """Persist a provider response in skill state and return an inspectable path."""
+    state_dir = Path(api.get_state_dir()) / "drive_files"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    name = Path(str(result.get("name") or result.get("file_id") or "download.bin")).name
+    safe = "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in name) or "download.bin"
+    target = state_dir / f"{result.get('file_id', 'file')}_{safe}"
+    temporary = target.with_name(f".{target.name}.tmp")
+    temporary.write_bytes(bytes(result.get("content") or b""))
+    temporary.replace(target)
+    return {k: v for k, v in result.items() if k != "content"} | {"path": str(target), "stored": True}
+
+
+def _make_drive_download(api: PluginAPI):
+    def drive_download(file_id: str, export_mime_type: Optional[str] = None, max_bytes: int = 50 * 1024 * 1024,
+                       auth_mode: str = "service_account") -> str:
+        with _make_client(api, auth_mode) as client:
+            result = client.drive_download(file_id=file_id, export_mime_type=export_mime_type, max_bytes=max_bytes)
+        return _format_json(_stage_drive_bytes(api, result))
+
+    return drive_download
+
+
+def _make_drive_export(api: PluginAPI):
+    def drive_export(file_id: str, mime_type: str, max_bytes: int = 50 * 1024 * 1024,
+                     auth_mode: str = "service_account") -> str:
+        with _make_client(api, auth_mode) as client:
+            result = client.drive_export(file_id=file_id, mime_type=mime_type, max_bytes=max_bytes)
+        return _format_json(_stage_drive_bytes(api, result))
+
+    return drive_export
+
+
+def _make_drive_upload(api: PluginAPI):
+    def drive_upload(name: str = "", content_base64: str = "", local_path: str = "",
+                     mime_type: str = "application/octet-stream", folder_id: Optional[str] = None,
+                     auth_mode: str = "service_account") -> str:
+        if local_path:
+            source = Path(local_path).expanduser()
+            if not source.is_file():
+                raise ValueError("local_path must point to a file.")
+            content = source.read_bytes()
+            effective_name = name or source.name
+        elif content_base64:
+            try:
+                content = base64.b64decode(content_base64, validate=True)
+            except Exception as exc:
+                raise ValueError(f"content_base64 is invalid: {exc}") from exc
+            effective_name = name
+        else:
+            raise ValueError("Provide content_base64 or local_path.")
+        with _make_client(api, auth_mode) as client:
+            result = client.drive_upload(name=effective_name, content=content, mime_type=mime_type, folder_id=folder_id)
+        return _format_json(result)
+
+    return drive_upload
+
+
+def _make_docs_read(api: PluginAPI):
+    def docs_read(document_id: str, auth_mode: str = "service_account") -> str:
+        with _make_client(api, auth_mode) as client:
+            return _format_json(client.docs_read(document_id=document_id))
+    return docs_read
+
+
+def _make_docs_update(api: PluginAPI):
+    def docs_update(document_id: str, requests: List[Dict[str, Any]], readback: bool = True,
+                    write_control: Optional[Dict[str, Any]] = None, auth_mode: str = "service_account") -> str:
+        with _make_client(api, auth_mode) as client:
+            return _format_json(client.docs_update(document_id=document_id, requests=requests, readback=readback, write_control=write_control))
+    return docs_update
+
+
+def _make_sheets_update(api: PluginAPI):
+    def sheets_update(spreadsheet_id: str, range: str, values: List[List[Any]],
+                      value_input_option: str = "USER_ENTERED", auth_mode: str = "service_account") -> str:
+        with _make_client(api, auth_mode) as client:
+            return _format_json(client.sheets_update(spreadsheet_id=spreadsheet_id, range_name=range, values=values, value_input_option=value_input_option))
+    return sheets_update
+
+
+def _make_sheets_batch_update(api: PluginAPI):
+    def sheets_batch_update(spreadsheet_id: str, requests: List[Dict[str, Any]], auth_mode: str = "service_account") -> str:
+        with _make_client(api, auth_mode) as client:
+            return _format_json(client.sheets_batch_update(spreadsheet_id=spreadsheet_id, requests=requests))
+    return sheets_batch_update
 
 
 # --- Settings Save Route Handler ---
@@ -303,7 +419,10 @@ def register(api: PluginAPI) -> None:
         description="Verify Google Service Account credentials and OAuth2 token connectivity without making changes.",
         schema={
             "type": "object",
-            "properties": {},
+            "properties": {
+                "auth_mode": {"type": "string", "enum": ["service_account", "oauth"], "default": "service_account"},
+                "subject": {"type": "string", "description": "Optional explicit domain-wide delegation subject. Never inferred from settings."},
+            },
         },
         timeout_sec=30,
     )
@@ -314,7 +433,7 @@ def register(api: PluginAPI) -> None:
         description="Discover spreadsheet title, locale, timezone and tabs (IDs, names and grid dimensions) without reading cells. Use tab names in sheets_read ranges.",
         schema={
             "type": "object",
-            "properties": {"spreadsheet_id": {"type": "string", "description": "Google Spreadsheet ID."}},
+            "properties": {"spreadsheet_id": {"type": "string", "description": "Google Spreadsheet ID."}, "auth_mode": {"type": "string", "enum": ["service_account", "oauth"], "default": "service_account"}},
             "required": ["spreadsheet_id"],
         },
         timeout_sec=60,
@@ -346,6 +465,7 @@ def register(api: PluginAPI) -> None:
                     "default": "FORMATTED_VALUE",
                     "description": "FORMATTED_VALUE returns displayed values; UNFORMATTED_VALUE returns calculated values without formatting; FORMULA returns formulas instead of their calculated results.",
                 },
+                "auth_mode": {"type": "string", "enum": ["service_account", "oauth"], "default": "service_account"},
             },
             "required": ["spreadsheet_id", "range"],
         },
@@ -378,6 +498,7 @@ def register(api: PluginAPI) -> None:
                     "enum": ["USER_ENTERED", "RAW"],
                     "default": "USER_ENTERED",
                 },
+                "auth_mode": {"type": "string", "enum": ["service_account", "oauth"], "default": "service_account"},
             },
             "required": ["spreadsheet_id", "range", "rows"],
         },
@@ -403,6 +524,7 @@ def register(api: PluginAPI) -> None:
                     "type": "string",
                     "description": "Optional Google Doc template ID or template alias name configured in settings.",
                 },
+                "auth_mode": {"type": "string", "enum": ["service_account", "oauth"], "default": "service_account"},
             },
             "required": ["title"],
         },
@@ -429,6 +551,14 @@ def register(api: PluginAPI) -> None:
                     "type": "string",
                     "description": "Optional pagination token from previous list call.",
                 },
+                "query": {"type": "string", "description": "Optional Drive q fragment."},
+                "name": {"type": "string", "description": "Exact file name filter."},
+                "full_text": {"type": "string", "description": "Full-text contains filter."},
+                "corpora": {"type": "string", "description": "Drive corpus, for example user, domain, drive, or allDrives."},
+                "drive_id": {"type": "string", "description": "Shared Drive ID when corpora=drive."},
+                "spaces": {"type": "string", "description": "Drive spaces, for example drive or appDataFolder."},
+                "order_by": {"type": "string", "description": "Drive orderBy expression."},
+                "auth_mode": {"type": "string", "enum": ["service_account", "oauth"], "default": "service_account"},
             },
         },
         timeout_sec=60,
@@ -450,10 +580,72 @@ def register(api: PluginAPI) -> None:
                     "description": "Maximum characters to return (default 100000).",
                     "default": 100000,
                 },
+                "auth_mode": {"type": "string", "enum": ["service_account", "oauth"], "default": "service_account"},
             },
             "required": ["file_id"],
         },
         timeout_sec=60,
+    )
+
+    api.register_tool(
+        name="drive_download",
+        handler=_make_drive_download(api),
+        description="Download or export Drive binary content into immutable skill state and return its staged path.",
+        schema={"type": "object", "properties": {
+            "file_id": {"type": "string"}, "export_mime_type": {"type": "string"},
+            "max_bytes": {"type": "integer", "default": 52428800},
+            "auth_mode": {"type": "string", "enum": ["service_account", "oauth"], "default": "service_account"},
+        }, "required": ["file_id"]}, timeout_sec=120,
+    )
+
+    api.register_tool(
+        name="drive_export",
+        handler=_make_drive_export(api),
+        description="Export a native Google document to a requested MIME type and stage the binary result.",
+        schema={"type": "object", "properties": {
+            "file_id": {"type": "string"}, "mime_type": {"type": "string"},
+            "max_bytes": {"type": "integer", "default": 52428800},
+            "auth_mode": {"type": "string", "enum": ["service_account", "oauth"], "default": "service_account"},
+        }, "required": ["file_id", "mime_type"]}, timeout_sec=120,
+    )
+
+    api.register_tool(
+        name="drive_upload",
+        handler=_make_drive_upload(api),
+        description="Upload binary content from an explicit local path or base64 payload into Drive.",
+        schema={"type": "object", "properties": {
+            "name": {"type": "string"}, "content_base64": {"type": "string"},
+            "local_path": {"type": "string"}, "mime_type": {"type": "string", "default": "application/octet-stream"},
+            "folder_id": {"type": "string"}, "auth_mode": {"type": "string", "enum": ["service_account", "oauth"], "default": "service_account"},
+        }}, timeout_sec=120,
+    )
+
+    api.register_tool(
+        name="docs_read",
+        handler=_make_docs_read(api),
+        description="Read structured Google Docs JSON including body elements and revision metadata.",
+        schema={"type": "object", "properties": {"document_id": {"type": "string"}, "auth_mode": {"type": "string", "enum": ["service_account", "oauth"], "default": "service_account"}}, "required": ["document_id"]}, timeout_sec=60,
+    )
+
+    api.register_tool(
+        name="docs_update",
+        handler=_make_docs_update(api),
+        description="Apply Google Docs batchUpdate requests and optionally read the document back.",
+        schema={"type": "object", "properties": {"document_id": {"type": "string"}, "requests": {"type": "array", "items": {"type": "object"}}, "readback": {"type": "boolean", "default": True}, "write_control": {"type": "object"}, "auth_mode": {"type": "string", "enum": ["service_account", "oauth"], "default": "service_account"}}, "required": ["document_id", "requests"]}, timeout_sec=90,
+    )
+
+    api.register_tool(
+        name="sheets_update",
+        handler=_make_sheets_update(api),
+        description="Update a rectangular Google Sheets range.",
+        schema={"type": "object", "properties": {"spreadsheet_id": {"type": "string"}, "range": {"type": "string"}, "values": {"type": "array", "items": {"type": "array", "items": {}}}, "value_input_option": {"type": "string", "enum": ["USER_ENTERED", "RAW"], "default": "USER_ENTERED"}, "auth_mode": {"type": "string", "enum": ["service_account", "oauth"], "default": "service_account"}}, "required": ["spreadsheet_id", "range", "values"]}, timeout_sec=90,
+    )
+
+    api.register_tool(
+        name="sheets_batch_update",
+        handler=_make_sheets_batch_update(api),
+        description="Apply structural Google Sheets batchUpdate requests.",
+        schema={"type": "object", "properties": {"spreadsheet_id": {"type": "string"}, "requests": {"type": "array", "items": {"type": "object"}}, "auth_mode": {"type": "string", "enum": ["service_account", "oauth"], "default": "service_account"}}, "required": ["spreadsheet_id", "requests"]}, timeout_sec=90,
     )
 
     # 2. Register HTTP Routes

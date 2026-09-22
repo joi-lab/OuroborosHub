@@ -6,9 +6,9 @@ A universal, standalone, public extension skill for Ouroboros providing Google S
 
 ## Features
 
-- **Google Sheets (`sheets_info`, `sheets_read`, `sheets_append`)**: Discover workbook and tab metadata without reading cells; read displayed values, calculated values or formulas from selected ranges; append rows to tables.
-- **Google Docs (`docs_create`)**: Create new blank documents or duplicate from template Google Docs into specified Drive folders.
-- **Google Drive (`drive_list`, `drive_read_text`)**: List shared files and folders; export text from Google Docs (`text/plain`), the first tab of Google Sheets (`text/csv`), and supported plain-text files with bounded stream reading. Preserve available owners, last modifier, version, modified time, browser URL and capabilities.
+- **Google Sheets (`sheets_info`, `sheets_read`, `sheets_update`, `sheets_append`, `sheets_batch_update`)**: Discover tabs, read/update/append ranges, and apply structural requests.
+- **Google Docs (`docs_create`, `docs_read`, `docs_update`)**: Create blank/template documents, read structured body data, and batch-update with optional readback.
+- **Google Drive (`drive_list`, `drive_read_text`, `drive_download`, `drive_export`, `drive_upload`)**: Search and paginate across folders or Shared Drives, export text, and exchange bounded binary artifacts through skill state.
 - **Preflight Check (`workspace_auth_status`)**: Validate service account credentials and OAuth2 connectivity without side effects or leaking token material.
 - **Settings & UI Tab**: Configure default working folders and template name mappings.
 
@@ -33,8 +33,8 @@ This skill uses **pure REST via `httpx` and `cryptography`** rather than the off
 
 2. **Add to Settings**:
    - In Ouroboros, navigate to **Settings → Secrets**.
-   - Add a secret named `GOOGLE_SERVICE_ACCOUNT_JSON` with the entire JSON content of your key file.
-   - Grant `GOOGLE_SERVICE_ACCOUNT_JSON` to the `google-workspace` skill.
+   - Add either `GOOGLE_SERVICE_ACCOUNT_JSON` or an explicit `GOOGLE_OAUTH_ACCESS_TOKEN` secret.
+   - Grant the selected secret to the `google-workspace` skill. Auth mode is selected per tool call; the authentication status probe accepts a delegation subject only when explicitly supplied.
 
 3. **Share Files or Folders**:
    - Copy the `client_email` address from your Service Account JSON (e.g. `my-sa@my-project.iam.gserviceaccount.com`).
@@ -44,8 +44,8 @@ This skill uses **pure REST via `httpx` and `cryptography`** rather than the off
 
 ## Tool Reference
 
-### `workspace_auth_status()`
-- **Description**: Verifies credential structure and performs a test OAuth2 token exchange with Google.
+### `workspace_auth_status(auth_mode="service_account", subject="")`
+- **Description**: Verifies one explicit credential route. `auth_mode="oauth"` checks the granted bearer token; `subject` is used only for an explicitly requested service-account delegation check.
 - **Returns**: `{"status": "ready", "client_email": "...", "project_id": "..."}`.
 
 ### `sheets_info(spreadsheet_id)`
@@ -69,6 +69,10 @@ This skill uses **pure REST via `httpx` and `cryptography`** rather than the off
   - `value_input_option` (string, optional): `'USER_ENTERED'` or `'RAW'`.
 - **Returns**: JSON object with `updated_rows`, `updated_columns`, `updated_cells`.
 
+### `sheets_update` and `sheets_batch_update`
+- **Description**: Update a rectangular A1 range or apply structural Sheets `batchUpdate` requests.
+- **Returns**: Updated range counts or provider replies.
+
 ### `docs_create(title, folder_id=None, template_id=None)`
 - **Parameters**:
   - `title` (string, required): Document title.
@@ -76,13 +80,19 @@ This skill uses **pure REST via `httpx` and `cryptography`** rather than the off
   - `template_id` (string, optional): Template Document ID or template alias name to copy from.
 - **Returns**: JSON object with `document_id`, `title`, `url`, `folder_id`.
 
-### `drive_list(folder_id=None, page_size=50, page_token=None)`
+### `docs_read` and `docs_update`
+- **Description**: Read structured Docs body data and apply standard Docs `batchUpdate` requests. Updates read the document back by default and accept an optional `write_control`.
+
+### `drive_list(folder_id=None, page_size=50, page_token=None, query=None, name=None, full_text=None, corpora=None, drive_id=None, order_by=None)`
 - **Parameters**:
   - `folder_id` (string, optional): Folder ID to list from (or uses configured default).
   - `page_size` (integer, optional): Number of files to return (1-100, default: 50).
   - `page_token` (string, optional): Continuation token.
 - **Returns**: JSON object with `files` list containing `id`, `name`, `mime_type`, `url`, `modified_time`.
   Available provider fields also include `owners`, `last_modifying_user`, `version` and `capabilities`. Follow `next_page_token` until it is absent to finish a listing.
+
+### `drive_download`, `drive_export`, and `drive_upload`
+- **Description**: Download/export bounded bytes into immutable skill state, or upload a local path/base64 payload with an explicit MIME type. The download tools return a staged `path` and metadata; upload returns the Drive file ID.
 
 ### `drive_read_text(file_id, max_chars=100000)`
 - **Parameters**:
@@ -97,6 +107,20 @@ not an anonymous person or a permission denial. `version` is Google's file
 change counter, not a Docs revision ID or an edit precondition. Capability
 booleans describe the calling account's access, not a promise that a later write
 will succeed.
+
+### Structured updates and binary artifacts
+
+`docs_read(document_id)` returns the structured document body and revision ID.
+`docs_update(document_id, requests, readback=true)` sends standard Docs
+`batchUpdate` requests and includes a fresh readback by default.
+`sheets_update` writes a rectangular A1 range, while `sheets_batch_update`
+accepts structural Sheets requests such as adding tabs or changing formatting.
+
+`drive_list` accepts `query`, `name`, `full_text`, `corpora`, `drive_id`, `spaces`, and
+`order_by` in addition to folder and pagination parameters. `drive_download` and
+`drive_export` store bounded response bytes in the skill state directory and
+return their staged path. `drive_upload` accepts a local file path or base64
+payload and uploads it with an explicit MIME type.
 
 ---
 

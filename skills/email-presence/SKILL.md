@@ -1,7 +1,7 @@
 ---
 name: email-presence
 description: Bidirectional email Presence transport with IMAP polling, durable delivery, and RFC 5322 reply threading.
-version: 0.2.0
+version: 0.3.1
 type: extension
 entry: plugin.py
 plugin_api: "2.0"
@@ -120,14 +120,26 @@ or From otherwise; To and Cc are context, not an automatic reply-all list. The
 configured mailbox account identifies the receiving transport, even when that
 mailbox is absent from To because delivery used Bcc or a mailing-list alias.
 
-Attachment descriptors expose filenames and MIME types with
-`content_available: false`; they do not claim that attachment bytes were read.
-These message facts are retained with the inbox across restarts. Existing inbox
-rows keep their original content and receipts, with new context unavailable.
+Attachment descriptors expose filenames and MIME types. Successfully staged
+parts include immutable state paths and `content_available: true`; parts that
+exceed an inbound limit or use an unsupported MIME shape retain
+`content_available: false` plus an error descriptor. The full raw RFC822 source
+is staged as an artifact so a clipped part remains recoverable. These message
+facts are retained with the inbox across restarts. Existing inbox rows keep
+their original content and receipts, with new context unavailable.
 
-Text and reply threading are the transport scope. MIME text extraction supports
-HTML-only mail as plain text, with explicit body truncation disclosure. Attachment
-transfer, rendered HTML and provider-specific advanced search are deferred.
+Text, reply threading and ordinary MIME attachments are supported. Incoming
+attachments are copied into immutable, skill-owned staged files before a
+Presence turn; the Host receives their metadata and staged paths separately.
+Outbound sends and drafts accept staged file attachments, To/Cc/Bcc envelopes,
+and optional multipart/alternative HTML. `reply_all` derives Reply-To/From plus
+original To/Cc recipients, removes the sending mailbox and de-duplicates
+addresses. SMTP sends keep Bcc envelope-only; drafts retain a Bcc header for
+later manual sending. Partial SMTP
+recipient acceptance is retained in the receipt alongside accepted/refused
+recipients, while ambiguous acceptance remains `uncertain` and is never
+automatically resent. HTML-only inbound mail remains available as plain text
+with explicit body truncation disclosure.
 The separate public `email` utility remains available; this package neither
 replaces nor removes its tools.
 

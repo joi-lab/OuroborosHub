@@ -10,9 +10,9 @@ from typing import Any
 
 from .host_adapter import HostBindingTerminalError, PresenceHostAdapter
 from .provider_context import capture_context
-from .slack_api import SlackApiError, SlackClient, chunk_message
+from .slack_api import SlackApiError, SlackClient, SlackMutationUncertain, chunk_message
 from .socket_mode import SocketModeClient
-from .store import BridgeStore, InboxItem
+from .store import BridgeStore, InboxItem, OutboxItem
 
 log = logging.getLogger(__name__)
 _MAX_OUTBOX_ATTEMPTS = 5
@@ -220,9 +220,11 @@ class OutboundWorker:
     async def process_once(self) -> bool:
         # A slow callback keeps its own task while this worker continues sending.
         reported = self._advance_reporting()
-        item = self.store.claim_outbox(lease_seconds=60.0)
+        item = self.store.claim_outbox(lease_seconds=120.0)
         if item is None:
             return reported
+        if item.kind == "mutation":
+            return await self._process_mutation(item) or reported
         item = dataclasses.replace(item, provider_account_id=(
             item.provider_account_id or str(self.store.runtime_value("workspace_id", ""))
         ))
@@ -247,6 +249,7 @@ class OutboundWorker:
                 report_payload=_delivery_report(item, "delivered", result=result),
             )
             return True
+
         except asyncio.CancelledError:
             raise
         except SlackApiError as exc:
@@ -294,6 +297,66 @@ class OutboundWorker:
             log.warning("Slack outbox item %s will retry: %s", item.row_id, exc)
             return True
 
+    async def _process_mutation(self, item: OutboxItem) -> bool:
+        payload = item.payload
+        try:
+            operation = item.operation
+            if operation == "upload_file":
+                result = await self.slack.upload_file(
+                    path=pathlib.Path(str(payload.get("path") or "")),
+                    filename=str(payload.get("filename") or "upload"),
+                    title=str(payload.get("title") or ""),
+                    channel=str(payload.get("channel") or ""),
+                    thread_ts=str(payload.get("thread_ts") or ""),
+                    initial_comment=str(payload.get("initial_comment") or ""),
+                )
+            elif operation == "update_message":
+                result = await self.slack.update_message(**payload)
+            elif operation == "delete_message":
+                result = await self.slack.delete_message(**payload)
+            elif operation == "reaction_add":
+                result = await self.slack.reaction(**payload, add=True)
+            elif operation == "reaction_remove":
+                result = await self.slack.reaction(**payload, add=False)
+            elif operation == "pin_add":
+                result = await self.slack.pin(**payload, add=True)
+            elif operation == "pin_remove":
+                result = await self.slack.pin(**payload, add=False)
+            elif operation == "bookmark_add":
+                result = await self.slack.bookmark(**payload, add=True)
+            elif operation == "bookmark_remove":
+                result = await self.slack.bookmark(**payload, add=False)
+            else:
+                raise SlackApiError("unsupported_mutation")
+            self.store.complete_outbox(item.row_id, item.lease_token, result=result)
+            return True
+        except asyncio.CancelledError:
+            raise
+        except SlackMutationUncertain as exc:
+            self.store.fail_outbox(item.row_id, item.lease_token, exc.error, state="uncertain", result={"uncertain": True})
+            log.warning("Slack mutation %s is uncertain after provider acceptance boundary: %s", item.request_id, exc)
+            return True
+        except SlackApiError as exc:
+            provider_may_have_applied = exc.status_code >= 500 or exc.status_code in {0, 408} or exc.error in {
+                "fatal_error", "internal_error", "request_timeout", "service_unavailable",
+            }
+            if provider_may_have_applied:
+                self.store.fail_outbox(item.row_id, item.lease_token, exc.error, state="uncertain",
+                                       result={"uncertain": True})
+                return True
+            if item.attempts >= _MAX_OUTBOX_ATTEMPTS:
+                self.store.fail_outbox(item.row_id, item.lease_token, exc.error, state="failed",
+                                       result={"uncertain": False})
+                return True
+            self.store.retry_outbox(item.row_id, item.lease_token, exc.error, delay_seconds=exc.retry_after or min(60.0, 2.0 ** min(item.attempts, 5)))
+            return True
+        except Exception as exc:
+            if item.attempts >= _MAX_OUTBOX_ATTEMPTS:
+                self.store.fail_outbox(item.row_id, item.lease_token, str(exc), state="uncertain", result={"uncertain": True})
+                return True
+            self.store.retry_outbox(item.row_id, item.lease_token, str(exc), delay_seconds=min(60.0, 2.0 ** min(item.attempts, 5)))
+            return True
+
 
 async def _worker_loop(worker: Any, stop: asyncio.Event) -> None:
     try:
@@ -320,6 +383,8 @@ class BridgeRuntime:
         slack: SlackClient,
         host: PresenceHostAdapter,
         bot_user_id: str,
+        bot_id: str = "",
+        app_id: str = "",
         inbound_workers: int = 4,
         outbound_workers: int = 2,
     ) -> None:
@@ -330,6 +395,8 @@ class BridgeRuntime:
             slack,
             store,
             bot_user_id=bot_user_id,
+            bot_id=bot_id,
+            app_id=app_id,
         )
         self.inbound_workers = max(1, min(16, int(inbound_workers)))
         self.outbound_workers = max(1, min(8, int(outbound_workers)))

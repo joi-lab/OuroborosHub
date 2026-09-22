@@ -97,6 +97,49 @@ def test_event_id_dedupes_slack_retry_with_a_new_envelope(tmp_path) -> None:
     assert store.status()["inbox_pending"] == 1
 
 
+def test_message_changed_delete_reaction_other_bot_and_blocks_are_provider_facts():
+    edited = _payload(envelope_id="e-edit", event_id="edit")
+    edited["payload"]["event"] = {
+        "type": "message", "subtype": "message_changed", "channel": "C123",
+        "message": {"user": "U_ACTOR", "ts": "2.0", "text": "new", "blocks": [{"type": "section"}]},
+        "previous_message": {"user": "U_ACTOR", "ts": "2.0", "text": "old"},
+    }
+    parsed = _parse(edited)
+    assert parsed.accepted and parsed.event is not None
+    assert parsed.event.text == "new" and parsed.event.structured["change"] == "edited"
+    assert parsed.event.structured["previous_message"]["text"] == "old"
+
+    deleted = _payload(envelope_id="e-delete", event_id="delete")
+    deleted["payload"]["event"] = {
+        "type": "message", "subtype": "message_deleted", "channel": "C123", "deleted_ts": "3.0",
+        "previous_message": {"user": "U_ACTOR", "ts": "3.0", "text": "gone"},
+    }
+    deleted_parsed = _parse(deleted)
+    assert deleted_parsed.accepted and deleted_parsed.event.structured["change"] == "deleted"
+
+    reaction = _payload(envelope_id="e-reaction", event_id="reaction")
+    reaction["payload"]["event"] = {
+        "type": "reaction_added", "user": "U_ACTOR", "reaction": "eyes",
+        "item": {"type": "message", "channel": "C123", "ts": "4.0"},
+    }
+    reaction_parsed = _parse(reaction)
+    assert reaction_parsed.accepted and reaction_parsed.event.structured["reaction"]["name"] == "eyes"
+
+    other_bot = _payload(envelope_id="e-bot", event_id="bot")
+    other_bot["payload"]["event"] = {"type": "message", "subtype": "bot_message", "bot_id": "B_OTHER", "channel": "C123", "ts": "5.0", "text": "bot fact"}
+    bot_parsed = _parse(other_bot)
+    assert bot_parsed.accepted and bot_parsed.event.actor_user_id == "B_OTHER"
+
+    own_bot = _payload(envelope_id="e-own", event_id="own")
+    own_bot["payload"]["event"] = {"type": "message", "bot_id": "B_OWN", "channel": "C123", "ts": "6.0", "text": "self"}
+    assert parse_socket_envelope(own_bot, bot_user_id="U_BOT", bot_id="B_OWN").reason == "self_message"
+
+    blocks = _payload(envelope_id="e-blocks", event_id="blocks", text="")
+    blocks["payload"]["event"]["blocks"] = [{"type": "section", "text": {"type": "mrkdwn", "text": "visible"}}]
+    blocks_parsed = _parse(blocks)
+    assert blocks_parsed.accepted and blocks_parsed.event.structured["blocks"]
+
+
 def test_ordinary_visible_channel_messages_are_accepted_without_a_second_allowlist() -> (
     None
 ):
@@ -129,12 +172,10 @@ def test_slack_manifest_subscribes_only_to_message_ingress() -> None:
 
     assert "app_mentions:read" not in scopes
     assert "app_mention" not in events
-    assert events == [
-        "message.channels",
-        "message.groups",
-        "message.im",
-        "message.mpim",
+    assert events[:4] == [
+        "message.channels", "message.groups", "message.im", "message.mpim",
     ]
+    assert {"reaction_added", "reaction_removed"} <= set(events)
 
 
 def test_claims_are_fifo_within_thread_and_parallel_across_threads(tmp_path) -> None:
@@ -201,6 +242,17 @@ def test_outbox_request_dedupe_is_immutable_and_chunks_stay_fifo(tmp_path) -> No
     second = store.claim_outbox()
     assert second is not None and second.text == "second"
     assert second.target == "C1"
+
+
+def test_mutation_queue_is_deduplicated_and_records_uncertainty(tmp_path) -> None:
+    store = BridgeStore(tmp_path)
+    assert store.enqueue_mutation(request_id="m1", operation="delete_message", payload={"channel": "C1", "ts": "1.0"})
+    assert not store.enqueue_mutation(request_id="m1", operation="delete_message", payload={"channel": "C2", "ts": "2.0"})
+    item = store.claim_outbox()
+    assert item is not None and item.operation == "delete_message" and item.payload["channel"] == "C1"
+    store.fail_outbox(item.row_id, item.lease_token, "lost response", state="uncertain", result={"uncertain": True})
+    status = store.status()
+    assert status["mutations_uncertain"] == 1 and status["mutations_pending"] == 0
 
 
 def test_terminal_outbox_failure_releases_later_fifo_item(tmp_path) -> None:

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import base64
 import asyncio
+import base64
 import ipaddress
 import json
 import os
@@ -129,7 +129,12 @@ class LoopbackPresenceHostAdapter:
     async def submit(self, item: InboxItem) -> str:
         if not self.available: raise HostAdapterUnavailable("Presence binding or Host Service token is not configured")
         mode = await self.discover_delivery_support()
-        response=await self._http.post(f"{self.host_service_url}/presence/turn",headers=self._headers(),json={"binding_id":self.binding_id,"event":email_presence_event(item, account_id=os.environ.get("EMAIL_USER", "")), **({"delivery_reporting_version": 1} if mode else {})},timeout=1800)
+        request = {"binding_id": self.binding_id, "event": email_presence_event(item, account_id=os.environ.get("EMAIL_USER", ""))}
+        if item.staged_files:
+            request["staged_files"] = [str(file.get("path") or "") for file in item.staged_files if str(file.get("path") or "").strip()]
+        if mode:
+            request["delivery_reporting_version"] = 1
+        response=await self._http.post(f"{self.host_service_url}/presence/turn",headers=self._headers(),json=request,timeout=1800)
         payload=await self._json(response)
         if str(payload.get("status") or "") != "completed": raise HostContractError("Presence Host did not complete the turn request")
         outcome=self._outcome(payload)

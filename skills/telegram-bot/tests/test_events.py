@@ -82,7 +82,23 @@ def test_ignores_bot_edits_service_and_empty_messages():
     }
     assert parse_telegram_update(bot, bot_account_id="9") is None
     edited = {"update_id": 1, "edited_message": {**base["message"], "text": "x"}}
-    assert parse_telegram_update(edited, bot_account_id="9") is None
+    parsed_edit = parse_telegram_update(edited, bot_account_id="9")
+    assert parsed_edit is not None
+    assert parsed_edit.message["event_kind"] == "edited_message"
+    reaction = {
+        "update_id": 2,
+        "message_reaction": {
+            "user": {"id": 3, "is_bot": False},
+            "chat": {"id": 4, "type": "private"},
+            "message_id": 2,
+            "old_reaction": [],
+            "new_reaction": [{"type": "emoji", "emoji": "👍"}],
+        },
+    }
+    parsed_reaction = parse_telegram_update(reaction, bot_account_id="9")
+    assert parsed_reaction is not None
+    assert parsed_reaction.message["event_kind"] == "message_reaction"
+    assert parsed_reaction.text == ""
 
 
 def test_configured_group_is_context_not_owner_authority():
