@@ -91,7 +91,6 @@ def make_moderation_tool(api: Any):
         until_date: int = 0,
         revoke_messages: bool = False,
     ) -> dict[str, Any]:
-        local_topic_id: int | None = None
         try:
             target = str(chat_id).strip()
             if re.fullmatch(r"-?[0-9]+", target) is None:
@@ -156,8 +155,8 @@ def make_moderation_tool(api: Any):
 
 def make_receipt_tool(api: Any):
     def telegram_receipt(*, request_id: str, operation: str = "send") -> dict[str, Any]:
-        if operation not in {"send", "moderate"}:
-            return {"ok": False, "error": "operation must be send or moderate"}
+        if operation not in {"send", "moderate", "operation"}:
+            return {"ok": False, "error": "operation must be send, moderate, or operation"}
         return CustodyStore(
             pathlib.Path(api.get_state_dir()) / "custody.sqlite3"
         ).delivery_receipt(f"telegram-{operation}:{str(request_id).strip()}")
@@ -199,13 +198,13 @@ def make_operation_tool(api: Any):
         except (TypeError, ValueError) as exc:
             return {"ok": False, "error": str(exc)}
         origin = tool_origin(ctx)
-        if original_delivery_id:
-            origin["original_delivery_id"] = str(original_delivery_id)
         payload = {
             "kind": "operation", "chat_id": target, "method": method,
             "parameters": parameters, "text": str(text or ""),
             "_reporting": {"version": -1, "origin": origin},
         }
+        if original_delivery_id:
+            payload["original_delivery_id"] = str(original_delivery_id)
         if method == "editMessageText" and local_topic_id is not None:
             # Telegram's edit endpoint addresses the message directly; keep the
             # known topic only as a local history fact, never as an unsupported

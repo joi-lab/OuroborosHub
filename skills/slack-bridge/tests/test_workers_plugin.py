@@ -7,10 +7,12 @@ import sys
 import types
 from pathlib import Path
 
+import httpx
+
 from lib.events import parse_socket_envelope
 from lib.host_adapter import HostBindingTerminalError, HostDelivery, HostTurnStatus
 from lib.runtime import InboundWorker, OutboundWorker
-from lib.slack_api import SlackApiError, SlackMutationUncertain
+from lib.slack_api import SlackApiError, SlackClient, SlackMutationUncertain
 from lib.store import BridgeStore
 
 
@@ -417,8 +419,106 @@ def test_generic_slack_api_registered_get_read_returns_provider_response(tmp_pat
     api = _Api(tmp_path)
     module.register(api)
     handler, _metadata = api.tools["slack_api"]
-    result = asyncio.run(handler(method="GET", path="/api/conversations.list", params={"limit": 1}))
+    result = asyncio.run(handler(method="GET", effect="read", path="/api/conversations.list", params={"limit": 1}))
     assert result == {"ok": True, "state": "read", "source": "conversations.list", "response": {"ok": True, "channels": [{"id": "C1"}]}}
+
+
+def test_generic_get_write_is_queued_and_get_read_is_direct(tmp_path):
+    module = _load_plugin()
+    api = _Api(tmp_path)
+    module.register(api)
+    handler = api.tools["slack_api"][0]
+    queued = asyncio.run(handler(method="GET", path="auth.revoke", request_id="get-write"))
+    assert queued["state"] == "queued"
+    item = BridgeStore(tmp_path).claim_outbox()
+    assert item.kind == "mutation" and item.payload["method"] == "GET"
+    assert item.payload["effect"] == "write" and item.payload["path"] == "auth.revoke"
+
+
+def test_generic_timeout_cannot_replay_and_rate_limit_waits(tmp_path):
+    async def run():
+        calls = []
+        def timeout_provider(request):
+            calls.append(request)
+            raise httpx.ReadTimeout("accepted but response lost", request=request)
+        store = BridgeStore(tmp_path / "uncertain")
+        store.enqueue_mutation(request_id="timeout", operation="generic_api",
+                               payload={"method": "POST", "path": "chat.postMessage",
+                                        "body": {"channel": "C1", "text": "hello"}})
+        async with httpx.AsyncClient(transport=httpx.MockTransport(timeout_provider)) as http:
+            client = SlackClient("xoxb-test", "xapp-test", http_client=http)
+            worker = OutboundWorker(store, client)
+            assert await worker.process_once()
+            assert not await worker.process_once()
+        assert len(calls) == 1 and store.status()["mutations_uncertain"] == 1
+        uncertain = store.delivery_receipt("timeout")
+        assert uncertain["parts"][0]["state"] == "uncertain"
+        assert uncertain["parts"][0]["provider_result"]["uncertain"] is True
+        def limited(_request):
+            return httpx.Response(429, headers={"Retry-After": "30"}, json={"ok": False, "error": "ratelimited"})
+        rate_store = BridgeStore(tmp_path / "rate")
+        rate_store.enqueue_mutation(request_id="rate", operation="generic_api",
+                                    payload={"method": "POST", "path": "chat.postMessage",
+                                             "body": {"channel": "C1", "text": "hello"}})
+        async with httpx.AsyncClient(transport=httpx.MockTransport(limited)) as http:
+            client = SlackClient("xoxb-test", "xapp-test", http_client=http)
+            assert await OutboundWorker(rate_store, client).process_once()
+        row = rate_store.status()
+        assert row["mutations_pending"] == 1 and row["mutations_failed"] == 0
+        with rate_store._connect() as db:
+            due = db.execute("SELECT available_at FROM outbox WHERE request_id='rate'").fetchone()[0]
+        assert due > __import__("time").time() + 25
+    asyncio.run(run())
+
+
+def test_generic_provider_speech_reports_actual_message_while_other_effect_does_not(tmp_path):
+    async def run():
+        module = _load_plugin()
+        api = _Api(tmp_path)
+        module.register(api)
+        store = BridgeStore(tmp_path)
+        store.set_runtime(presence_delivery_version=1, workspace_id="T1")
+        ctx = types.SimpleNamespace(task_id="task-1", task_metadata={"presence": {"event": {"source_event_id": "event-1"}}})
+        handler = api.tools["slack_api"][0]
+        assert (await handler(ctx, method="POST", path="chat.postMessage",
+                              body={"channel": "C1", "text": "hello"}, request_id="speech"))["state"] == "queued"
+        async with httpx.AsyncClient(transport=httpx.MockTransport(lambda _r: httpx.Response(
+            200, json={"ok": True, "channel": "C1", "ts": "100.2", "message": {"text": "hello"}}
+        ))) as http:
+            assert await OutboundWorker(store, SlackClient("xoxb-test", "xapp-test", http_client=http)).process_once()
+        with store._connect() as db:
+            row = db.execute("SELECT target,resolved_channel,report_state,report_payload_json,result_json FROM outbox WHERE request_id='speech'").fetchone()
+        report = json.loads(row["report_payload_json"])
+        if importlib.util.find_spec("ouroboros"):
+            from ouroboros.presence_delivery import validate_delivery
+            assert validate_delivery(report) == report
+        assert row["target"] == "C1" and row["resolved_channel"] == "C1"
+        assert row["report_state"] == "pending" and report["text"] == "hello"
+        assert report["account_id"] == "T1" and report["origin"]["source_event_id"] == "event-1"
+        assert json.loads(row["result_json"])["ts"] == "100.2"
+        receipt = api.tools["slack_receipt"][0](request_id="speech")
+        assert receipt["parts"][0]["provider_result"]["ts"] == "100.2"
+        assert receipt["parts"][0]["history_report_state"] == "pending"
+        assert (await handler(method="GET", path="auth.revoke", request_id="operation"))["state"] == "queued"
+        async with httpx.AsyncClient(transport=httpx.MockTransport(lambda _r: httpx.Response(
+            200, json={"ok": True, "revoked": True}
+        ))) as http:
+            assert await OutboundWorker(store, SlackClient("xoxb-test", "xapp-test", http_client=http)).process_once()
+        with store._connect() as db:
+            row = db.execute("SELECT report_state,result_json FROM outbox WHERE request_id='operation'").fetchone()
+        assert row["report_state"] == "" and json.loads(row["result_json"])["revoked"] is True
+        assert (await handler(method="POST", path="chat.update", result_kind="operation",
+                              body={"channel": "C1", "ts": "100.2", "text": "fixed"},
+                              request_id="edit"))["state"] == "queued"
+        async with httpx.AsyncClient(transport=httpx.MockTransport(lambda _r: httpx.Response(
+            200, json={"ok": True, "channel": "C1", "ts": "100.2", "message": {"text": "fixed"}}
+        ))) as http:
+            assert await OutboundWorker(store, SlackClient("xoxb-test", "xapp-test", http_client=http)).process_once()
+        with store._connect() as db:
+            row = db.execute("SELECT report_state,result_json FROM outbox WHERE request_id='edit'").fetchone()
+        assert row["report_state"] == "" and json.loads(row["result_json"])["ok"] is True
+        assert api.tools["slack_receipt"][0](request_id="edit")["parts"][0]["state"] == "delivered"
+    asyncio.run(run())
 
 
 def test_settings_accept_only_canonical_binding_ids(tmp_path) -> None:

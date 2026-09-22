@@ -28,12 +28,22 @@ def delivery_report(delivery_id, payload, *, part_id, state, receipt=None, text=
         message["file_name"] = Path(payload["file_path"]).name
     if payload.get("reply_to_message_id"):
         message["reply_to_message_id"] = payload["reply_to_message_id"]
+    if payload.get("kind") == "operation":
+        message["method"] = str(payload.get("method") or "")
+        message["target_message_id"] = (payload.get("parameters") or {}).get("message_id")
+        if payload.get("method") == "editMessageText":
+            message["replacement_text"] = str(payload.get("text") or "")
+        if payload.get("method") == "setMessageReaction":
+            message["reaction"] = (payload.get("parameters") or {}).get("reaction", [])
+        if payload.get("original_delivery_id"):
+            message["original_delivery_id"] = str(payload["original_delivery_id"])
     if error:
         message.update(error=error, confirmed_parts=len(payload.get("_sent_messages") or []))
     return {
         "schema_version": 1, "delivery_id": delivery_id, "part_id": str(part_id),
         "state": state, "provider": "telegram", "account_id": str(reporting.get("account_id") or ""),
         "conversation_id": str(payload["chat_id"]), "thread_id": str(payload.get("topic_id") or ""),
-        "text": wire.get("text", text), "format": wire.get("format", fmt),
+        "text": "" if payload.get("kind") == "operation" else wire.get("text", text),
+        "format": "" if payload.get("kind") == "operation" else wire.get("format", fmt),
         "message": message, "origin": reporting.get("origin") or {"kind": "automatic"},
     }

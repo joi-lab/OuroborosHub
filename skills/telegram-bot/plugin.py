@@ -125,6 +125,12 @@ def _widget_render() -> Dict[str, Any]:
                     },
                     {
                         "type": "metric",
+                        "label": "Outbox uncertain",
+                        "path": "outbox_uncertain",
+                        "target": "status",
+                    },
+                    {
+                        "type": "metric",
                         "label": "Telegram offset",
                         "path": "telegram_offset",
                         "target": "status",

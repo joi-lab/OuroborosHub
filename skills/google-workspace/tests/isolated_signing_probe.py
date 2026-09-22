@@ -46,15 +46,24 @@ _Client = httpx.Client
 
 def _respond(request):
     if str(request.url) == "https://oauth2.googleapis.com/token":
+        form = parse_qs(request.content.decode())
+        if form.get("grant_type") == ["refresh_token"]:
+            assert form["client_id"] == ["fixture-client"]
+            assert form["client_secret"] == ["fixture-secret"]
+            assert form["refresh_token"] == ["fixture-refresh"]
+            return httpx.Response(200, json={"access_token": "user-fixture-token", "expires_in": 3600})
         from cryptography.hazmat.primitives import hashes, serialization
         from cryptography.hazmat.primitives.asymmetric import padding
-        assertion = parse_qs(request.content.decode())["assertion"][0]
+        assertion = form["assertion"][0]
         head, body, signature = assertion.split(".")
         # Verify the actual signature with the same disposable public key.
         key = serialization.load_pem_private_key(_credential["private_key"].encode(), None)
         key.public_key().verify(base64.urlsafe_b64decode(signature + "=="),
                                 (head + "." + body).encode(), padding.PKCS1v15(), hashes.SHA256())
         return httpx.Response(200, json={"access_token": "fixture-token", "expires_in": 3600})
+    if request.url.path == "/drive/v3/about":
+        email = "user@example.invalid" if request.headers["Authorization"] == "Bearer user-fixture-token" else "fixture@example.invalid"
+        return httpx.Response(200, json={"user": {"emailAddress": email, "permissionId": "fixture"}})
     if request.url.path == "/drive/v3/files/fixture_doc":
         return httpx.Response(200, json={"id": "fixture_doc", "name": "Fixture",
                                        "mimeType": "application/vnd.google-apps.document"})
@@ -80,7 +89,9 @@ def register(api):
                   "token_uri": "https://oauth2.googleapis.com/token",
                   "private_key": key.private_bytes(serialization.Encoding.PEM,
                       serialization.PrivateFormat.PKCS8, serialization.NoEncryption()).decode()}
-    settings = {"GOOGLE_SERVICE_ACCOUNT_JSON": json.dumps(credential)}
+    settings = {"GOOGLE_SERVICE_ACCOUNT_JSON": json.dumps(credential),
+                "GOOGLE_OAUTH_CLIENT_ID": "fixture-client", "GOOGLE_OAUTH_CLIENT_SECRET": "fixture-secret",
+                "GOOGLE_OAUTH_REFRESH_TOKEN": "fixture-refresh"}
     (drive / "settings.json").write_text(json.dumps(settings), encoding="utf-8")
     loaded = find_skill(drive, "google-workspace", repo_path=str(skills))
     assert loaded is not None
@@ -106,6 +117,17 @@ def register(api):
                 else:
                     assert result["text"] == "Disposable connector test content"
         print("verified 3 auth and 3 document calls in isolated children")
+        for _ in range(3):
+            for name, args in (("workspace_auth_status", {}), ("drive_read_text", {"file_id": "fixture_doc"})):
+                tool = extension_loader.get_tool(extension_loader.extension_surface_name(loaded.name, name))
+                assert tool["out_of_process"]
+                result = json.loads(dispatch_extension_tool_subprocess(tool, ctx, dict(args, auth_mode="oauth")))
+                if name == "workspace_auth_status":
+                    assert result["verified"] and result["refresh_configured"]
+                    assert result["actor"]["emailAddress"] == "user@example.invalid"
+                else:
+                    assert result["text"] == "Disposable connector test content"
+        print("verified 3 renewable OAuth auth and 3 document calls in isolated children")
     finally:
         extension_loader.unload_extension(loaded.name)
 

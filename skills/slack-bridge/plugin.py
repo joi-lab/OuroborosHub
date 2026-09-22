@@ -228,22 +228,29 @@ def _make_file_download(api: Any):
 def _make_generic_api(api: Any):
     async def generic_api(
         ctx: Any = None,
-        *, method: str = "GET", path: str = "", params: dict[str, Any] | None = None,
+        *, method: str = "GET", path: str = "", effect: str = "write", params: dict[str, Any] | None = None,
         body: dict[str, Any] | None = None, request_id: str = "",
+        result_kind: str = "auto",
     ) -> dict[str, Any]:
         try:
             selected, endpoint = SlackClient.normalize_method_path(method, path)
-            if selected == "GET":
+            if effect not in {"read", "write"}:
+                raise SlackConfigurationError("effect must be read or write")
+            if result_kind not in {"auto", "operation", "message"}:
+                raise SlackConfigurationError("result_kind must be auto, operation, or message")
+            if "token" in (params or {}) or "token" in (body or {}):
+                raise SlackConfigurationError("generic Slack API payload must not include token")
+            if effect == "read":
                 settings = api.get_settings(["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN"])
                 async with SlackClient(
                     settings.get("SLACK_BOT_TOKEN", ""), settings.get("SLACK_APP_TOKEN", ""),
                     require_app_token=False,
                 ) as slack:
-                    result = await slack.generic_request(method=selected, path=endpoint, params=params or {})
+                    result = await slack.generic_request(method=selected, path=endpoint,
+                                                         params=params or {}, body=body or {}, effect="read")
                 return {"ok": True, "state": "read", "source": endpoint, "response": result}
-            if "token" in (params or {}) or "token" in (body or {}):
-                raise SlackConfigurationError("generic Slack API payload must not include token")
-            payload = {"method": selected, "path": endpoint, "params": params or {}, "body": body or {}}
+            payload = {"method": selected, "path": endpoint, "effect": "write",
+                       "result_kind": result_kind, "params": params or {}, "body": body or {}}
             return _enqueue_mutation(api, "generic_api", payload, request_id, ctx)
         except (SlackConfigurationError, SlackApiError) as exc:
             return {"ok": False, "error": {"code": getattr(exc, "error", "configuration_or_argument"), "message": str(exc)}}
@@ -270,17 +277,28 @@ def _register_mutation_tools(api: Any) -> None:
     api.register_tool("slack_file_upload", _make_file_upload(api), description="Stage immutable bytes and queue Slack External Upload API delivery.", schema=upload_schema, timeout_sec=30)
     api.register_tool("slack_file_download", _make_file_download(api), description="Download one Slack file by exact provider file ID into the skill state artifact directory.", schema={"type": "object", "properties": {"file_id": {"type": "string"}}, "required": ["file_id"], "additionalProperties": False}, timeout_sec=60)
     api.register_tool(
+        "slack_receipt", lambda *, request_id: BridgeStore(_state_dir(api)).delivery_receipt(request_id),
+        description="Read durable provider and Host-report states for one queued Slack request ID, including uncertain outcomes.",
+        schema={"type": "object", "properties": {"request_id": {"type": "string"}},
+                "required": ["request_id"], "additionalProperties": False}, timeout_sec=30,
+    )
+    api.register_tool(
         "slack_api",
         _make_generic_api(api),
         description=(
             "Call one actual Slack Web API method with the existing bot credential. "
-            "GET reads execute directly; POST writes are queued through the durable mutation outbox "
-            "and retain provider receipts or uncertainty. Never include token in params/body."
+            "Set effect=read for a provider read; effect=write uses the durable mutation outbox "
+            "regardless of the HTTP GET/POST transport method. "
+            "Writes retain provider receipts or uncertainty. Never include token in params/body."
         ),
         schema={
             "type": "object", "additionalProperties": False,
             "properties": {
                 "method": {"type": "string", "enum": ["GET", "POST"], "default": "GET"},
+                "effect": {"type": "string", "enum": ["read", "write"], "default": "write",
+                           "description": "Provider effect selected by the model; HTTP verb does not indicate whether a Slack method mutates state."},
+                "result_kind": {"type": "string", "enum": ["auto", "operation", "message"], "default": "auto",
+                                "description": "Select message for a write that creates speech, operation for other effects. Auto reports confirmed chat.postMessage speech."},
                 "path": {"type": "string", "description": "Slack Web API method such as conversations.list or chat.postMessage."},
                 "params": {"type": "object", "additionalProperties": True},
                 "body": {"type": "object", "additionalProperties": True},

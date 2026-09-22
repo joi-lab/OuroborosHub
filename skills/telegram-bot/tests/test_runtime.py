@@ -2,7 +2,7 @@ import asyncio
 import pathlib
 import sqlite3
 
-from telegram_bot.api import TelegramClient
+from telegram_bot.api import TelegramApiError, TelegramClient
 from telegram_bot.events import parse_telegram_update
 from telegram_bot.host import (
     PresenceHostHTTPError,
@@ -200,6 +200,61 @@ async def _outbox_worker_delivers_own_edit_and_reaction_operations(tmp_path):
     assert await runtime.process_one_outbox()
     assert [item[0] for item in clients[0].operations] == ["editMessageText", "setMessageReaction"]
     assert runtime.store.status_snapshot()["outbox_delivered"] == 2
+
+
+def test_operation_checkpoint_survives_cancel_without_second_provider_call(tmp_path):
+    asyncio.run(_operation_checkpoint_survives_cancel_without_second_provider_call(tmp_path))
+
+
+async def _operation_checkpoint_survives_cancel_without_second_provider_call(tmp_path):
+    provider = RuntimeClient("token")
+    runtime = TelegramTransportRuntime(
+        state_dir=tmp_path, token_provider=lambda: "token", logger=Logger(),
+        submitter=AcceptingSubmitter(), client_factory=lambda _token: provider,
+    )
+    runtime.store.enqueue_outbox("telegram-operation:once", {
+        "kind": "operation", "chat_id": "1", "method": "editMessageText",
+        "parameters": {"chat_id": "1", "message_id": 8, "text": "fixed"}, "text": "fixed",
+    })
+    mark_delivered = runtime.store.mark_delivered
+    def interrupt(*_args, **_kwargs):
+        raise asyncio.CancelledError()
+    runtime.store.mark_delivered = interrupt
+    try:
+        try:
+            await runtime.process_one_outbox()
+        except asyncio.CancelledError:
+            pass
+        assert runtime.store.outbox_payload("telegram-operation:once")["_operation_result"]["message_id"] == 8
+    finally:
+        runtime.store.mark_delivered = mark_delivered
+    assert await runtime.process_one_outbox()
+    assert runtime.store.delivery_receipt("telegram-operation:once")["state"] == "delivered"
+    assert len(provider.operations) == 1
+
+
+def test_ambiguous_operation_is_uncertain_and_never_auto_replayed(tmp_path):
+    async def run():
+        class LostResponse(RuntimeClient):
+            async def operation(self, method, parameters):
+                self.operations.append((method, parameters))
+                raise TelegramApiError(method, "response lost")
+        provider = LostResponse("token")
+        runtime = TelegramTransportRuntime(
+            state_dir=tmp_path, token_provider=lambda: "token", logger=Logger(),
+            submitter=AcceptingSubmitter(), client_factory=lambda _token: provider,
+        )
+        runtime.store.enqueue_outbox("telegram-operation:uncertain", {
+            "kind": "operation", "chat_id": "1", "method": "setMessageReaction",
+            "parameters": {"chat_id": "1", "message_id": 8, "reaction": []},
+        })
+        assert await runtime.process_one_outbox()
+        assert runtime.store.delivery_receipt("telegram-operation:uncertain")["state"] == "uncertain"
+        assert runtime.store.status_snapshot()["outbox_uncertain"] == 1
+        assert runtime.store.status_snapshot()["outbox_failed"] == 0
+        assert not await runtime.process_one_outbox()
+        assert len(provider.operations) == 1
+    asyncio.run(run())
 
 
 class DeferredSubmitter:

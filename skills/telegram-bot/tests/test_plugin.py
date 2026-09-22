@@ -98,7 +98,7 @@ def test_package_style_plugin_registration_and_status_route(tmp_path):
             if component.get("title") == "Provider custody"
         )["components"]
     }
-    assert {"inbox_failed", "outbox_failed"} <= metric_paths
+    assert {"inbox_failed", "outbox_failed", "outbox_uncertain"} <= metric_paths
     api.unload()
 
 
@@ -175,8 +175,13 @@ def test_telegram_operation_queues_edit_and_reaction_with_new_identity(tmp_path)
     first = store.claim_outbox()
     assert first is not None and first.payload["kind"] == "operation"
     assert first.payload["method"] == "editMessageText"
-    assert first.payload["_reporting"]["origin"]["original_delivery_id"] == "telegram-send:old"
+    assert first.payload["original_delivery_id"] == "telegram-send:old"
+    assert first.payload["_reporting"]["origin"] == {"kind": "tool"}
+    receipt_tool = operations["telegram_receipt"]
+    assert receipt_tool(operation="operation", request_id="op-edit-1")["state"] == "leased"
+    assert receipt_tool(operation="send", request_id="old")["state"] == "not_found"
     store.mark_delivered(first.delivery_id, provider_receipt={"message_id": 9})
+    assert receipt_tool(operation="operation", request_id="op-edit-1")["state"] == "delivered"
     second = store.claim_outbox()
     assert second is not None and second.payload["method"] == "setMessageReaction"
     api.unload()

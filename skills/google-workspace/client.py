@@ -5,17 +5,22 @@ from __future__ import annotations
 import json
 import re
 from typing import Any, Dict, List, Optional
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit, parse_qs
 import httpx
 
 try:
-    from .auth import get_access_token
+    from .auth import get_access_token, get_user_access_token
 except ImportError:
-    from auth import get_access_token
+    from auth import get_access_token, get_user_access_token
 
 SHEETS_BASE_URL = "https://sheets.googleapis.com/v4/spreadsheets"
 DOCS_BASE_URL = "https://docs.googleapis.com/v1/documents"
 DRIVE_BASE_URL = "https://www.googleapis.com/drive/v3/files"
+SERVICE_BASE_URLS = {
+    "drive": "https://www.googleapis.com/drive/v3",
+    "docs": "https://docs.googleapis.com/v1",
+    "sheets": "https://sheets.googleapis.com/v4",
+}
 
 DEFAULT_TIMEOUT = 30.0
 MAX_TEXT_EXPORT_CHARS = 100_000
@@ -50,6 +55,15 @@ def _validate_resource_id(val: str, name: str = "resource_id") -> str:
     if not val or not str(val).strip():
         raise ValueError(f"{name} is required.")
     cleaned = str(val).strip()
+    parsed = urlsplit(cleaned)
+    if parsed.scheme in ("http", "https") and parsed.hostname in ("docs.google.com", "drive.google.com"):
+        parts = parsed.path.strip("/").split("/")
+        for marker in ("d", "folders"):
+            if marker in parts and parts.index(marker) + 1 < len(parts):
+                cleaned = parts[parts.index(marker) + 1]
+                break
+        else:
+            cleaned = parse_qs(parsed.query).get("id", [cleaned])[0]
     if cleaned == "root":
         return cleaned
     if not RESOURCE_ID_PATTERN.match(cleaned):
@@ -73,7 +87,7 @@ def _file_context(item: Dict[str, Any], file_id: str) -> Dict[str, Any]:
 
 
 class GoogleWorkspaceClient:
-    """Client for Google Sheets, Docs, and Drive REST APIs using Service Account auth."""
+    """Client for Sheets, Docs and Drive using one explicitly selected identity."""
 
     def __init__(
         self,
@@ -82,12 +96,18 @@ class GoogleWorkspaceClient:
         *,
         access_token: Optional[str] = None,
         subject: Optional[str] = None,
+        client_id: Optional[str] = None,
+        client_secret: Optional[str] = None,
+        refresh_token: Optional[str] = None,
     ) -> None:
         self.raw_sa_info = raw_sa_info
         # OAuth bearer tokens are accepted only when explicitly supplied.  A
         # service-account JWT is never silently converted into delegation.
         self.access_token = str(access_token or "").strip() or None
         self.subject = str(subject or "").strip() or None
+        self.client_id = client_id
+        self.client_secret = client_secret
+        self.refresh_token = refresh_token
         self._external_client = http_client is not None
         self.client = http_client or httpx.Client(timeout=DEFAULT_TIMEOUT)
 
@@ -102,8 +122,11 @@ class GoogleWorkspaceClient:
         self.close()
 
     def _get_headers(self, force_refresh: bool = False) -> Dict[str, str]:
-        if self.access_token:
-            token = self.access_token
+        if self.access_token or self.refresh_token or self.client_id or self.client_secret:
+            token = get_user_access_token(
+                self.client_id, self.client_secret, self.refresh_token, self.client,
+                access_token=self.access_token, force_refresh=force_refresh,
+            )
         else:
             token = get_access_token(
                 raw_info=self.raw_sa_info,
@@ -168,6 +191,33 @@ class GoogleWorkspaceClient:
             raise RuntimeError(f"Google API error ({resp.status_code} {resp.reason_phrase}): {error_detail}")
 
         return resp
+
+    def workspace_request(
+        self, service: str, method: str, path: str,
+        query: Optional[Dict[str, Any]] = None, json_body: Optional[Any] = None,
+    ) -> Dict[str, Any]:
+        """Send a provider-shaped request using the same auth and HTTP path.
+
+        Paths are relative to a service API root. No operation allowlist or
+        automatic transport retry is imposed; Google enforces granted scopes
+        and resource permissions. Binary transfers use the artifact tools.
+        """
+        if service not in SERVICE_BASE_URLS:
+            raise ValueError("service must be drive, docs, or sheets.")
+        parsed = urlsplit(path)
+        if not path.strip() or parsed.scheme or parsed.netloc or parsed.query or parsed.fragment:
+            raise ValueError("path must be an API-relative path; supply query parameters in query.")
+        response = self._request(
+            method.upper(), f"{SERVICE_BASE_URLS[service]}/{path.lstrip('/')}",
+            params=query, json_body=json_body,
+        )
+        result: Dict[str, Any] = {"status_code": response.status_code}
+        if response.content:
+            try:
+                result["data"] = response.json()
+            except ValueError:
+                result["text"] = response.text
+        return result
 
     # --- Sheets API ---
 
@@ -352,38 +402,17 @@ class GoogleWorkspaceClient:
                 # Shared Drive folders.  This avoids a transient root document
                 # and the service-account move failure that followed it.
                 create_url = f"{DRIVE_BASE_URL}"
-                try:
-                    resp = self._request(
-                        "POST", create_url,
-                        params={"supportsAllDrives": "true", "fields": "id,name,mimeType,parents"},
-                        json_body={
-                            "name": title,
-                            "mimeType": "application/vnd.google-apps.document",
-                            "parents": [clean_folder],
-                        },
-                    )
-                    data = resp.json()
-                    doc_id = data["id"]
-                except RuntimeError as exc:
-                    # Keep compatibility with older API mocks/tenants that do
-                    # not expose Drive files.create.  Permission failures are
-                    # surfaced; only a not-found endpoint falls back.
-                    if "Google API error (404" not in str(exc):
-                        raise
-                    resp = self._request("POST", DOCS_BASE_URL, json_body={"title": title})
-                    data = resp.json()
-                    doc_id = data["documentId"]
-                    # Legacy fallback only: old tenants that do not expose
-                    # Drive files.create still need the historical move path.
-                    get_resp = self._request(
-                        "GET", f"{DRIVE_BASE_URL}/{doc_id}",
-                        params={"fields": "parents", "supportsAllDrives": "true"},
-                    )
-                    current_parents = get_resp.json().get("parents", [])
-                    update_params: Dict[str, Any] = {"addParents": clean_folder, "supportsAllDrives": "true"}
-                    if current_parents:
-                        update_params["removeParents"] = ",".join(current_parents)
-                    self._request("PATCH", f"{DRIVE_BASE_URL}/{doc_id}", params=update_params, json_body={})
+                resp = self._request(
+                    "POST", create_url,
+                    params={"supportsAllDrives": "true", "fields": "id,name,mimeType,parents"},
+                    json_body={
+                        "name": title,
+                        "mimeType": "application/vnd.google-apps.document",
+                        "parents": [clean_folder],
+                    },
+                )
+                data = resp.json()
+                doc_id = data["id"]
             else:
                 resp = self._request("POST", DOCS_BASE_URL, json_body={"title": title})
                 data = resp.json()

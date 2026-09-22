@@ -243,12 +243,21 @@ class SlackClient:
 
     async def generic_request(self, *, method: str, path: str,
                               params: Mapping[str, Any] | None = None,
-                              body: Mapping[str, Any] | None = None) -> dict[str, Any]:
+                              body: Mapping[str, Any] | None = None,
+                              effect: str = "read") -> dict[str, Any]:
         selected, endpoint = self.normalize_method_path(method, path)
+        if effect not in {"read", "write"}:
+            raise SlackConfigurationError("effect must be read or write")
         payload = dict(params or {}) if selected == "GET" else dict(body or {})
         if "token" in payload:
             raise SlackConfigurationError("generic Slack API payload must not include token")
-        return await self._request(selected, endpoint, payload, token=self.bot_token)
+        try:
+            return await self._request(selected, endpoint, payload, token=self.bot_token)
+        except (httpx.ReadTimeout, httpx.WriteTimeout, httpx.ReadError,
+                httpx.WriteError, httpx.RemoteProtocolError) as exc:
+            if effect == "write":
+                raise SlackMutationUncertain(type(exc).__name__) from exc
+            raise
 
     async def auth_test(self) -> dict[str, Any]:
         return await self._post("auth.test", {}, token=self.bot_token)
