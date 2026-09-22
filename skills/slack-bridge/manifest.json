@@ -15,8 +15,10 @@
       "bot": [
         "channels:history",
         "channels:read",
+        "channels:join",
         "chat:write",
         "files:read",
+        "files:write",
         "groups:history",
         "groups:read",
         "im:history",
@@ -25,7 +27,13 @@
         "mpim:history",
         "mpim:read",
         "users:read",
-        "users:read.email"
+        "users:read.email",
+        "reactions:read",
+        "reactions:write",
+        "pins:read",
+        "pins:write",
+        "bookmarks:read",
+        "bookmarks:write"
       ]
     }
   },
@@ -35,7 +43,9 @@
         "message.channels",
         "message.groups",
         "message.im",
-        "message.mpim"
+        "message.mpim",
+        "reaction_added",
+        "reaction_removed"
       ]
     },
     "org_deploy_enabled": false,

@@ -2,7 +2,7 @@
 name: telegram-bot
 description: Durable Telegram transport for generic Ouroboros presences, with exact actor and conversation
   provenance, media staging, and provider receipts.
-version: 0.3.0
+version: 0.4.0
 type: extension
 plugin_api: '2.0'
 runtime: python3
@@ -142,9 +142,12 @@ never treated as configuration. The adapter submits the actual provider
 conversation facts to the loopback Host and durably polls any deferred work
 before delivering its late text once.
 
-Supported v1 Telegram content is text/caption, photos, and documents. Voice,
-reactions, edited messages, service events, and Mini App behavior are outside
-this transport.
+Supported v1 Telegram content is text/caption, photos, documents, edited
+messages, and message-reaction provider facts. Voice/audio bytes are still
+outside the interpreted content contract: this transport makes no
+speech-to-text claim. Reaction updates require the bot to be an administrator
+in the chat and an explicit Bot API `allowed_updates` subscription; Telegram
+does not deliver bot-authored reactions as user reactions.
 
 ## Delivery history
 
@@ -176,6 +179,11 @@ When Telegram supplies a replied-to message, the event includes its text or
 caption, original author/chat/message IDs, date, entities, and photo/document
 descriptors. Selected quotes and forwarding origins remain separate source
 facts; a forwarded author does not replace the current sender.
+
+Edits retain their original message id with `message.event_kind` set to
+`edited_message`. Reaction updates retain the target message id and the old/new
+reaction arrays, with `event_kind` set to `message_reaction` and no synthetic
+message text. These are observations for model judgment, not automatic replies.
 
 Reply context comes only from that incoming update. It does not fetch history,
 follow nested reply chains, or download the replied-to message's media. Direct

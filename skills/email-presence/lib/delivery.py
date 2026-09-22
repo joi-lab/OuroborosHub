@@ -19,7 +19,7 @@ def email_report(item, state, *, recipients=None, error="", refused=None):
     references = list(item.references)
     if item.in_reply_to and item.in_reply_to not in references:
         references.append(item.in_reply_to)
-    targets = wire.get("recipients", item.recipients) if recipients is None else recipients
+    targets = wire.get("recipients", item.envelope_recipients) if recipients is None else recipients
     message = {
         "message_id": item.message_id, "subject": wire.get("subject", item.subject),
         "recipients": list(targets),
@@ -28,6 +28,8 @@ def email_report(item, state, *, recipients=None, error="", refused=None):
     }
     if "to" in wire:
         message["to"] = wire["to"]
+    if "cc" in wire:
+        message["cc"] = wire["cc"]
     if refused:
         message["refused_recipients"] = {
             address: {"code": value[0], "message": value[1].decode("utf-8", errors="replace") if isinstance(value[1], bytes) else str(value[1])}

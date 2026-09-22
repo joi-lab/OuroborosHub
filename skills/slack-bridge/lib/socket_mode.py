@@ -43,11 +43,15 @@ class SocketModeClient:
         store: BridgeStore,
         *,
         bot_user_id: str,
+        bot_id: str = "",
+        app_id: str = "",
         connector: Callable[..., Any] = websockets.connect,
     ) -> None:
         self.slack = slack
         self.store = store
         self.bot_user_id = str(bot_user_id)
+        self.bot_id = str(bot_id or "")
+        self.app_id = str(app_id or "")
         self._connector = connector
         self._stop = asyncio.Event()
         self._websocket: Any = None
@@ -80,6 +84,8 @@ class SocketModeClient:
             parsed = parse_socket_envelope(
                 payload,
                 bot_user_id=self.bot_user_id,
+                bot_id=self.bot_id,
+                app_id=self.app_id,
             )
             row_id, inserted = self.store.ingest_envelope(payload, parsed)
             await websocket.send(json.dumps({"envelope_id": envelope_id}))

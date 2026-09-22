@@ -2,16 +2,17 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 import time
 import uuid
+from pathlib import Path
 
 from starlette.responses import JSONResponse
 
 from .lib.client import MailClient
-from .lib.host_adapter import HostContractError, normalize_binding_id
-from .lib.store import EmailStore
 from .lib.delivery import tool_origin
+from .lib.host_adapter import HostContractError, normalize_binding_id
+from .lib.mime import reply_all_recipients
+from .lib.store import EmailStore
 
 SETTING_KEYS = ["EMAIL_IMAP_HOST", "EMAIL_IMAP_PORT", "EMAIL_SMTP_HOST", "EMAIL_SMTP_PORT",
                 "EMAIL_USER", "EMAIL_PASSWORD", "EMAIL_DEFAULT_FOLDER", "EMAIL_AUTH_MODE",
@@ -39,15 +40,39 @@ def register(api):
     def client():
         return MailClient(api.get_settings(SETTING_KEYS))
 
-    def send(ctx=None, *, to, body, subject="", reply_to_message_id="", references=None, request_id=""):
-        recipients = [x.strip() for x in str(to).split(",") if x.strip()]
-        if not recipients or not str(body).strip():
-            raise ValueError("to and body are required")
+    def addresses(value):
+        values = value if isinstance(value, (list, tuple)) else str(value or "").split(",")
+        return [str(x).strip() for x in values if str(x).strip()]
+
+    def send(ctx=None, *, to="", body="", subject="", reply_to_message_id="", references=None,
+             cc=None, bcc=None, reply_all=False, html_body="", body_type="plain", attachments=None, request_id=""):
+        recipients = addresses(to)
+        visible_cc = addresses(cc)
+        visible_bcc = addresses(bcc)
+        if reply_all:
+            if not reply_to_message_id:
+                raise ValueError("reply_to_message_id is required for reply_all")
+            original = store().message_by_id(reply_to_message_id)
+            if not original:
+                raise ValueError("reply_all source message is not in the durable inbox")
+            derived = reply_all_recipients(original, client().settings.get("EMAIL_USER"))
+            recipients = derived["to"] + recipients
+            visible_cc = derived["cc"] + visible_cc
+            if references is None:
+                references = original.get("references") or []
+        if not recipients or (not str(body).strip() and not str(html_body).strip()):
+            raise ValueError("to (or reply_all source) and body are required")
         rid = request_id or uuid.uuid4().hex
-        inserted = store().enqueue_outbox(request_id=rid, recipients=recipients, subject=subject,
+        mailbox = store()
+        existing = mailbox.receipt(rid) if request_id else None
+        if existing:
+            return {"ok": True, "request_id": rid, "deduplicated": True, "receipt": existing}
+        staged = mailbox.stage_outbound_attachments(rid, attachments or [])
+        inserted = mailbox.enqueue_outbox(request_id=rid, to=recipients, cc=visible_cc, bcc=visible_bcc, subject=subject,
                                           body=body, in_reply_to=reply_to_message_id, references=references or [],
+                                          attachments=staged, html_body=html_body, body_type=body_type,
                                           reporting={"version": -1, "origin": tool_origin(ctx)})
-        return {"ok": True, "request_id": rid, "deduplicated": not inserted, "receipt": store().receipt(rid)}
+        return {"ok": True, "request_id": rid, "deduplicated": not inserted, "receipt": mailbox.receipt(rid)}
 
     def search(**kwargs):
         kwargs.setdefault("folder", client().settings.get("EMAIL_DEFAULT_FOLDER") or "INBOX")
@@ -55,7 +80,31 @@ def register(api):
 
     def read(**kwargs):
         kwargs.setdefault("folder", client().settings.get("EMAIL_DEFAULT_FOLDER") or "INBOX")
-        return client().read(**kwargs)
+        message = client().read(include_attachment_data=True, **kwargs)
+        if message.get("attachments"):
+            staged = store().stage_inbound_attachments(message)
+            message["staged_files"] = staged
+            message["attachments"] = [{k: v for k, v in item.items() if k != "path"} for item in staged]
+        return message
+
+    def draft(**kwargs):
+        if kwargs.pop("reply_all", False):
+            source_id = kwargs.get("reply_to_message_id")
+            if not source_id:
+                raise ValueError("reply_to_message_id is required for reply_all")
+            original = store().message_by_id(source_id)
+            if not original:
+                raise ValueError("reply_all source message is not in the durable inbox")
+            derived = reply_all_recipients(original, client().settings.get("EMAIL_USER"))
+            kwargs["to"] = derived["to"] + addresses(kwargs.get("to"))
+            kwargs["cc"] = derived["cc"] + addresses(kwargs.get("cc"))
+            if kwargs.get("references") is None:
+                kwargs["references"] = original.get("references") or []
+        staged = store().stage_outbound_attachments("draft:" + uuid.uuid4().hex, kwargs.pop("attachments", None) or [])
+        for key in ("cc", "bcc"):
+            kwargs[key] = addresses(kwargs.get(key))
+        kwargs["attachments"] = staged
+        return client().draft(**kwargs)
 
     string = {"type": "string"}
     integer = {"type": "integer"}
@@ -68,7 +117,10 @@ def register(api):
 
     tool("email_send", send, "Queue a text email or threaded reply. Reuse request_id to deduplicate; query email_receipt for delivery.",
          {"to": string, "body": string, "subject": string, "reply_to_message_id": string,
-          "references": array, "request_id": string}, ("to", "body"))
+          "references": array, "cc": {"type": "array", "items": string},
+          "bcc": {"type": "array", "items": string}, "reply_all": {"type": "boolean"},
+          "html_body": string, "body_type": {"type": "string", "enum": ["plain", "html"]},
+          "attachments": {"type": "array", "items": {"type": "object"}}, "request_id": string}, ("body",))
     tool("email_search", search, "Search all mail, including mail before activation. IMAP criteria tokens, e.g. ['UNSEEN'], ['FROM', '\"alice@example.org\"'], ['HEADER', 'Message-ID', '\"<id>\"']. Returns stable UID and UIDVALIDITY.",
          {"folder": string, "criteria": array, "limit": integer})
     tool("email_read", read, "Read any old or new message using UID and UIDVALIDITY from email_search. Peeks unless mark_as_read is true.",
@@ -78,10 +130,14 @@ def register(api):
          {"action": {"type": "string", "enum": ["list", "create", "copy", "move", "flags"]},
           "folder": string, "uid": integer, "uidvalidity": integer, "destination": string,
           "flags": array, "remove_flags": {"type": "boolean"}})
-    tool("email_draft", lambda **kw: client().draft(**kw),
+    tool("email_draft", draft,
          "Save a text draft without sending it. Choose the real draft folder from email_mailbox list.",
          {"to": string, "subject": string, "body": string, "folder": string,
-          "reply_to_message_id": string, "references": array}, ("to", "subject", "body"))
+          "reply_to_message_id": string, "references": array, "cc": {"type": "array", "items": string},
+          "bcc": {"type": "array", "items": string}, "html_body": string,
+          "reply_all": {"type": "boolean"},
+          "body_type": {"type": "string", "enum": ["plain", "html"]},
+          "attachments": {"type": "array", "items": {"type": "object"}}}, ("to", "subject"))
     tool("email_receipt", lambda request_id: store().receipt(request_id),
          "Get queued/completed/failed/uncertain email delivery and its stable Message-ID. Uncertain SMTP acceptance requires inspection before any new send.",
          {"request_id": string}, ("request_id",))

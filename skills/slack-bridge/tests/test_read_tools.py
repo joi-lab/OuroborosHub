@@ -33,7 +33,11 @@ def with_tools(monkeypatch, http):
 def test_tool_schemas_match_manifest_scopes_and_specific_reads():
     api = API()
     read_tools.register_read_tools(api)
-    assert set(api.tools) == {"slack_user_info", "slack_conversation_info", "slack_history", "slack_thread"}
+    assert {
+        "slack_user_info", "slack_conversation_info", "slack_history", "slack_thread",
+        "slack_list_conversations", "slack_list_users", "slack_lookup_user_email",
+        "slack_members", "slack_join", "slack_resolve",
+    } <= set(api.tools)
     assert all(len(name) <= 24 for name in api.tools)
     assert api.tools["slack_thread"][1]["schema"]["required"] == ["channel_id", "thread_ts"]
     history_schema = api.tools["slack_history"][1]["schema"]
@@ -43,7 +47,8 @@ def test_tool_schemas_match_manifest_scopes_and_specific_reads():
     scopes = set(manifest["oauth_config"]["scopes"]["bot"])
     assert {"users:read", "users:read.email", "channels:read", "groups:read", "im:read", "mpim:read"} <= scopes
     assert {"channels:history", "groups:history", "im:history", "mpim:history", "chat:write"} <= scopes
-    assert "files:write" not in scopes
+    assert {"files:write", "channels:join", "reactions:read", "reactions:write",
+            "pins:read", "pins:write", "bookmarks:read", "bookmarks:write"} <= scopes
 
 
 def test_lookup_tools_return_full_current_provider_objects(monkeypatch):

@@ -148,7 +148,10 @@ class TelegramClient:
                 "offset": max(0, int(offset)),
                 "limit": 100,
                 "timeout": max(1, min(50, int(timeout_sec))),
-                "allowed_updates": ["message"],
+                # Keep ordinary messages while opting into provider facts that
+                # the parser can preserve. The bot must be an admin for reaction
+                # updates; Telegram simply omits them otherwise.
+                "allowed_updates": ["message", "edited_message", "message_reaction"],
             },
             timeout_sec=float(timeout_sec) + 15.0,
         )

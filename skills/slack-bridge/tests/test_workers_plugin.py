@@ -10,7 +10,7 @@ from pathlib import Path
 from lib.events import parse_socket_envelope
 from lib.host_adapter import HostBindingTerminalError, HostDelivery, HostTurnStatus
 from lib.runtime import InboundWorker, OutboundWorker
-from lib.slack_api import SlackApiError
+from lib.slack_api import SlackApiError, SlackMutationUncertain
 from lib.store import BridgeStore
 
 
@@ -327,6 +327,38 @@ def test_slack_send_explicit_plain_format_is_persisted(tmp_path):
     assert result["state"] == "queued"
     item = BridgeStore(tmp_path).claim_outbox()
     assert item.text_format == "plain" and item.text == "**literal**"
+
+
+def test_slack_file_upload_copies_immutable_bytes_into_existing_outbox(tmp_path):
+    module = _load_plugin()
+    api = _Api(tmp_path)
+    module.register(api)
+    source = tmp_path / "source.txt"
+    source.write_bytes(b"bytes before enqueue")
+    handler, _metadata = api.tools["slack_file_upload"]
+    result = handler(file_path=str(source), channel_id="C1", request_id="upload-1")
+    assert result["state"] == "queued"
+    source.write_bytes(b"changed after enqueue")
+    repeated = handler(file_path=str(source), channel_id="C2", request_id="upload-1")
+    assert repeated["deduplicated"] is True
+    item = BridgeStore(tmp_path).claim_outbox()
+    assert item is not None and item.kind == "mutation" and item.operation == "upload_file"
+    assert Path(item.payload["path"]).read_bytes() == b"bytes before enqueue"
+
+
+def test_upload_completion_transport_loss_is_terminally_uncertain(tmp_path):
+    class _UncertainSlack(_Slack):
+        async def upload_file(self, **_payload):
+            raise SlackMutationUncertain("complete_response_lost")
+
+    store = BridgeStore(tmp_path)
+    store.enqueue_mutation(
+        request_id="upload-uncertain", operation="upload_file",
+        payload={"path": str(tmp_path / "staged"), "filename": "file.txt", "channel": "C1"},
+    )
+    assert asyncio.run(OutboundWorker(store, _UncertainSlack()).process_once()) is True
+    status = store.status()
+    assert status["mutations_uncertain"] == 1 and status["mutations_pending"] == 0
 
 
 def test_settings_accept_only_canonical_binding_ids(tmp_path) -> None:

@@ -39,6 +39,14 @@ class SlackApiError(RuntimeError):
         self.details = dict(details or {})
 
 
+class SlackMutationUncertain(SlackApiError):
+    """A provider write may have been accepted before the response was lost."""
+
+    def __init__(self, error: str, *, status_code: int = 0, details: Mapping[str, Any] | None = None) -> None:
+        super().__init__(error, status_code=status_code, details=details)
+        self.uncertain = True
+
+
 @dataclass(frozen=True)
 class StagedSlackFile:
     file_id: str
@@ -244,6 +252,100 @@ class SlackClient:
             raise SlackApiError("conversation_identity_mismatch")
         return conversation
 
+    @staticmethod
+    def _page_limit(limit: int) -> int:
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 200:
+            raise SlackConfigurationError("limit must be an integer between 1 and 200")
+        return limit
+
+    async def list_conversations(
+        self, *, cursor: str = "", limit: int = 100,
+        types: Sequence[str] = ("public_channel", "private_channel", "mpim", "im"),
+        exclude_archived: bool = True,
+    ) -> dict[str, Any]:
+        """Return one explicit conversations.list page without guessing names."""
+        payload: dict[str, Any] = {
+            "limit": self._page_limit(limit),
+            "exclude_archived": bool(exclude_archived),
+        }
+        if isinstance(types, str):
+            types = (types,)
+        selected = [str(item).strip() for item in types if str(item).strip()]
+        if selected:
+            payload["types"] = ",".join(selected)
+        if cursor:
+            payload["cursor"] = str(cursor)
+        response = await self._get("conversations.list", payload, token=self.bot_token)
+        channels = response.get("channels")
+        if not isinstance(channels, list):
+            raise SlackApiError("missing_channels")
+        metadata = response.get("response_metadata") or {}
+        next_cursor = str(metadata.get("next_cursor") or "").strip()
+        return {
+            **response,
+            "source": "conversations.list",
+            "channels": channels,
+            "next_cursor": next_cursor or None,
+            "complete": not bool(next_cursor or response.get("has_more")),
+        }
+
+    async def list_users(self, *, cursor: str = "", limit: int = 100,
+                         include_locale: bool = True) -> dict[str, Any]:
+        payload: dict[str, Any] = {"limit": self._page_limit(limit), "include_locale": bool(include_locale)}
+        if cursor:
+            payload["cursor"] = str(cursor)
+        response = await self._get("users.list", payload, token=self.bot_token)
+        members = response.get("members")
+        if not isinstance(members, list):
+            raise SlackApiError("missing_members")
+        metadata = response.get("response_metadata") or {}
+        next_cursor = str(metadata.get("next_cursor") or "").strip()
+        return {
+            **response,
+            "source": "users.list",
+            "members": members,
+            "next_cursor": next_cursor or None,
+            "complete": not bool(next_cursor or response.get("has_more")),
+        }
+
+    async def lookup_user_by_email(self, email: str) -> dict[str, Any]:
+        email = str(email or "").strip()
+        if not email or "@" not in email:
+            raise SlackConfigurationError("email must be a valid address")
+        response = await self._get("users.lookupByEmail", {"email": email}, token=self.bot_token)
+        user = response.get("user")
+        if not isinstance(user, dict) or not user.get("id"):
+            raise SlackApiError("missing_user")
+        return user
+
+    async def conversation_members(self, channel_id: str, *, cursor: str = "", limit: int = 100) -> dict[str, Any]:
+        channel_id = str(channel_id or "").strip()
+        if not channel_id:
+            raise SlackConfigurationError("channel_id is required")
+        payload: dict[str, Any] = {"channel": channel_id, "limit": self._page_limit(limit)}
+        if cursor:
+            payload["cursor"] = str(cursor)
+        response = await self._get("conversations.members", payload, token=self.bot_token)
+        members = response.get("members")
+        if not isinstance(members, list):
+            raise SlackApiError("missing_members")
+        metadata = response.get("response_metadata") or {}
+        next_cursor = str(metadata.get("next_cursor") or "").strip()
+        return {
+            **response,
+            "source": "conversations.members",
+            "channel_id": channel_id,
+            "members": members,
+            "next_cursor": next_cursor or None,
+            "complete": not bool(next_cursor or response.get("has_more")),
+        }
+
+    async def join_conversation(self, channel_id: str) -> dict[str, Any]:
+        channel_id = str(channel_id or "").strip()
+        if not channel_id:
+            raise SlackConfigurationError("channel_id is required")
+        return await self._post("conversations.join", {"channel": channel_id}, token=self.bot_token)
+
     async def read_messages(
         self, channel_id: str, *, thread_ts: str = "", cursor: str = "",
         limit: int = 50, oldest: str = "", latest: str = "", inclusive: bool = False,
@@ -316,6 +418,113 @@ class SlackClient:
         if thread_ts:
             payload["thread_ts"] = str(thread_ts)
         return await self._post("chat.postMessage", payload, token=self.bot_token)
+
+    async def update_message(self, *, channel: str, ts: str, text: str = "",
+                             blocks: Sequence[Mapping[str, Any]] | None = None,
+                             text_format: str = "markdown") -> dict[str, Any]:
+        channel, ts = str(channel or "").strip(), str(ts or "").strip()
+        if not channel or not ts:
+            raise SlackConfigurationError("channel and ts are required")
+        selected = normalize_text_format(text_format)
+        payload: dict[str, Any] = {"channel": channel, "ts": ts}
+        if blocks is not None:
+            payload["blocks"] = list(blocks)
+        if selected == "markdown":
+            payload["markdown_text"] = str(text)
+        else:
+            payload.update(text=str(text), mrkdwn=selected == "mrkdwn")
+        return await self._post("chat.update", payload, token=self.bot_token)
+
+    async def delete_message(self, *, channel: str, ts: str) -> dict[str, Any]:
+        channel, ts = str(channel or "").strip(), str(ts or "").strip()
+        if not channel or not ts:
+            raise SlackConfigurationError("channel and ts are required")
+        return await self._post("chat.delete", {"channel": channel, "ts": ts}, token=self.bot_token)
+
+    async def reaction(self, *, channel: str, ts: str, name: str, add: bool = True) -> dict[str, Any]:
+        channel, ts, name = str(channel or "").strip(), str(ts or "").strip(), str(name or "").strip()
+        if not channel or not ts or not name:
+            raise SlackConfigurationError("channel, ts and name are required")
+        endpoint = "reactions.add" if add else "reactions.remove"
+        return await self._post(endpoint, {"channel": channel, "timestamp": ts, "name": name}, token=self.bot_token)
+
+    async def pin(self, *, channel: str, ts: str, add: bool = True) -> dict[str, Any]:
+        channel, ts = str(channel or "").strip(), str(ts or "").strip()
+        if not channel or not ts:
+            raise SlackConfigurationError("channel and ts are required")
+        endpoint = "pins.add" if add else "pins.remove"
+        return await self._post(endpoint, {"channel": channel, "timestamp": ts}, token=self.bot_token)
+
+    async def bookmark(self, *, channel: str, bookmark_id: str = "", title: str = "",
+                       link: str = "", emoji: str = "", add: bool = True) -> dict[str, Any]:
+        channel = str(channel or "").strip()
+        if not channel:
+            raise SlackConfigurationError("channel is required")
+        if add:
+            if not title or not link:
+                raise SlackConfigurationError("title and link are required")
+            payload = {"channel_id": channel, "title": str(title), "link": str(link)}
+            if emoji:
+                payload["emoji"] = str(emoji)
+            return await self._post("bookmarks.add", payload, token=self.bot_token)
+        bookmark_id = str(bookmark_id or "").strip()
+        if not bookmark_id:
+            raise SlackConfigurationError("bookmark_id is required")
+        return await self._post("bookmarks.remove", {"channel_id": channel, "bookmark_id": bookmark_id}, token=self.bot_token)
+
+    async def file_info(self, file_id: str) -> dict[str, Any]:
+        file_id = str(file_id or "").strip()
+        if not file_id:
+            raise SlackConfigurationError("file_id is required")
+        response = await self._get("files.info", {"file": file_id}, token=self.bot_token)
+        value = response.get("file")
+        if not isinstance(value, dict):
+            raise SlackApiError("missing_file")
+        return value
+
+    async def download_file(self, file_id: str, *, destination: pathlib.Path) -> StagedSlackFile:
+        info = await self.file_info(file_id)
+        url = str(info.get("url_private_download") or info.get("url_private") or "").strip()
+        if not url:
+            raise SlackApiError("missing_private_file_url")
+        staged = await self.stage_private_files(
+            [{"file_id": file_id, "name": info.get("name") or info.get("title") or file_id,
+              "mimetype": info.get("mimetype"), "size": info.get("size"), "url_private": url}],
+            destination=destination,
+            max_files=1,
+        )
+        return staged[0]
+
+    async def upload_file(self, *, path: pathlib.Path, filename: str, title: str = "",
+                          channel: str = "", thread_ts: str = "", initial_comment: str = "") -> dict[str, Any]:
+        """Upload immutable bytes through Slack's current External Upload API."""
+        data = path.read_bytes()
+        if not data:
+            raise SlackConfigurationError("file must not be empty")
+        request = await self._post("files.getUploadURLExternal", {
+            "filename": str(filename), "length": len(data),
+        }, token=self.bot_token)
+        upload_url = str(request.get("upload_url") or "").strip()
+        file_id = str(request.get("file_id") or "").strip()
+        if not upload_url or not file_id:
+            raise SlackApiError("missing_upload_url", details=request)
+        try:
+            response = await self._http.post(upload_url, content=data, headers={"Content-Type": "application/octet-stream"})
+        except (httpx.HTTPError, TimeoutError) as exc:
+            raise SlackMutationUncertain("upload_bytes_transport_uncertain") from exc
+        if response.status_code < 200 or response.status_code >= 300:
+            raise SlackApiError(f"upload_bytes_http_{response.status_code}", status_code=response.status_code)
+        payload: dict[str, Any] = {"files": [{"id": file_id, "title": str(title or filename)}]}
+        if channel:
+            payload["channel_id"] = str(channel)
+        if thread_ts:
+            payload["thread_ts"] = str(thread_ts)
+        if initial_comment:
+            payload["initial_comment"] = str(initial_comment)
+        try:
+            return await self._post("files.completeUploadExternal", payload, token=self.bot_token)
+        except SlackApiError as exc:
+            raise SlackMutationUncertain(exc.error, status_code=exc.status_code, details=exc.details) from exc
 
     async def resolve_target(self, target: str) -> str:
         clean = str(target or "").strip()

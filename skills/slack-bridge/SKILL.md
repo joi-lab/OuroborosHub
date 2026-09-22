@@ -1,7 +1,7 @@
 ---
 name: slack-bridge
-description: Slack presence transport with durable delivery, provider author and conversation context, profile/history/thread reads, proactive text messages, and inbound file staging.
-version: 1.2.0
+description: Slack presence transport with durable delivery, directory discovery, provider updates, file transfer, message actions, and provider context.
+version: 1.3.0
 type: extension
 entry: plugin.py
 plugin_api: "2.0"
@@ -28,6 +28,38 @@ tools:
     description: Read one explicit page of conversation history without trimming message text.
   - name: slack_thread
     description: Read one explicit page of a thread using its root timestamp.
+  - name: slack_list_conversations
+    description: List one paginated conversation directory page with exact IDs and URLs.
+  - name: slack_list_users
+    description: List one paginated user directory page with exact IDs and profile facts.
+  - name: slack_lookup_user_email
+    description: Resolve one email to an exact Slack user ID when the provider permits it.
+  - name: slack_members
+    description: List one paginated member-ID page for an exact conversation.
+  - name: slack_join
+    description: Explicitly join one public conversation by exact ID.
+  - name: slack_resolve
+    description: Return name/email/URL/ID directory candidates without guessing ambiguous matches.
+  - name: slack_file_upload
+    description: Stage immutable bytes and queue Slack External Upload API delivery.
+  - name: slack_file_download
+    description: Download one provider file into the skill state artifact directory.
+  - name: slack_message_edit
+    description: Queue an update of an own Slack message by exact channel and timestamp.
+  - name: slack_message_delete
+    description: Queue deletion of an own Slack message by exact channel and timestamp.
+  - name: slack_reaction_add
+    description: Queue adding a reaction to an exact Slack message.
+  - name: slack_reaction_remove
+    description: Queue removing a reaction from an exact Slack message.
+  - name: slack_pin_add
+    description: Queue pinning an exact Slack message.
+  - name: slack_pin_remove
+    description: Queue unpinning an exact Slack message.
+  - name: slack_bookmark_add
+    description: Queue adding a bookmark to an exact Slack conversation.
+  - name: slack_bookmark_remove
+    description: Queue removing a bookmark by exact provider bookmark ID.
 ---
 
 # Slack Bridge
@@ -68,8 +100,27 @@ membership; there is no second bridge-local channel allowlist.
 
 Inbound Slack files are downloaded from their authenticated `url_private`
 locations into the skill state directory before the host adapter sees them.
-Outbound file upload is intentionally not part of this version; the Slack app
-does not request `files:write`.
+`slack_file_download` exposes the same provider-authenticated path for a file
+ID. Outbound `slack_file_upload` copies immutable bytes into the skill state
+directory at enqueue, then the companion runs Slack's current three-phase
+External Upload API (`files.getUploadURLExternal`, raw bytes POST,
+`files.completeUploadExternal`). A lost response after bytes or completion is
+recorded as `uncertain`; the bridge never claims a provider-side exactly-once
+mutation.
+
+Directory tools use one explicit page per call. `slack_list_conversations` and
+`slack_list_users` return exact IDs, names, URLs and `next_cursor`; follow the
+cursor yourself and treat `complete=false` as incomplete. `slack_resolve`
+returns all candidates on that page for a case-insensitive name, email, URL or
+ID query and never chooses an ambiguous person. `slack_lookup_user_email` uses
+Slack's exact `users.lookupByEmail` method. `slack_members` lists member IDs,
+while `slack_join` is an explicit provider mutation;
+it is never an automatic fallback for a failed history read.
+
+Message edits, deletes, reactions, pins and bookmarks use the durable mutation
+queue and retain the provider response or an explicit failed/uncertain result.
+The app manifest must be reinstalled in a workspace after scope changes; an
+edited public manifest does not grant scopes to an already-installed app.
 
 ## Provider context and on-demand reads
 
@@ -113,11 +164,31 @@ returns its error code, HTTP status, required scopes when supplied, and retry
 delay instead of pretending the result was empty. No automatic account login or
 HTTP retry is introduced.
 
+## Inbound provider updates
+
+Message edits (`message_changed`) are normalized from Slack's nested
+`message`/`previous_message` objects while both objects remain in provider
+facts. Deletes preserve the deleted timestamp and previous message facts.
+`reaction_added` and `reaction_removed` preserve the reacted message ID,
+reaction name and actor. Blocks-only messages are accepted when `blocks` carry
+content even if Slack's `text` field is empty. Other bot/app events remain
+provider facts and can reach Presence; the bridge drops only its own bot/app
+events using the authenticated identity, preserving self-deduplication and
+avoiding reply loops. These updates use the existing ordered inbox, host
+adapter, and LLM-selected silent/message outcomes; no keyword or semantic gate
+is added by the transport.
+
 Profile, conversation, history and thread reads use GET query parameters because
 Slack's read methods do not reliably consume JSON POST arguments; message sends
 continue to use POST JSON.
 
-References: [users.info](https://docs.slack.dev/reference/methods/users.info/),
+References: [conversations.list](https://docs.slack.dev/reference/methods/conversations.list/),
+[users.list](https://docs.slack.dev/reference/methods/users.list/),
+[users.lookupByEmail](https://docs.slack.dev/reference/methods/users.lookupByEmail/),
+[conversations.members](https://docs.slack.dev/reference/methods/conversations.members/),
+[conversations.join](https://docs.slack.dev/reference/methods/conversations.join/),
+[files External Upload](https://docs.slack.dev/messaging/working-with-files/),
+[users.info](https://docs.slack.dev/reference/methods/users.info/),
 [conversations.info](https://docs.slack.dev/reference/methods/conversations.info/),
 [conversations.history](https://docs.slack.dev/reference/methods/conversations.history/),
 [conversations.replies](https://docs.slack.dev/reference/methods/conversations.replies/).
@@ -174,7 +245,7 @@ opt into delivery reporting. The actual mode echoed by the original turn is
 kept with both its immediate and deferred results; an old cached turn or old
 automatic outbox row stays in legacy mode even after an upgrade.
 
-Each new explicit send captures only compact origin references from its tool
+Each new explicit send or mutation captures only compact origin references from its tool
 context, never the complete task or credentials. New sends opt into reporting
 when Host capability discovery has succeeded. Older Hosts continue sending;
 `status` exposes `history_reporting_state` and `history_reporting_limitation`

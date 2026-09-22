@@ -553,3 +553,84 @@ def test_plugin_registration_and_settings_save(tmp_path, monkeypatch):
     # Test resolve folder and template ID using the saved settings
     assert plugin._resolve_folder_id(mock_api, None) == "folder_default_123"
     assert plugin._resolve_template_id(mock_api, "weekly_report") == "doc_tmpl_456"
+
+
+def test_drive_search_query_and_shared_drive_options():
+    seen = {}
+    def respond(request):
+        seen.update(request.url.params)
+        return httpx.Response(200, json={"files": [{"id": "f1", "name": "Report"}], "nextPageToken": "next"})
+    with httpx.Client(transport=httpx.MockTransport(respond)) as http:
+        with GoogleWorkspaceClient(access_token="oauth-token", http_client=http) as client:
+            page = client.drive_list(name="Report", full_text="quarterly", corpora="drive", drive_id="drive1", page_token="p1")
+    assert "name = 'Report'" in seen["q"]
+    assert "fullText contains 'quarterly'" in seen["q"]
+    assert seen["corpora"] == "drive"
+    assert seen["driveId"] == "drive1"
+    assert page["next_page_token"] == "next"
+
+
+def test_docs_batch_update_reads_back_structured_document():
+    calls = []
+    def respond(request):
+        calls.append(request.url.path)
+        if request.url.path.endswith(":batchUpdate"):
+            return httpx.Response(200, json={"replies": [{"insertText": {}}], "writeControl": {"requiredRevisionId": "r2"}})
+        return httpx.Response(200, json={"documentId": "doc1", "title": "Updated", "revisionId": "r2", "body": {"content": []}})
+    with httpx.Client(transport=httpx.MockTransport(respond)) as http:
+        with GoogleWorkspaceClient(access_token="oauth-token", http_client=http) as client:
+            result = client.docs_update("doc1", [{"insertText": {"location": {"index": 1}, "text": "Hi"}}])
+    assert calls == ["/v1/documents/doc1:batchUpdate", "/v1/documents/doc1"]
+    assert result["readback"]["body"] == {"content": []}
+
+
+def test_sheets_update_and_structural_batch_update():
+    def respond(request):
+        if request.method == "PUT":
+            assert request.url.params["valueInputOption"] == "RAW"
+            return httpx.Response(200, json={"updatedRange": "Sheet1!A1:B1", "updatedRows": 1, "updatedCells": 2})
+        assert request.url.path.endswith(":batchUpdate")
+        return httpx.Response(200, json={"replies": [{"addSheet": {"properties": {"title": "New"}}}]})
+    with httpx.Client(transport=httpx.MockTransport(respond)) as http:
+        with GoogleWorkspaceClient(access_token="oauth-token", http_client=http) as client:
+            updated = client.sheets_update("sheet1", "Sheet1!A1:B1", [[1, 2]], value_input_option="RAW")
+            structural = client.sheets_batch_update("sheet1", [{"addSheet": {"properties": {"title": "New"}}}])
+    assert updated["updated_cells"] == 2
+    assert structural["replies"]
+
+
+def test_drive_binary_download_export_and_upload():
+    def respond(request):
+        if request.url.path.endswith("/files/f1") and request.url.params.get("alt") != "media":
+            return httpx.Response(200, json={"id": "f1", "name": "blob.bin", "mimeType": "application/octet-stream"})
+        if request.url.path.endswith("/files/f1/export"):
+            assert request.url.params["mimeType"] == "text/csv"
+            return httpx.Response(200, content=b"a,b\n1,2\n")
+        if request.url.path.endswith("/files/f1"):
+            return httpx.Response(200, content=b"\x00\x01")
+        if request.url.host == "www.googleapis.com" and request.url.path.startswith("/upload/"):
+            assert request.method == "POST"
+            return httpx.Response(200, json={"id": "uploaded", "name": "up.bin", "mimeType": "application/octet-stream"})
+        raise AssertionError(request.url)
+    with httpx.Client(transport=httpx.MockTransport(respond)) as http:
+        with GoogleWorkspaceClient(access_token="oauth-token", http_client=http) as client:
+            downloaded = client.drive_download("f1")
+            exported = client.drive_export("f1", "text/csv")
+            uploaded = client.drive_upload("up.bin", b"payload")
+    assert downloaded["content"] == b"\x00\x01"
+    assert exported["content"].startswith(b"a,b")
+    assert uploaded["file_id"] == "uploaded"
+
+
+def test_docs_create_blank_uses_drive_parent_directly():
+    def respond(request):
+        assert request.method == "POST"
+        assert request.url.path == "/drive/v3/files"
+        payload = json.loads(request.content)
+        assert payload["parents"] == ["folder1"]
+        assert payload["mimeType"] == "application/vnd.google-apps.document"
+        return httpx.Response(200, json={"id": "doc1", "name": "Blank"})
+    with httpx.Client(transport=httpx.MockTransport(respond)) as http:
+        with GoogleWorkspaceClient(access_token="oauth-token", http_client=http) as client:
+            result = client.docs_create("Blank", folder_id="folder1")
+    assert result["document_id"] == "doc1"

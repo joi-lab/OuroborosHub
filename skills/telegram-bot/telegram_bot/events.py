@@ -44,7 +44,19 @@ def parse_telegram_update(
     if not isinstance(update, dict):
         return None
     update_id = _integer(update.get("update_id"))
+    event_kind = "message"
     message = update.get("message")
+    if not isinstance(message, dict) and isinstance(update.get("edited_message"), dict):
+        message = update["edited_message"]
+        event_kind = "edited_message"
+    reaction = update.get("message_reaction")
+    if not isinstance(message, dict) and isinstance(reaction, dict):
+        return _parse_reaction_update(
+            update,
+            reaction,
+            bot_account_id=bot_account_id,
+            management_group_id=management_group_id,
+        )
     if update_id is None or not isinstance(message, dict):
         return None
 
@@ -91,6 +103,7 @@ def parse_telegram_update(
         conversation_fact["configured_room"] = "management_group"
     attachments = _attachments(message)
     message_fact = {
+        "event_kind": event_kind,
         "message_id": message_id,
         "sent_at_epoch": _integer(message.get("date")),
         "reply_to_message_id": _reply_message_id(message),
@@ -116,6 +129,66 @@ def parse_telegram_update(
         conversation=conversation_fact,
         message=message_fact,
         text=text,
+    )
+
+
+def _parse_reaction_update(
+    update: Dict[str, Any],
+    reaction: Dict[str, Any],
+    *,
+    bot_account_id: str,
+    management_group_id: str = "",
+) -> Optional[TelegramEvent]:
+    """Turn Telegram's reaction update into a neutral provider fact.
+
+    Reaction updates intentionally carry no synthetic text.  The Presence turn
+    receives the structured reaction payload and can decide whether it matters.
+    """
+    actor = reaction.get("user") or reaction.get("actor_chat") or {}
+    chat = reaction.get("chat") or {}
+    message_id = _integer(reaction.get("message_id"))
+    chat_id = _integer(chat.get("id")) if isinstance(chat, dict) else None
+    actor_id = _integer(actor.get("id")) if isinstance(actor, dict) else None
+    update_id = _integer(update.get("update_id"))
+    if update_id is None or message_id is None or chat_id is None or actor_id is None:
+        return None
+    if isinstance(actor, dict) and actor.get("is_bot"):
+        return None
+    bot_id = str(bot_account_id or "unknown").strip() or "unknown"
+    conversation_key = f"telegram:{bot_id}:{chat_id}:0"
+    conversation = {
+        "platform": "telegram",
+        "bot_account_id": bot_id,
+        "chat_id": str(chat_id),
+        "chat_type": str(chat.get("type") or "unknown"),
+        "title": str(chat.get("title") or ""),
+        "username": str(chat.get("username") or ""),
+        "topic_id": None,
+    }
+    if str(chat_id) == str(management_group_id).strip() and chat.get("type") in {"group", "supergroup"}:
+        conversation["configured_room"] = "management_group"
+    return TelegramEvent(
+        source_event_id=f"telegram:{bot_id}:{update_id}",
+        provider="telegram",
+        account_id=bot_id,
+        conversation_id=str(chat_id),
+        thread_id="",
+        conversation_key=conversation_key,
+        actor={
+            "platform": "telegram",
+            "platform_actor_id": str(actor_id),
+            "username": str(actor.get("username") or "") if isinstance(actor, dict) else "",
+            "first_name": str(actor.get("first_name") or "") if isinstance(actor, dict) else "",
+            "last_name": str(actor.get("last_name") or "") if isinstance(actor, dict) else "",
+        },
+        conversation=conversation,
+        message={
+            "event_kind": "message_reaction",
+            "message_id": message_id,
+            "old_reaction": deepcopy(reaction.get("old_reaction") or []),
+            "new_reaction": deepcopy(reaction.get("new_reaction") or []),
+        },
+        text="",
     )
 
 

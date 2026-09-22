@@ -40,6 +40,7 @@ class SlackEvent:
     client_msg_id: str
     text: str
     files: tuple[SlackFile, ...]
+    structured: dict[str, Any]
 
     @property
     def root_thread_ts(self) -> str:
@@ -97,6 +98,8 @@ def parse_socket_envelope(
     payload: Mapping[str, Any],
     *,
     bot_user_id: str = "",
+    bot_id: str = "",
+    app_id: str = "",
 ) -> ParsedEnvelope:
     """Parse one Socket Mode envelope without adding policy or prompt text.
 
@@ -115,24 +118,51 @@ def parse_socket_envelope(
     event = event if isinstance(event, Mapping) else {}
     event_type = _text(event.get("type"))
     subtype = _text(event.get("subtype"))
-    actor_user_id = _text(event.get("user"))
-    channel_id = _text(event.get("channel"))
-    message_ts = _text(event.get("ts"))
-    files = _files(event.get("files"))
-
-    if event_type != "message":
+    # Slack wraps changed messages under event.message and deleted messages
+    # under previous_message. Normalize only provider shape, retaining both
+    # nested objects in structured facts for the model and receipts.
+    nested = event.get("message") if isinstance(event.get("message"), Mapping) else {}
+    previous = event.get("previous_message") if isinstance(event.get("previous_message"), Mapping) else {}
+    message = nested if subtype == "message_changed" else event
+    actor_user_id = _text(message.get("user") or event.get("user") or previous.get("user"))
+    bot_event_id = _text(message.get("bot_id") or event.get("bot_id") or previous.get("bot_id"))
+    app_event_id = _text(message.get("app_id") or event.get("app_id") or previous.get("app_id"))
+    if not actor_user_id and bot_event_id:
+        actor_user_id = bot_event_id
+    if not actor_user_id and app_event_id:
+        actor_user_id = app_event_id
+    item = event.get("item") if isinstance(event.get("item"), Mapping) else {}
+    channel_id = _text(event.get("channel") or message.get("channel") or previous.get("channel") or item.get("channel"))
+    message_ts = _text(message.get("ts") or event.get("deleted_ts") or item.get("ts") or event.get("ts") or previous.get("ts"))
+    files = _files(message.get("files") or event.get("files"))
+    structured: dict[str, Any] = {}
+    blocks = message.get("blocks") or event.get("blocks")
+    if isinstance(blocks, Sequence) and not isinstance(blocks, (str, bytes, bytearray)):
+        structured["blocks"] = [dict(item) for item in blocks if isinstance(item, Mapping)]
+    if subtype == "message_changed":
+        structured.update({"change": "edited", "message": dict(message), "previous_message": dict(previous)})
+    elif subtype == "message_deleted":
+        structured.update({"change": "deleted", "deleted_ts": _text(event.get("deleted_ts")), "previous_message": dict(previous)})
+    if event_type in {"reaction_added", "reaction_removed"}:
+        structured["reaction"] = {
+            "kind": "added" if event_type == "reaction_added" else "removed",
+            "name": _text(event.get("reaction")),
+            "user_id": actor_user_id,
+            "item": dict(event.get("item")) if isinstance(event.get("item"), Mapping) else {},
+        }
+    if event_type not in {"message", "reaction_added", "reaction_removed"}:
         return ParsedEnvelope(envelope_id, event_id, False, "unsupported_event", None)
-    if subtype in {"bot_message", "message_changed", "message_deleted"}:
-        return ParsedEnvelope(envelope_id, event_id, False, "unsupported_subtype", None)
-    if event.get("bot_id") or not actor_user_id:
-        return ParsedEnvelope(envelope_id, event_id, False, "non_human_actor", None)
-    if bot_user_id and actor_user_id == bot_user_id:
+    if ((bot_id and bot_event_id == bot_id) or (app_id and app_event_id == app_id)
+            or (bot_user_id and actor_user_id == bot_user_id)):
         return ParsedEnvelope(envelope_id, event_id, False, "self_message", None)
+    if not actor_user_id:
+        return ParsedEnvelope(envelope_id, event_id, False, "missing_actor_provenance", None)
     if not channel_id or not message_ts:
         return ParsedEnvelope(
             envelope_id, event_id, False, "missing_message_provenance", None
         )
-    if not _text(event.get("text")) and not files:
+    text = str(message.get("text") or event.get("text") or "")
+    if not text and not files and not structured:
         return ParsedEnvelope(envelope_id, event_id, False, "empty_message", None)
 
     channel_type = _text(event.get("channel_type"))
@@ -148,10 +178,11 @@ def parse_socket_envelope(
         channel_id=channel_id,
         channel_type=channel_type,
         message_ts=message_ts,
-        thread_ts=_text(event.get("thread_ts")),
+        thread_ts=_text(event.get("thread_ts") or message.get("thread_ts") or item.get("thread_ts")),
         event_ts=_text(event.get("event_ts") or wrapper.get("event_time")),
         client_msg_id=_text(event.get("client_msg_id")),
-        text=str(event.get("text") or ""),
+        text=text,
         files=files,
+        structured=structured,
     )
     return ParsedEnvelope(envelope_id, event_id, True, "accepted", parsed)

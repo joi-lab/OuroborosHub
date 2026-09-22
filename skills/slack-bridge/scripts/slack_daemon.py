@@ -65,6 +65,8 @@ async def _run() -> None:
             raise RuntimeError("Slack auth.test did not return a bot user ID")
         store.set_runtime(
             bot_user_id=bot_user_id,
+            bot_id=str(auth.get("bot_id") or ""),
+            app_id=str(auth.get("app_id") or ""),
             workspace_id=str(auth.get("team_id") or ""),
             workspace_name=str(auth.get("team") or ""),
             socket_state="authorized",
