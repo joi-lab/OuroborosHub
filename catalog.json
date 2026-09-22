@@ -511,13 +511,13 @@
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "d302253606044e24ac8d9f68943ab06090ca05eabd8ef189b6019383e00d85fe",
+          "sha256": "ad072b1a21d0294444a78f10a93b0c0ad61a16ebca1741112ee47a7cfdd77025",
           "size": 8707
         },
         {
           "path": "lib/client.py",
-          "sha256": "978e6265aea667af92a6e6823ff1e8023c2f1c59f7f9fc68865aa498853378fb",
-          "size": 11127
+          "sha256": "4a4b8674bcdf316c4dcad2d8ae2f54c826788608f6b08798d6da53c8f462059a",
+          "size": 11287
         },
         {
           "path": "lib/delivery.py",
@@ -546,8 +546,8 @@
         },
         {
           "path": "plugin.py",
-          "sha256": "a9446f9d49b05bb3172766a9c5a3836778a160717de89f4114ae1ed0d4c834f2",
-          "size": 11136
+          "sha256": "9dc317f532624ef948728131a49ab37fcb6e599f99b34508761f9ec267c0426a",
+          "size": 11019
         },
         {
           "path": "scripts/email_daemon.py",
@@ -556,8 +556,8 @@
         },
         {
           "path": "tests/test_attachment_regressions.py",
-          "sha256": "f04fbf8e03d2dd9aa895942c2db43c60cceb4079a9643af30f862d40b29a33a3",
-          "size": 12143
+          "sha256": "6ee65699ac4a1be07071d17b20ada1f5eb422cbbcb20cad2d07f109771eb196e",
+          "size": 13388
         },
         {
           "path": "tests/test_auth.py",
@@ -601,14 +601,14 @@
         },
         {
           "path": "tests/test_transport.py",
-          "sha256": "141720adb1e99ec0711163d55dbf4df299da836438e8a754e27a064c70c93261",
-          "size": 10855
+          "sha256": "66912ad3070bf3f5f7a0ae7554dc6ea400cbe91acb0d69d93c2b26aaf0fbe407",
+          "size": 11898
         }
       ],
       "name": "email-presence",
       "slug": "email-presence",
       "type": "extension",
-      "version": "0.3.1"
+      "version": "0.3.2"
     },
     {
       "description": "GDELT Cloud geopolitical intelligence: conflict events, news stories, entity graph, energy infrastructure, macro-finance, prediction markets, and web research via MCP Progressive Discovery.",
@@ -1284,8 +1284,8 @@
         },
         {
           "path": "lib/slack_api.py",
-          "sha256": "338f3310c146fe1dcf08208791b52df01cfc090bc8511a54352227272f75eb02",
-          "size": 27657
+          "sha256": "f03f91b8f32efb0ecfc951302fcb55443d4bca425336abc21a46a629dbb513fa",
+          "size": 28032
         },
         {
           "path": "lib/socket_mode.py",
@@ -1349,8 +1349,8 @@
         },
         {
           "path": "tests/test_slack_api.py",
-          "sha256": "7a4aa607c3918cc4815e38fa44b6f5bfc6ea9eb13e0117aef7a8c15a48a0b843",
-          "size": 6925
+          "sha256": "7672831372d7f449b308fbdefdd31235477817777c40160b29c6a0284f3eb1c2",
+          "size": 7837
         },
         {
           "path": "tests/test_socket_mode.py",

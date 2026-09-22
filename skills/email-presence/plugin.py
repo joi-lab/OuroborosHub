@@ -81,10 +81,8 @@ def register(api):
     def read(**kwargs):
         kwargs.setdefault("folder", client().settings.get("EMAIL_DEFAULT_FOLDER") or "INBOX")
         message = client().read(include_attachment_data=True, **kwargs)
-        if message.get("attachments"):
-            staged = store().stage_inbound_attachments(message)
-            message["staged_files"] = staged
-            message["attachments"] = [{k: v for k, v in item.items() if k != "path"} for item in staged]
+        if message.get("_raw_source") is not None or message.get("attachments"):
+            store().stage_inbound_attachments(message)
         return message
 
     def draft(**kwargs):

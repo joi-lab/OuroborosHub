@@ -1,4 +1,5 @@
 import asyncio
+import imaplib
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from email.message import EmailMessage
@@ -227,6 +228,30 @@ def test_mailbox_operations_use_uid_and_never_global_expunge(rig):
     client.mailbox(action="flags", uid=1, uidvalidity=7, flags=["\\Seen"])
     assert any(op == "MOVE" for op, args in box.commands)
     assert not any(op == "EXPUNGE" for op, args in box.commands)
+
+
+def test_move_accepts_stdlib_imaplib_string_capabilities(rig):
+    _clock, box, client, _store, _host, _runtime = rig
+    imap = object.__new__(imaplib.IMAP4)
+    imap._encoding = "ascii"
+    imap.capability = lambda: ("OK", [b"IMAP4rev1 MOVE"])
+    imap._get_capabilities()
+    assert imap.capabilities == ("IMAP4REV1", "MOVE")
+    box.capabilities = imap.capabilities
+    box.add(1, "<own-test>")
+    assert client.mailbox(action="move", uid=1, uidvalidity=7, destination="Archive") == {
+        "ok": True, "uid": 1, "uidvalidity": 7,
+    }
+    assert any(op == "MOVE" for op, _args in box.commands)
+
+
+def test_move_refuses_when_server_has_no_move_capability(rig):
+    _clock, box, client, _store, _host, _runtime = rig
+    box.capabilities = ("IMAP4REV1", "UIDPLUS")
+    box.add(1, "<own-test>")
+    with pytest.raises(RuntimeError, match="does not support atomic UID MOVE"):
+        client.mailbox(action="move", uid=1, uidvalidity=7, destination="Archive")
+    assert not any(op == "MOVE" for op, _args in box.commands)
 
 
 def test_pending_turn_blocks_only_later_messages_in_same_thread(rig):

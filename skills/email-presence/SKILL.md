@@ -1,7 +1,7 @@
 ---
 name: email-presence
 description: Bidirectional email Presence transport with IMAP polling, durable delivery, and RFC 5322 reply threading.
-version: 0.3.1
+version: 0.3.2
 type: extension
 entry: plugin.py
 plugin_api: "2.0"

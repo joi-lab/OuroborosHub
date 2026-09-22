@@ -158,6 +158,11 @@ class SlackClient:
     ) -> dict[str, Any]:
         return await self._request("POST", endpoint, payload, token=token)
 
+    async def _post_form(
+        self, endpoint: str, payload: Mapping[str, Any], *, token: str,
+    ) -> dict[str, Any]:
+        return await self._request("POST", endpoint, payload, token=token, form=True)
+
     async def _get(
         self,
         endpoint: str,
@@ -174,11 +179,15 @@ class SlackClient:
         payload: Mapping[str, Any],
         *,
         token: str,
+        form: bool = False,
     ) -> dict[str, Any]:
         if self._closed:
             raise RuntimeError("SlackClient is closed")
         headers = self._headers(token)
         arguments = {"json": dict(payload)}
+        if form:
+            headers.pop("Content-Type", None)
+            arguments = {"data": dict(payload)}
         if method == "GET":
             headers.pop("Content-Type", None)
             arguments = {"params": dict(payload)}
@@ -498,7 +507,7 @@ class SlackClient:
         if add:
             if not title or not link:
                 raise SlackConfigurationError("title and link are required")
-            payload = {"channel_id": channel, "title": str(title), "link": str(link)}
+            payload = {"channel_id": channel, "title": str(title), "type": "link", "link": str(link)}
             if emoji:
                 payload["emoji"] = str(emoji)
             return await self._post("bookmarks.add", payload, token=self.bot_token)
@@ -539,8 +548,8 @@ class SlackClient:
         data = path.read_bytes()
         if not data:
             raise SlackConfigurationError("file must not be empty")
-        request = await self._post("files.getUploadURLExternal", {
-            "filename": str(filename), "length": len(data),
+        request = await self._post_form("files.getUploadURLExternal", {
+            "filename": str(filename), "length": str(len(data)),
         }, token=self.bot_token)
         upload_url = str(request.get("upload_url") or "").strip()
         file_id = str(request.get("file_id") or "").strip()

@@ -156,7 +156,10 @@ class MailClient:
             if validity != int(uidvalidity or 0) or not uid or int(uid) < 1:
                 raise ValueError("A current UID and UIDVALIDITY from search/read are required")
             if action in {"copy", "move"}:
-                if action == "move" and b"MOVE" not in box.capabilities:
+                if action == "move" and not any(
+                    (cap.decode("ascii", errors="ignore") if isinstance(cap, bytes) else str(cap)).upper() == "MOVE"
+                    for cap in box.capabilities
+                ):
                     raise RuntimeError("Server does not support atomic UID MOVE; use copy and flags explicitly")
                 self._ok(box.uid(action.upper(), str(int(uid)), self.quote(destination)), action)
             elif action == "flags":
