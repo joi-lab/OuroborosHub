@@ -1354,8 +1354,8 @@
         },
         {
           "path": "tests/test_workers_plugin.py",
-          "sha256": "e09204fffa1e162f33101087fcf58cb94f4607409c9b266a71ea5b243d5370ce",
-          "size": 17330
+          "sha256": "4a0ddf67fc050606291c00303ed8bd21cb5282cf1bdfbf260b6469561d9ca0de",
+          "size": 17540
         }
       ],
       "name": "slack-bridge",
