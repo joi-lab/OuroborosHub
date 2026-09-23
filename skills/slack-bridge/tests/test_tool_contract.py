@@ -7,7 +7,6 @@ import inspect
 import json
 
 import pytest
-from conftest import tool_json
 from test_workers_plugin import _Api, _load_plugin
 
 from lib.tool_results import json_tool, to_tool_json
@@ -70,7 +69,7 @@ def test_unserializable_values_never_break_the_str_abi():
     assert json.loads(to_tool_json({"value": Opaque()})) == {"value": "opaque"}
 
 
-def test_every_registered_tool_returns_json_text_for_success_and_failure(tmp_path):
+def test_every_registered_tool_returns_json_text_for_success_and_failure(tool_json, tmp_path):
     module = _load_plugin()
     api = _Api(tmp_path)
     module.register(api)

@@ -8,7 +8,6 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
-from conftest import tool_json
 
 from lib.events import parse_socket_envelope
 from lib.host_adapter import LoopbackPresenceHostAdapter
@@ -142,7 +141,7 @@ def test_legacy_deferred_reference_is_not_upgraded_by_new_host():
     asyncio.run(run())
 
 
-def test_explicit_send_captures_compact_origin_and_reports_resolved_physical_receipt(tmp_path):
+def test_explicit_send_captures_compact_origin_and_reports_resolved_physical_receipt(tool_json, tmp_path):
     async def run():
         store = BridgeStore(tmp_path)
         store.set_runtime(presence_delivery_version=1, history_reporting_state="supported", workspace_id="T1")
