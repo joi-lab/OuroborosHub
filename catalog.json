@@ -1279,8 +1279,8 @@
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "df522b9b9379c897791c1a17e709596fa4287eb164a5e2385acb0d21dd3ccae8",
-          "size": 20549
+          "sha256": "5bbc962a4958261343b1e2b211b2287216a36106c9cfbf6d5de2ebe537fbdefa",
+          "size": 21407
         },
         {
           "path": "lib/__init__.py",
@@ -1294,8 +1294,8 @@
         },
         {
           "path": "lib/events.py",
-          "sha256": "7a4d791b88e9c073eacfba44bbb1c8296a285f9f89aa72f436a0772e852cc30f",
-          "size": 7277
+          "sha256": "4902c774fe64b2a49690eff866a90d0fe0afbf8bf30b4a6e3a32811fbb01d435",
+          "size": 8598
         },
         {
           "path": "lib/host_adapter.py",
@@ -1388,6 +1388,11 @@
           "size": 5110
         },
         {
+          "path": "tests/test_message_revisions.py",
+          "sha256": "5a320cb1bb2bec8f3b114befa92b1c3f2fd0665151f0014f21513a98bc6dbdce",
+          "size": 6942
+        },
+        {
           "path": "tests/test_provider_context.py",
           "sha256": "12e513a77846fbba0e965f1b2e51048933f958104e86181b28746cd5cffc4418",
           "size": 14256
@@ -1421,7 +1426,7 @@
       "name": "slack-bridge",
       "slug": "slack-bridge",
       "type": "extension",
-      "version": "1.4.1"
+      "version": "1.4.2"
     },
     {
       "description": "Inspect, filter, sort, group, and aggregate CSV and XLSX tables while reporting truncation and non-numeric values honestly.",

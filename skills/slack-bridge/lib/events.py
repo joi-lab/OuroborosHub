@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from typing import Any, Mapping, Sequence
 
 
@@ -94,6 +95,27 @@ def _files(raw: Any) -> tuple[SlackFile, ...]:
     return tuple(parsed)
 
 
+def _message_content_unchanged(
+    message: Mapping[str, Any], previous: Mapping[str, Any]
+) -> bool:
+    """Recognize a provider revision, not a new message or a semantic edit."""
+    if not _text(message.get("ts")) or message.get("ts") != previous.get("ts"):
+        return False
+    if not any(key in message and key in previous for key in ("text", "blocks", "attachments", "files")):
+        return False
+    # Slack also emits message_changed when its language detector runs. A new
+    # edit timestamp alone is not new content either. Keep every other field in
+    # the comparison so unknown provider additions still reach the model.
+    bookkeeping = {"language", "edited"}
+    current_content = {key: value for key, value in message.items() if key not in bookkeeping}
+    previous_content = {key: value for key, value in previous.items() if key not in bookkeeping}
+    # Canonical JSON preserves booleans versus numbers, unlike dict equality.
+    return (
+        json.dumps(current_content, sort_keys=True, separators=(",", ":"))
+        == json.dumps(previous_content, sort_keys=True, separators=(",", ":"))
+    )
+
+
 def parse_socket_envelope(
     payload: Mapping[str, Any],
     *,
@@ -161,6 +183,8 @@ def parse_socket_envelope(
         return ParsedEnvelope(
             envelope_id, event_id, False, "missing_message_provenance", None
         )
+    if subtype == "message_changed" and _message_content_unchanged(nested, previous):
+        return ParsedEnvelope(envelope_id, event_id, False, "message_content_unchanged", None)
     text = str(message.get("text") or event.get("text") or "")
     if not text and not files and not structured:
         return ParsedEnvelope(envelope_id, event_id, False, "empty_message", None)

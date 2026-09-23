@@ -1,7 +1,7 @@
 ---
 name: slack-bridge
 description: Slack presence transport with durable delivery, directory discovery, provider updates, file transfer, message actions, and provider context.
-version: 1.4.1
+version: 1.4.2
 type: extension
 entry: plugin.py
 plugin_api: "2.0"
@@ -210,7 +210,18 @@ HTTP retry is introduced.
 
 Message edits (`message_changed`) are normalized from Slack's nested
 `message`/`previous_message` objects while both objects remain in provider
-facts. Deletes preserve the deleted timestamp and previous message facts.
+facts. When both snapshots identify the same message and contain matching
+content, changes only to `language` or the `edited` marker do not start another
+Presence turn. The complete envelope is still committed as `ignored` with
+reason `message_content_unchanged` before acknowledgement. Every other field,
+including unknown fields, remains in the comparison; missing comparison facts
+do not suppress an update. Real edits retain their original message timestamp
+and still reach the model. Slack documents automatic language detection as one
+source of [`message_changed`](https://docs.slack.dev/reference/events/message/message_changed/).
+This snapshot comparison does not recover an original message missed while
+disconnected: an unchanged revision remains ignored even if it arrives first.
+History reads remain explicit; the bridge does not backfill old messages.
+Deletes preserve the deleted timestamp and previous message facts.
 `reaction_added` and `reaction_removed` preserve the reacted message ID,
 reaction name and actor. Blocks-only messages are accepted when `blocks` carry
 content even if Slack's `text` field is empty. Other bot/app events remain
