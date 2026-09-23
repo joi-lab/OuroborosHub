@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from typing import Any, Mapping, Sequence
 
 
@@ -106,9 +107,12 @@ def _message_content_unchanged(
     # edit timestamp alone is not new content either. Keep every other field in
     # the comparison so unknown provider additions still reach the model.
     bookkeeping = {"language", "edited"}
+    current_content = {key: value for key, value in message.items() if key not in bookkeeping}
+    previous_content = {key: value for key, value in previous.items() if key not in bookkeeping}
+    # Canonical JSON preserves booleans versus numbers, unlike dict equality.
     return (
-        {key: value for key, value in message.items() if key not in bookkeeping}
-        == {key: value for key, value in previous.items() if key not in bookkeeping}
+        json.dumps(current_content, sort_keys=True, separators=(",", ":"))
+        == json.dumps(previous_content, sort_keys=True, separators=(",", ":"))
     )
 
 

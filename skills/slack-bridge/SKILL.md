@@ -218,6 +218,9 @@ including unknown fields, remains in the comparison; missing comparison facts
 do not suppress an update. Real edits retain their original message timestamp
 and still reach the model. Slack documents automatic language detection as one
 source of [`message_changed`](https://docs.slack.dev/reference/events/message/message_changed/).
+This snapshot comparison does not recover an original message missed while
+disconnected: an unchanged revision remains ignored even if it arrives first.
+History reads remain explicit; the bridge does not backfill old messages.
 Deletes preserve the deleted timestamp and previous message facts.
 `reaction_added` and `reaction_removed` preserve the reacted message ID,
 reaction name and actor. Blocks-only messages are accepted when `blocks` carry

@@ -1279,8 +1279,8 @@
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "2827f94ac2cd7e3e27f68bff8688649a429096e0971a9358315413ba45683848",
-          "size": 21180
+          "sha256": "5bbc962a4958261343b1e2b211b2287216a36106c9cfbf6d5de2ebe537fbdefa",
+          "size": 21407
         },
         {
           "path": "lib/__init__.py",
@@ -1294,8 +1294,8 @@
         },
         {
           "path": "lib/events.py",
-          "sha256": "081a98d51fb9c2cbf98cc5e2476da1fbacb519f13fe20681a3bccb0e3e4d6eda",
-          "size": 8328
+          "sha256": "4902c774fe64b2a49690eff866a90d0fe0afbf8bf30b4a6e3a32811fbb01d435",
+          "size": 8598
         },
         {
           "path": "lib/host_adapter.py",
@@ -1389,8 +1389,8 @@
         },
         {
           "path": "tests/test_message_revisions.py",
-          "sha256": "b4e5fecb6ddaf47e7a84fbeaf5dcc77d73dfa66677df4ddbfd8f5f3012e5a85b",
-          "size": 6219
+          "sha256": "5a320cb1bb2bec8f3b114befa92b1c3f2fd0665151f0014f21513a98bc6dbdce",
+          "size": 6942
         },
         {
           "path": "tests/test_provider_context.py",

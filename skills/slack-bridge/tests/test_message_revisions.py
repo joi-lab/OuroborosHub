@@ -85,6 +85,22 @@ def test_real_changes_with_same_timestamp_still_reach_the_model(field, old, new)
     assert parsed.event.structured["previous_message"][field] == old
 
 
+@pytest.mark.parametrize("field", ["future_content", "metadata", "blocks", "attachments", "files"])
+@pytest.mark.parametrize("old,new", [(False, 0), (True, 1), (1, 1.0)])
+def test_json_type_changes_remain_claimable(tmp_path, field, old, new):
+    previous = _message()
+    previous[field] = [{"nested": {"value": old}}]
+    current = deepcopy(previous)
+    current[field] = [{"nested": {"value": new}}]
+    current["language"]["locale"] = "ru"
+    envelope = _envelope("Ev-type-edit", current, previous=previous)
+    parsed = parse_socket_envelope(envelope)
+    assert parsed.accepted
+    store = BridgeStore(tmp_path)
+    store.ingest_envelope(envelope, parsed)
+    assert store.claim_inbox().event_id == "Ev-type-edit"
+
+
 @pytest.mark.parametrize("previous", [None, {}, {"ts": "123.456", "user": "U_ACTOR"}])
 def test_missing_comparison_content_is_not_treated_as_unchanged(previous):
     envelope = _envelope("Ev-edit", _message(), previous={})
