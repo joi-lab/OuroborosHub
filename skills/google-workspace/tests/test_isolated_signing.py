@@ -35,6 +35,7 @@ def test_signing_through_extension_children(tmp_path):
     if not source:
         pytest.skip("Set OUROBOROS_SOURCE_DIR to run the host integration test")
     env = dict(os.environ, OUROBOROS_DATA_DIR=str(tmp_path / "drive"),
+               OUROBOROS_SETTINGS_PATH=str(tmp_path / "drive" / "settings.json"),
                OUROBOROS_RUNTIME_MODE="advanced", PYTHONDONTWRITEBYTECODE="1")
     result = subprocess.run(
         [sys.executable, str(Path(__file__).with_name("isolated_signing_probe.py")),
@@ -45,3 +46,5 @@ def test_signing_through_extension_children(tmp_path):
     assert "verified 3 auth and 3 document calls in isolated children" in result.stdout
     assert "verified 3 renewable OAuth auth and 3 document calls in isolated children" in result.stdout
     assert "verified complete compact Docs result across the child boundary; pretty control rejected" in result.stdout
+
+    assert "verified oversized full JSON retained and actor-readable across the real child boundary" in result.stdout

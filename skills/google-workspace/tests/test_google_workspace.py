@@ -530,8 +530,8 @@ def test_plugin_registration_and_settings_save(tmp_path, monkeypatch):
             return {"values": [["=1+2"]], "value_render_option": "FORMULA"}
 
     monkeypatch.setattr(plugin, "GoogleWorkspaceClient", FakeClient)
-    assert json.loads(mock_api.tools["sheets_info"]["handler"]("sheet123"))["sheets"][0]["sheet_id"] == 0
-    assert json.loads(mock_api.tools["sheets_read"]["handler"]("sheet123", "Overview!A1", 2, "FORMULA"))["values"] == [["=1+2"]]
+    assert json.loads(mock_api.tools["sheets_info"]["handler"](spreadsheet_id="sheet123"))["sheets"][0]["sheet_id"] == 0
+    assert json.loads(mock_api.tools["sheets_read"]["handler"](spreadsheet_id="sheet123", range="Overview!A1", max_rows=2, value_render_option="FORMULA"))["values"] == [["=1+2"]]
 
     # Check UI tab render kind
     assert mock_api.ui_tabs["google_workspace"]["render"]["kind"] == "declarative"

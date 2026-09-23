@@ -12,6 +12,7 @@ from typing import Any
 from starlette.responses import JSONResponse
 
 from .lib.host_adapter import HostContractError, normalize_binding_id
+from .lib.local_settings import LocalSettingsError, load_local_settings, settings_path
 from .lib.slack_api import (
     SlackApiError,
     SlackClient,
@@ -22,6 +23,7 @@ from .lib.slack_api import (
 )
 from .lib.store import BridgeStore
 from .lib.read_tools import register_read_tools
+from .lib.tool_results import register_json_tool
 
 
 def _state_dir(api: Any) -> pathlib.Path:
@@ -29,18 +31,13 @@ def _state_dir(api: Any) -> pathlib.Path:
 
 
 def _settings_path(api: Any) -> pathlib.Path:
-    return _state_dir(api) / "settings.json"
+    return settings_path(_state_dir(api))
 
 
 def _load_local_settings(api: Any) -> dict[str, Any]:
-    path = _settings_path(api)
-    if not path.exists():
-        return {}
-    try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-        return {}
-    return value if isinstance(value, dict) else {}
+    """Absent settings are ``{}``; unreadable settings raise LocalSettingsError."""
+
+    return load_local_settings(_state_dir(api))
 
 
 def _save_local_settings(api: Any, value: dict[str, Any]) -> None:
@@ -118,19 +115,28 @@ def _make_status(api: Any):
         store = BridgeStore(_state_dir(api))
         payload = store.status()
         protected = api.get_settings(["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN"])
-        binding_id = str(_load_local_settings(api).get("binding_id") or "").strip()
+        settings_error = ""
         try:
-            valid_binding_id = normalize_binding_id(binding_id) if binding_id else ""
-            binding_state = "configured" if valid_binding_id else "missing"
-        except HostContractError:
-            valid_binding_id = ""
-            binding_state = "invalid"
+            binding_id = str(_load_local_settings(api).get("binding_id") or "").strip()
+        except LocalSettingsError as exc:
+            # A file nobody can read is not a missing binding. Say so, so the
+            # widget cannot be read as "the owner never configured one".
+            valid_binding_id, binding_state = "", "unreadable"
+            settings_error = str(exc)
+        else:
+            try:
+                valid_binding_id = normalize_binding_id(binding_id) if binding_id else ""
+                binding_state = "configured" if valid_binding_id else "missing"
+            except HostContractError:
+                valid_binding_id = ""
+                binding_state = "invalid"
         payload.update(
             {
                 "has_bot_token": bool(protected.get("SLACK_BOT_TOKEN")),
                 "has_app_token": bool(protected.get("SLACK_APP_TOKEN")),
                 "has_presence_binding": bool(valid_binding_id),
                 "binding_state": binding_state,
+                "local_settings_error": settings_error,
             }
         )
         return JSONResponse(payload)
@@ -281,15 +287,16 @@ def _register_mutation_tools(api: Any) -> None:
             "request_id": {"type": "string"},
         }, "required": ["file_path"],
     }
-    api.register_tool("slack_file_upload", _make_file_upload(api), description="Stage immutable bytes and queue Slack External Upload API delivery.", schema=upload_schema, timeout_sec=30)
-    api.register_tool("slack_file_download", _make_file_download(api), description="Download one Slack file by exact provider file ID into the skill state artifact directory.", schema={"type": "object", "properties": {"file_id": {"type": "string"}}, "required": ["file_id"], "additionalProperties": False}, timeout_sec=60)
-    api.register_tool(
-        "slack_receipt", lambda *, request_id: BridgeStore(_state_dir(api)).delivery_receipt(request_id),
+    register_json_tool(api, "slack_file_upload", _make_file_upload(api), description="Stage immutable bytes and queue Slack External Upload API delivery.", schema=upload_schema, timeout_sec=30)
+    register_json_tool(api, "slack_file_download", _make_file_download(api), description="Download one Slack file by exact provider file ID into the skill state artifact directory.", schema={"type": "object", "properties": {"file_id": {"type": "string"}}, "required": ["file_id"], "additionalProperties": False}, timeout_sec=60)
+    register_json_tool(
+        api, "slack_receipt", lambda *, request_id: BridgeStore(_state_dir(api)).delivery_receipt(request_id),
         description="Read durable provider and Host-report states for one queued Slack request ID, including uncertain outcomes.",
         schema={"type": "object", "properties": {"request_id": {"type": "string"}},
                 "required": ["request_id"], "additionalProperties": False}, timeout_sec=30,
     )
-    api.register_tool(
+    register_json_tool(
+        api,
         "slack_api",
         _make_generic_api(api),
         description=(
@@ -326,7 +333,27 @@ def _register_mutation_tools(api: Any) -> None:
         ("slack_bookmark_remove", "bookmark_remove", {"channel": {"type": "string"}, "bookmark_id": {"type": "string"}, "request_id": {"type": "string"}}, ["channel", "bookmark_id"]),
     ]
     for name, operation, properties, required in action_specs:
-        api.register_tool(name, _make_action(api, operation), description=f"Queue Slack {operation.replace('_', ' ')} and preserve its provider receipt.", schema={"type": "object", "properties": properties, "required": required, "additionalProperties": False}, timeout_sec=30)
+        register_json_tool(api, name, _make_action(api, operation), description=f"Queue Slack {operation.replace('_', ' ')} and preserve its provider receipt.", schema={"type": "object", "properties": properties, "required": required, "additionalProperties": False}, timeout_sec=30)
+    register_json_tool(
+        api,
+        "slack_join",
+        _make_action(api, "join_conversation"),
+        description=(
+            "Queue an explicit join of one public Slack conversation by exact ID. "
+            "Joining is a durable provider mutation: it returns a request_id whose "
+            "provider receipt, failure or uncertainty is read with slack_receipt. "
+            "It is never an automatic fallback for a failed history read."
+        ),
+        schema={
+            "type": "object", "additionalProperties": False,
+            "properties": {
+                "channel_id": {"type": "string", "description": "Exact Slack conversation ID to join."},
+                "request_id": {"type": "string", "description": "Optional stable dedupe key for safe retries."},
+            },
+            "required": ["channel_id"],
+        },
+        timeout_sec=30,
+    )
 
 
 def _make_settings_save(api: Any):
@@ -340,7 +367,21 @@ def _make_settings_save(api: Any):
                 {"ok": False, "error": "Expected a JSON object"}, status_code=400
             )
 
-        current = _load_local_settings(api)
+        try:
+            current = _load_local_settings(api)
+        except LocalSettingsError as exc:
+            # Saving would rewrite the whole object, silently discarding values
+            # this reader could not parse. Refuse instead of overwriting them.
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "error": (
+                        f"{exc}. Existing settings were left unchanged; repair or "
+                        "remove the file before saving."
+                    ),
+                },
+                status_code=409,
+            )
         if "binding_id" in body:
             binding_id = str(body.get("binding_id") or "").strip()
             if binding_id:
@@ -381,7 +422,8 @@ def register(api: Any) -> None:
     api.register_companion_process("slack_socket_mode")
     register_read_tools(api)
     _register_mutation_tools(api)
-    api.register_tool(
+    register_json_tool(
+        api,
         "slack_send",
         _make_slack_send(api),
         description=(

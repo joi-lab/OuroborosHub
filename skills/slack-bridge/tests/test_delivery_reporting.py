@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
+from conftest import tool_json
 
 from lib.events import parse_socket_envelope
 from lib.host_adapter import LoopbackPresenceHostAdapter
@@ -150,8 +151,8 @@ def test_explicit_send_captures_compact_origin_and_reports_resolved_physical_rec
         plugin.register(api)
         context = SimpleNamespace(task_id="turn-1", task_metadata={"presence": {"event": {"source_event_id": "event-1"}}},
                                   unrelated_private_field="must-not-be-captured")
-        result = api.tools["slack_send"][0](context, channel_or_user="U1", text="**Early reply**",
-                                            thread_ts="1.0", request_id="logical-1")
+        result = tool_json(api.tools["slack_send"][0](context, channel_or_user="U1", text="**Early reply**",
+                                                     thread_ts="1.0", request_id="logical-1"))
         assert result["state"] == "queued"
         assert store.status()["delivery_reports_pending"] == 0
         reports = []

@@ -1,7 +1,7 @@
 ---
 name: email-presence
 description: Bidirectional email Presence transport with IMAP polling, durable delivery, and RFC 5322 reply threading.
-version: 0.3.2
+version: 0.3.3
 type: extension
 entry: plugin.py
 plugin_api: "2.0"
@@ -68,6 +68,9 @@ and retries transient provider or Host failures with bounded backoff.
 
 ## Mailbox tools and transport behavior
 
+- All seven tools return JSON text, preserving structured values across the host
+  process boundary. A missing `email_receipt` is JSON `null`; delivery errors
+  retain their ordinary error path rather than becoming successful receipts.
 - `email_search` accepts ordinary IMAP search tokens (ALL, UNSEEN, FROM, SUBJECT,
   SINCE, HEADER) and returns UID/UIDVALIDITY, which `email_read` uses to address
   the same message even if other messages disappear. Mailbox tools do not submit

@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import json
+import inspect
 import time
 import uuid
+from functools import wraps
 from pathlib import Path
 
 from starlette.responses import JSONResponse
@@ -18,6 +20,20 @@ SETTING_KEYS = ["EMAIL_IMAP_HOST", "EMAIL_IMAP_PORT", "EMAIL_SMTP_HOST", "EMAIL_
                 "EMAIL_USER", "EMAIL_PASSWORD", "EMAIL_DEFAULT_FOLDER", "EMAIL_AUTH_MODE",
                 "EMAIL_OAUTH_ACCESS_TOKEN", "EMAIL_OAUTH_REFRESH_TOKEN", "EMAIL_OAUTH_CLIENT_ID",
                 "EMAIL_OAUTH_CLIENT_SECRET"]
+
+
+def _json_tool(handler):
+    """Encode only the tool boundary; preserve ctx discovery and exceptions."""
+    if inspect.iscoroutinefunction(handler):
+        @wraps(handler)
+        async def encoded_async(*args, **kwargs):
+            return json.dumps(await handler(*args, **kwargs), ensure_ascii=False)
+        return encoded_async
+
+    @wraps(handler)
+    def encoded(*args, **kwargs):
+        return json.dumps(handler(*args, **kwargs), ensure_ascii=False)
+    return encoded
 
 
 def _load(api):
@@ -109,7 +125,7 @@ def register(api):
     array = {"type": "array", "items": string}
 
     def tool(name, handler, description, properties, required=()):
-        api.register_tool(name, handler, description=description,
+        api.register_tool(name, _json_tool(handler), description=description,
                           schema={"type": "object", "properties": properties, "required": list(required)},
                           timeout_sec=120)
 

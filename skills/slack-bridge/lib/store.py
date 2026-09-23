@@ -167,6 +167,11 @@ class BridgeStore:
                     value_json TEXT NOT NULL,
                     updated_at REAL NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS directory_cache (
+                    cache_key TEXT PRIMARY KEY,
+                    value_json TEXT NOT NULL,
+                    observed_at REAL NOT NULL
+                );
                 """
             )
             # One durable snapshot beside the existing inbox row. Serialize the
@@ -626,6 +631,21 @@ class BridgeStore:
         with self._connect() as db:
             row = db.execute("SELECT value_json FROM runtime_state WHERE key=?", (key,)).fetchone()
         return json.loads(row[0]) if row else default
+
+    def directory_snapshot(self, cache_key: str) -> dict[str, Any] | None:
+        """Read directory observations without exposing them on the status route."""
+        with self._connect() as db:
+            row = db.execute("SELECT value_json FROM directory_cache WHERE cache_key=?", (cache_key,)).fetchone()
+        return json.loads(row[0]) if row else None
+
+    def save_directory_snapshot(self, cache_key: str, value: Mapping[str, Any]) -> None:
+        """Cache one credential-scoped scan; an older concurrent scan cannot replace a newer one."""
+        with self._connect() as db:
+            db.execute("""INSERT INTO directory_cache(cache_key,value_json,observed_at) VALUES(?,?,?)
+                ON CONFLICT(cache_key) DO UPDATE SET value_json=excluded.value_json,
+                    observed_at=excluded.observed_at
+                WHERE excluded.observed_at >= directory_cache.observed_at""",
+                       (cache_key, json.dumps(dict(value), ensure_ascii=False), float(value["observed_at"])))
 
     def delivery_receipt(self, request_id: str) -> dict[str, Any]:
         with self._connect() as db:

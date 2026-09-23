@@ -16,6 +16,18 @@ class SlackConfigurationError(RuntimeError):
 
 TEXT_FORMATS = ("markdown", "mrkdwn", "plain")
 
+# The bot credential is attached to private-file reads, so the set of hosts that
+# may receive it is an exact allowlist, not "any HTTPS URL the payload named".
+# Slack documents private file bytes at exactly this host:
+# https://docs.slack.dev/messaging/working-with-files/ shows
+# "url_private": "https://files.slack.com/files-pri/T.../hello.txt" and
+# "url_private_download": "https://files.slack.com/files-pri/T.../download/...".
+# Exact membership is also what rejects IP literals, suffix/prefix lookalikes
+# such as files.slack.com.example.org, unicode homograph hostnames, and
+# trailing-dot forms.
+SLACK_PRIVATE_FILE_HOSTS = frozenset({"files.slack.com"})
+_REDIRECT_STATUS_CODES = frozenset({301, 302, 303, 307, 308})
+
 
 def normalize_text_format(value: str) -> str:
     if value not in TEXT_FORMATS:
@@ -94,6 +106,36 @@ def _safe_filename(name: str, fallback: str) -> str:
     leaf = pathlib.PurePath(str(name or "")).name
     clean = re.sub(r"[^A-Za-z0-9._ -]+", "_", leaf).strip(" .")
     return clean[:180] or fallback
+
+
+def private_file_host(url: str) -> str:
+    """Return the allowlisted Slack host of one private-file URL, or refuse.
+
+    Refuses anything that is not plain HTTPS on a documented Slack private-file
+    host: another scheme, embedded userinfo (``https://files.slack.com@evil``),
+    a non-443 port, a missing host, and - through exact allowlist membership -
+    IP literals and lookalike hostnames.
+    """
+
+    raw = str(url or "").strip()
+    parsed = urlsplit(raw)
+    try:
+        port = parsed.port
+    except ValueError:
+        raise SlackApiError("invalid_private_file_url") from None
+    if (
+        parsed.scheme != "https"
+        or parsed.username
+        or parsed.password
+        or not parsed.hostname
+        or port not in (None, 443)
+    ):
+        raise SlackApiError("invalid_private_file_url")
+    if parsed.hostname not in SLACK_PRIVATE_FILE_HOSTS:
+        raise SlackApiError(
+            "private_file_host_not_allowed", details={"host": parsed.hostname}
+        )
+    return parsed.hostname
 
 
 class SlackClient:
@@ -605,9 +647,8 @@ class SlackClient:
                 raise SlackApiError("too_many_files")
             file_id = str(item.get("file_id") or "").strip()
             url = str(item.get("url_private") or "").strip()
-            parsed = urlsplit(url)
-            if parsed.scheme != "https" or not parsed.hostname:
-                raise SlackApiError("invalid_private_file_url")
+            # Refuse before the credential is built, not after the request.
+            private_file_host(url)
             declared_size = max(0, int(item.get("size") or 0))
             if declared_size and total + declared_size > max_total_bytes:
                 raise SlackApiError("file_batch_too_large")
@@ -621,7 +662,24 @@ class SlackClient:
                     "GET",
                     url,
                     headers={"Authorization": f"Bearer {self.bot_token}"},
+                    # The shared client follows redirects; an authenticated file
+                    # read must not. A redirect is where the bot token would
+                    # otherwise be re-sent to another origin, and an unauthorized
+                    # url_private read redirects to a login page whose HTML would
+                    # silently be staged as the file's bytes.
+                    follow_redirects=False,
                 ) as response:
+                    if response.status_code in _REDIRECT_STATUS_CODES:
+                        raise SlackApiError(
+                            f"file_redirect_refused_{response.status_code}",
+                            status_code=response.status_code,
+                            details={
+                                "redirect_host": urlsplit(
+                                    response.headers.get("location") or ""
+                                ).hostname
+                                or "",
+                            },
+                        )
                     if response.status_code != 200:
                         raise SlackApiError(
                             f"file_http_{response.status_code}",

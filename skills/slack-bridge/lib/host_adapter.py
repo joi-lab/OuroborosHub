@@ -5,6 +5,7 @@ import ipaddress
 import json
 import os
 import re
+from copy import Error as CopyError
 from dataclasses import dataclass
 from typing import Any, Mapping, Protocol
 from urllib.parse import quote, urlsplit
@@ -13,6 +14,62 @@ import httpx
 
 from .store import InboxItem
 from .provider_context import enrich_event
+
+try:
+    # The host's own opaque-credential wrapper. It is importable in the
+    # extension child; a host-supervised companion runs a bare `python3` that
+    # only receives HOST_SERVICE_TOKEN in its environment, so keep an identical
+    # local mirror for that process instead of falling back to a raw string.
+    from ouroboros.skill_token import SkillToken
+except ImportError:  # companion process: the host package is not on sys.path
+
+    class SkillToken:  # type: ignore[no-redef]
+        """Local mirror of ``ouroboros.skill_token.SkillToken``.
+
+        Same contract: the value is revealed only by ``use_in_request()`` and
+        every stringify/copy/pickle path refuses instead of leaking it.
+        """
+
+        _REDACTED = "<SkillToken redacted>"
+
+        def __init__(self, value: str) -> None:
+            token = str(value or "").strip()
+            if not token:
+                raise ValueError("SkillToken cannot be empty")
+            self._value = token
+
+        @classmethod
+        def from_env(cls, key: str = "HOST_SERVICE_TOKEN") -> "SkillToken":
+            return cls(os.environ.get(key, ""))
+
+        def use_in_request(self) -> str:
+            """Explicitly reveal the token at an HTTP-auth call site."""
+            return self._value
+
+        def __repr__(self) -> str:
+            return self._REDACTED
+
+        def __str__(self) -> str:
+            return self._REDACTED
+
+        def __format__(self, _format_spec: str) -> str:
+            return self._REDACTED
+
+        def __reduce__(self) -> Any:
+            raise TypeError("SkillToken cannot be pickled")
+
+        def __reduce_ex__(self, _protocol: int) -> Any:
+            raise TypeError("SkillToken cannot be pickled")
+
+        def __copy__(self) -> "SkillToken":
+            raise CopyError("SkillToken cannot be copied")
+
+        def __deepcopy__(self, _memo: dict[int, Any]) -> "SkillToken":
+            raise CopyError("SkillToken cannot be deep-copied")
+
+        def __getstate__(self) -> dict[str, Any]:
+            raise TypeError("SkillToken state is not serializable")
+
 
 _OUTCOMES = frozenset({"message", "silent", "tool_delivered", "deferred"})
 _TERMINAL_WORK_STATES = frozenset({"completed", "failed", "cancelled"})
@@ -78,6 +135,17 @@ class PresenceHostAdapter(Protocol):
     async def deliver(self, reference: str) -> HostDelivery:
         """Return provider-facing text after the turn reaches `completed`."""
         ...
+
+
+def _as_skill_token(value: "SkillToken | str | None") -> "SkillToken | None":
+    """Hold the Host Service credential as a SkillToken, never as a raw string."""
+
+    if value is None or isinstance(value, SkillToken):
+        return value
+    try:
+        return SkillToken(str(value))
+    except ValueError:
+        return None
 
 
 def _is_loopback_url(url: str) -> bool:
@@ -212,17 +280,17 @@ class LoopbackPresenceHostAdapter:
         *,
         binding_id: str,
         host_service_url: str,
-        skill_token: str,
+        skill_token: "SkillToken | str | None",
         http_client: httpx.AsyncClient | None = None,
     ) -> None:
         raw_binding_id = str(binding_id or "").strip()
         self.binding_id = normalize_binding_id(raw_binding_id) if raw_binding_id else ""
         self.host_service_url = str(host_service_url or "").rstrip("/")
-        self._skill_token = str(skill_token or "").strip()
+        self._skill_token = _as_skill_token(skill_token)
         self.available = bool(self.binding_id)
         if not _is_loopback_url(self.host_service_url):
             raise HostContractError("HOST_SERVICE_URL must be an HTTP loopback URL")
-        if self.available and not self._skill_token:
+        if self.available and self._skill_token is None:
             raise HostContractError("HOST_SERVICE_TOKEN is missing")
         self._owns_http = http_client is None
         self._http = http_client or httpx.AsyncClient(
@@ -236,9 +304,19 @@ class LoopbackPresenceHostAdapter:
     async def discover_delivery_support(self) -> int:
         if self.delivery_reporting_status in {"supported", "unsupported"}:
             return self.delivery_reporting_version
+        if self._skill_token is None:
+            # No owner binding means no credential: never probe Host unauthenticated.
+            self.delivery_reporting_version = 0
+            self.delivery_reporting_status = "unavailable"
+            return 0
         try:
             response = await self._http.get(
-                f"{self.host_service_url}/identity", headers=self._headers(), timeout=5.0,
+                f"{self.host_service_url}/identity",
+                headers={
+                    "X-Skill-Token": self._skill_token.use_in_request(),
+                    "Content-Type": "application/json",
+                },
+                timeout=5.0,
             )
             payload = await self._json_response(response)
             self.delivery_reporting_version = 1 if payload.get("presence_delivery_version") == 1 else 0
@@ -251,19 +329,19 @@ class LoopbackPresenceHostAdapter:
         return self.delivery_reporting_version
 
     async def report_delivery(self, payload: Mapping[str, Any]) -> None:
+        if self._skill_token is None:
+            raise HostContractError("HOST_SERVICE_TOKEN is missing")
         response = await self._http.post(
-            f"{self.host_service_url}/presence/delivery", headers=self._headers(),
+            f"{self.host_service_url}/presence/delivery",
+            headers={
+                "X-Skill-Token": self._skill_token.use_in_request(),
+                "Content-Type": "application/json",
+            },
             json=dict(payload), timeout=10.0,
         )
         result = await self._json_response(response)
         if result.get("ok") is not True or result.get("recorded") is not True:
             raise HostContractError("Presence delivery report was not acknowledged")
-
-    def _headers(self) -> dict[str, str]:
-        return {
-            "X-Skill-Token": self._skill_token,
-            "Content-Type": "application/json",
-        }
 
     async def _json_response(self, response: httpx.Response) -> dict[str, Any]:
         if response.status_code in {403, 404}:
@@ -292,10 +370,15 @@ class LoopbackPresenceHostAdapter:
     async def submit(self, event: InboxItem) -> str:
         if not self.available:
             raise HostAdapterUnavailable("binding_id is not configured")
+        if self._skill_token is None:
+            raise HostContractError("HOST_SERVICE_TOKEN is missing")
         mode = await self.discover_delivery_support()
         response = await self._http.post(
             f"{self.host_service_url}/presence/turn",
-            headers=self._headers(),
+            headers={
+                "X-Skill-Token": self._skill_token.use_in_request(),
+                "Content-Type": "application/json",
+            },
             json={
                 "binding_id": self.binding_id,
                 "event": slack_presence_event(event),
@@ -320,9 +403,14 @@ class LoopbackPresenceHostAdapter:
         return _completed_reference(payload)
 
     async def _poll_work(self, work_ref: str) -> dict[str, Any]:
+        if self._skill_token is None:
+            raise HostContractError("HOST_SERVICE_TOKEN is missing")
         response = await self._http.get(
             f"{self.host_service_url}/presence/work/{quote(work_ref, safe='')}",
-            headers=self._headers(),
+            headers={
+                "X-Skill-Token": self._skill_token.use_in_request(),
+                "Content-Type": "application/json",
+            },
             params={"binding_id": self.binding_id},
             timeout=35.0,
         )
@@ -404,9 +492,15 @@ def create_host_adapter(
     *,
     http_client: httpx.AsyncClient | None = None,
 ) -> PresenceHostAdapter:
+    try:
+        # The host injects HOST_SERVICE_TOKEN into this companion's environment;
+        # SkillToken.from_env is the host's own reader for exactly that variable.
+        skill_token: SkillToken | None = SkillToken.from_env("HOST_SERVICE_TOKEN")
+    except ValueError:
+        skill_token = None
     return LoopbackPresenceHostAdapter(
         binding_id=binding_id,
         host_service_url=os.environ.get("HOST_SERVICE_URL", "http://127.0.0.1:8767"),
-        skill_token=os.environ.get("HOST_SERVICE_TOKEN", ""),
+        skill_token=skill_token,
         http_client=http_client,
     )

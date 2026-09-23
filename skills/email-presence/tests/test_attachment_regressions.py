@@ -171,7 +171,7 @@ def test_email_read_stages_the_same_attachment_artifact(tmp_path, monkeypatch):
     monkeypatch.setattr(plugin, "MailClient", ReadClient)
     api = _PluginAPI(tmp_path)
     plugin.register(api)
-    result = api.tools["email_read"](uid=4, uidvalidity=7)
+    result = json.loads(api.tools["email_read"](uid=4, uidvalidity=7))
     staged = result.get("staged_files") or result.get("attachments")
     source = _source_path(staged)
     assert source is not None and source.read_bytes() in {b"read me", raw}
@@ -198,7 +198,7 @@ def test_email_read_plain_mail_stages_raw_source_without_binary_json(tmp_path, m
     monkeypatch.setattr(plugin, "MailClient", ReadClient)
     api = _PluginAPI(tmp_path)
     plugin.register(api)
-    value = api.tools["email_read"](uid=1, uidvalidity=7)
+    value = json.loads(api.tools["email_read"](uid=1, uidvalidity=7))
     assert "_raw_source" not in value and value["attachments"] == []
     assert Path(value["source_artifact"]["path"]).read_bytes() == raw
     assert json.loads(json.dumps(value))["body"] == "plain text"

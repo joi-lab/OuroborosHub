@@ -1,7 +1,7 @@
 ---
 name: slack-bridge
 description: Slack presence transport with durable delivery, directory discovery, provider updates, file transfer, message actions, and provider context.
-version: 1.3.3
+version: 1.4.0
 type: extension
 entry: plugin.py
 plugin_api: "2.0"
@@ -37,7 +37,7 @@ tools:
   - name: slack_members
     description: List one paginated member-ID page for an exact conversation.
   - name: slack_join
-    description: Explicitly join one public conversation by exact ID.
+    description: Queue an explicit join of one public conversation by exact ID and keep its provider receipt.
   - name: slack_resolve
     description: Return name/email/URL/ID directory candidates without guessing ambiguous matches.
   - name: slack_file_upload
@@ -84,9 +84,11 @@ Choose the owner-created exact or account-wide presence binding in this skill's 
 Create it for provider `slack`, the workspace Team ID shown in the widget, and
 an exact channel conversation ID or `*`. The bridge keeps that one 32-character lowercase
 hexadecimal Binding ID and submits neutral provider events to the reviewed
-loopback presence endpoint using the dedicated `presence` permission. Immediate
-text is queued once for Slack; deferred work keeps its durable work reference and
-is polled until terminal.
+loopback presence endpoint using the dedicated `presence` permission. The
+host-injected Host Service token is held only as an opaque `SkillToken` and
+revealed at each loopback request; it is never logged, persisted, or exposed by
+the status route. Immediate text is queued once for Slack; deferred work keeps
+its durable work reference and is polled until terminal.
 
 ## Slack app setup
 
@@ -105,24 +107,60 @@ membership; there is no second bridge-local channel allowlist.
 Inbound Slack files are downloaded from their authenticated `url_private`
 locations into the skill state directory before the host adapter sees them.
 `slack_file_download` exposes the same provider-authenticated path for a file
-ID. Outbound `slack_file_upload` copies immutable bytes into the skill state
+ID. Because those reads carry the bot credential, they are confined to Slack's
+documented private-file host `files.slack.com`: another scheme, an embedded
+userinfo component, a non-443 port, an IP literal or any other hostname is
+refused before the request is built, and a redirect response is refused rather
+than followed, so the credential is never replayed to another origin and a
+login-page redirect is never staged as a file's bytes.
+
+Outbound `slack_file_upload` copies immutable bytes into the skill state
 directory at enqueue, then the companion runs Slack's current three-phase
 External Upload API (`files.getUploadURLExternal`, raw bytes POST,
 `files.completeUploadExternal`). A lost response after bytes or completion is
 recorded as `uncertain`; the bridge never claims a provider-side exactly-once
 mutation.
 
-Directory tools use one explicit page per call. `slack_list_conversations` and
-`slack_list_users` return exact IDs, names, URLs and `next_cursor`; follow the
-cursor yourself and treat `complete=false` as incomplete. `slack_resolve`
-returns all candidates on that page for a case-insensitive name, email, URL or
-ID query and never chooses an ambiguous person. `slack_lookup_user_email` uses
-Slack's exact `users.lookupByEmail` method. `slack_members` lists member IDs,
-while `slack_join` is an explicit provider mutation;
-it is never an automatic fallback for a failed history read.
+`slack_list_conversations` and `slack_list_users` remain one-page low-level tools:
+follow `next_cursor` yourself and treat `complete=false` as incomplete.
+`slack_resolve` handles directory pagination internally for names and returns
+all matching candidates without choosing a person. Exact IDs, Slack mentions,
+conversation/profile permalinks and user emails use direct provider lookups.
+It never joins a channel or links identities as part of resolution.
 
-Message edits, deletes, reactions, pins and bookmarks use the durable mutation
-queue and retain the provider response or an explicit failed/uncertain result.
+Name scans share a credential-scoped directory cache in the existing bridge
+database, reused across queries for up to five minutes. Results disclose
+`observed_at`, `cache_hit`, `cache_age_sec`, `coverage`, `entries_scanned`,
+`pages_fetched` and `complete`. `refresh=true` starts a new scan; omit `cursor`
+then. Exact lookups always use the provider. A directory snapshot is not an
+atomic Slack export and may change while being scanned. Private rooms that the
+credential cannot see remain invisible; profile observations do not grant authority.
+
+A scan fetches at most 50 pages and spends at most 45 seconds inside the
+60-second tool call. `limit` is page size (default 200), not a result count.
+Timeouts, missing/repeated cursors and rate limits return partial candidates,
+`complete=false`, an error and the available `next_cursor`. Honor
+`error.retry_after` before continuing with the same query/kind and cursor.
+The cache retains traversed pages across continuation calls; an incomplete
+empty result is never a cached proof that someone is absent. If no cursor is
+available, retry with `refresh=true`. A caller-supplied cursor without a saved
+prefix reports `coverage=from_supplied_cursor`, even at the provider's last page.
+Very broad substring queries may still exceed the host's result-size limit;
+refine the name or use an exact ID/email. The resolver does not silently prune
+candidate matches to fit that limit.
+
+`slack_lookup_user_email` uses Slack's exact `users.lookupByEmail` method.
+`slack_members` lists member IDs,
+while `slack_join` is an explicit provider mutation: it is queued in the same
+durable mutation outbox as the other writes, returns a `request_id`, and its
+provider result, terminal refusal (`already_in_channel`, `is_archived`, a
+missing scope) or uncertainty is read with `slack_receipt`. It is never an
+automatic fallback for a failed history read.
+
+Message edits, deletes, reactions, pins, bookmarks and channel joins use the
+durable mutation queue and retain the provider response or an explicit
+failed/uncertain result. Every tool returns one JSON object encoded as text, so
+a result is machine-readable exactly as documented here.
 The app manifest must be reinstalled in a workspace after scope changes; an
 edited public manifest does not grant scopes to an already-installed app.
 
@@ -238,6 +276,12 @@ References: [conversations.list](https://docs.slack.dev/reference/methods/conver
   activity without exposing tokens or message contents.
 
 Save settings before enabling the skill, or toggle it after a settings change.
+An absent settings file simply means "not configured yet". A settings file that
+exists but cannot be read, is not JSON, or is not a JSON object is reported as
+`binding_state: "unreadable"` with `local_settings_error` in the status route,
+the companion refuses to start on it, and saving settings returns HTTP 409
+without overwriting the bytes nobody could parse.
+
 Delivery is durable and retries are bounded. A network interruption after Slack
 accepts a send but before the receipt is stored can still cause a repeated send;
 the transport does not claim provider-side exactly-once delivery.

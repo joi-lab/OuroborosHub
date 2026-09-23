@@ -12,6 +12,7 @@ from workspace_fixtures import nested_document
 def main():
     repo, source_skill, temp_root = map(Path, sys.argv[1:])
     os.environ["OUROBOROS_DATA_DIR"] = str(temp_root / "drive")
+    os.environ["OUROBOROS_SETTINGS_PATH"] = str(temp_root / "drive" / "settings.json")
     os.environ["OUROBOROS_RUNTIME_MODE"] = "advanced"
     sys.path.insert(0, str(repo))
     import cryptography
@@ -33,7 +34,7 @@ def main():
     skills = temp_root / "skills"
     skill = skills / "google-workspace"
     skill.mkdir(parents=True)
-    for name in ("SKILL.md", "auth.py", "client.py"):
+    for name in ("SKILL.md", "auth.py", "client.py", "results.py"):
         shutil.copyfile(source_skill / name, skill / name)
     shutil.copyfile(source_skill / "plugin.py", skill / "original_plugin.py")
     shutil.copyfile(source_skill / "tests" / "workspace_fixtures.py", skill / "fixture_data.py")
@@ -76,6 +77,10 @@ def _respond(request):
         return httpx.Response(200, text="Disposable connector test content")
     if request.url.path == "/v1/documents/fixture_nested":
         return httpx.Response(200, json=nested_document())
+    if request.url.path == "/v1/documents/fixture_large":
+        document = nested_document()
+        document["body"]["content"] *= 8
+        return httpx.Response(200, json=document)
     raise AssertionError("Unexpected network request: " + str(request.url))
 
 def _client(*args, **kwargs):
@@ -159,6 +164,19 @@ def register(api):
         assert json.loads(result) == expected
         assert len(json.dumps({"ok": True, "result": result}, ensure_ascii=False).encode("utf-8")) < _RESULT_CAP
         print("verified complete compact Docs result across the child boundary; pretty control rejected")
+        # Unlike the compact regression above, even compact JSON is oversized.
+        # The real isolated child must retain full bytes before its IPC cap.
+        from ouroboros.artifacts import read_actor_source_bytes
+        from ouroboros.tools.core_file_tools import _read_file
+        ctx.task_id = "large-provider-result"
+        large = json.loads(dispatch_extension_tool_subprocess(tool, ctx, {"document_id": "fixture_large"}))
+        assert large["stored"] and large["actor_readable"] and large["result_complete"]
+        raw = read_actor_source_bytes(drive, ctx.task_id, large["source_ref"])
+        complete = json.loads(raw)
+        assert len(complete["document"]["body"]["content"]) == 2800
+        assert len(raw) > _RESULT_CAP
+        assert "Полный текст строки" in _read_file(ctx, **large["read"]["arguments"])
+        print("verified oversized full JSON retained and actor-readable across the real child boundary")
     finally:
         extension_loader.unload_extension(loaded.name)
 
