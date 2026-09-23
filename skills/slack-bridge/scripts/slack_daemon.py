@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import os
 import pathlib
@@ -14,24 +13,12 @@ if str(SKILL_ROOT) not in sys.path:
     sys.path.insert(0, str(SKILL_ROOT))
 
 from lib.host_adapter import create_host_adapter  # noqa: E402
+from lib.local_settings import LocalSettingsError, load_local_settings  # noqa: E402
 from lib.runtime import BridgeRuntime  # noqa: E402
 from lib.slack_api import SlackClient  # noqa: E402
 from lib.store import BridgeStore  # noqa: E402
 
 log = logging.getLogger("slack_bridge")
-
-
-def _load_local_settings(state_dir: pathlib.Path) -> dict[str, Any]:
-    path = state_dir / "settings.json"
-    if not path.exists():
-        return {}
-    try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise RuntimeError(f"Slack Bridge settings are unreadable: {exc}") from exc
-    if not isinstance(value, dict):
-        raise RuntimeError("Slack Bridge settings must be a JSON object")
-    return value
 
 
 def _bounded_int(value: Any, default: int, *, minimum: int, maximum: int) -> int:
@@ -45,8 +32,14 @@ def _bounded_int(value: Any, default: int, *, minimum: int, maximum: int) -> int
 async def _run() -> None:
     state_dir = pathlib.Path(os.environ.get("OUROBOROS_SKILL_STATE_DIR") or ".")
     store = BridgeStore(state_dir)
-    settings = _load_local_settings(state_dir)
     store.set_runtime(socket_state="starting", companion_pid=os.getpid())
+    try:
+        settings = load_local_settings(state_dir)
+    except LocalSettingsError as exc:
+        # Same contract as the extension child: unreadable settings are an
+        # explicit failure, never a silently empty configuration.
+        store.set_runtime(socket_state="error", last_socket_error=str(exc)[:500])
+        raise
 
     try:
         slack = SlackClient(

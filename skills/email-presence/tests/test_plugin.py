@@ -102,9 +102,9 @@ def test_registered_tools_and_status_share_durable_store(tmp_path):
     plugin.register(api)
     expected = {"email_send", "email_search", "email_read", "email_mailbox", "email_draft", "email_receipt", "email_test_connection"}
     assert set(api.tools) == expected
-    first = api.tools["email_send"](to="a@example.org", body="Hello", request_id="stable")
-    duplicate = api.tools["email_send"](to="a@example.org", body="Hello", request_id="stable")
+    first = json.loads(api.tools["email_send"](to="a@example.org", body="Hello", request_id="stable"))
+    duplicate = json.loads(api.tools["email_send"](to="a@example.org", body="Hello", request_id="stable"))
     assert duplicate["deduplicated"]
     assert first["receipt"]["state"] == "pending"
-    assert api.tools["email_receipt"]("stable")["provider_message_id"] == first["receipt"]["provider_message_id"]
+    assert json.loads(api.tools["email_receipt"]("stable"))["provider_message_id"] == first["receipt"]["provider_message_id"]
     assert api.tabs[0]["components"][0]["method"] == "GET"

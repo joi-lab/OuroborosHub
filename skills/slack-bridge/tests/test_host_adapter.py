@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
+import pickle
 
 import httpx
 import pytest
@@ -10,6 +12,8 @@ from lib.host_adapter import (
     HostBindingTerminalError,
     HostContractError,
     LoopbackPresenceHostAdapter,
+    SkillToken,
+    create_host_adapter,
     normalize_binding_id,
     slack_presence_event,
 )
@@ -276,5 +280,98 @@ def test_nonmessage_outcome_never_duplicates_tool_delivery(outcome):
         finally:
             await adapter.aclose()
             await http.aclose()
+
+    asyncio.run(run())
+
+
+def test_skill_token_is_opaque_and_revealed_only_at_request_construction() -> None:
+    async def run() -> None:
+        seen = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen.append((request.url.path, request.headers.get("x-skill-token")))
+            return httpx.Response(
+                200,
+                json={"status": "completed", "outcome": "silent", "text": "",
+                      "turn_ref": "turn-1", "work_ref": ""},
+            )
+
+        adapter, http = _adapter(handler)
+        token = adapter._skill_token
+        assert isinstance(token, SkillToken)
+        # The credential exists only behind use_in_request(); nothing that a log
+        # line, an f-string or a crash dump would reach can print it.
+        assert "skill-token" not in repr(token)
+        assert "skill-token" not in str(token)
+        assert "skill-token" not in f"{token}"
+        assert "skill-token" not in repr(vars(adapter))
+        with pytest.raises(TypeError):
+            pickle.dumps(token)
+        with pytest.raises(Exception):
+            copy.deepcopy(token)
+        assert token.use_in_request() == "skill-token"
+
+        await adapter.submit(_item())
+        assert ("/presence/turn", "skill-token") in seen
+        await adapter.aclose()
+        await http.aclose()
+
+    asyncio.run(run())
+
+
+def test_configured_binding_without_a_host_token_is_refused() -> None:
+    for missing in ("", "   ", None):
+        with pytest.raises(HostContractError, match="HOST_SERVICE_TOKEN"):
+            LoopbackPresenceHostAdapter(
+                binding_id="a" * 32,
+                host_service_url="http://127.0.0.1:8767",
+                skill_token=missing,
+            )
+
+
+def test_unbound_adapter_never_probes_host_without_a_credential() -> None:
+    async def run() -> None:
+        calls = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(request)
+            return httpx.Response(200, json={"presence_delivery_version": 1})
+
+        http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        adapter = LoopbackPresenceHostAdapter(
+            binding_id="", host_service_url="http://127.0.0.1:8767",
+            skill_token="", http_client=http,
+        )
+        assert adapter.available is False
+        assert await adapter.discover_delivery_support() == 0
+        assert adapter.delivery_reporting_status == "unavailable"
+        assert calls == []
+        with pytest.raises(HostContractError, match="HOST_SERVICE_TOKEN"):
+            await adapter.report_delivery({"schema_version": 1})
+        assert calls == []
+        await adapter.aclose()
+        await http.aclose()
+
+    asyncio.run(run())
+
+
+def test_create_host_adapter_reads_the_host_injected_environment_token(monkeypatch) -> None:
+    async def run() -> None:
+        http = httpx.AsyncClient(
+            transport=httpx.MockTransport(lambda _r: httpx.Response(200, json={"ok": True}))
+        )
+        monkeypatch.setenv("HOST_SERVICE_URL", "http://127.0.0.1:8767")
+        monkeypatch.setenv("HOST_SERVICE_TOKEN", "companion-token")
+        adapter = create_host_adapter("a" * 32, http_client=http)
+        assert isinstance(adapter._skill_token, SkillToken)
+        assert adapter._skill_token.use_in_request() == "companion-token"
+
+        monkeypatch.delenv("HOST_SERVICE_TOKEN")
+        with pytest.raises(HostContractError, match="HOST_SERVICE_TOKEN"):
+            create_host_adapter("a" * 32, http_client=http)
+        # No binding means no credential is required at all.
+        assert create_host_adapter("", http_client=http).available is False
+        await adapter.aclose()
+        await http.aclose()
 
     asyncio.run(run())

@@ -2,12 +2,18 @@ from __future__ import annotations
 
 import asyncio
 import json
+import pathlib
 from urllib.parse import parse_qs
 
 import httpx
 import pytest
 
-from lib.slack_api import SlackClient, SlackConfigurationError, chunk_message
+from lib.slack_api import (
+    SlackApiError,
+    SlackClient,
+    SlackConfigurationError,
+    chunk_message,
+)
 
 
 def test_chunking_is_bounded_and_lossless() -> None:
@@ -158,4 +164,101 @@ def test_dedicated_bookmark_declares_slack_link_type():
             result = await slack.bookmark(channel="C1", title="test", link="https://example.org")
         assert result["bookmark"]["id"] == "Bk1"
         assert observed == {"channel_id": "C1", "title": "test", "type": "link", "link": "https://example.org"}
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize(
+    "url,code",
+    [
+        ("http://files.slack.com/files-pri/T/F/x.txt", "invalid_private_file_url"),
+        ("https://user:pass@files.slack.com/files-pri/T/F/x.txt", "invalid_private_file_url"),
+        ("https://files.slack.com:8443/files-pri/T/F/x.txt", "invalid_private_file_url"),
+        ("https:///files-pri/T/F/x.txt", "invalid_private_file_url"),
+        # urlsplit reads "files.slack.com" here as userinfo; the real host is evil.example.
+        ("https://files.slack.com@evil.example/files-pri/T/F/x.txt", "invalid_private_file_url"),
+        ("https://files.slack.com.evil.example/files-pri/T/F/x.txt", "private_file_host_not_allowed"),
+        ("https://evil-files.slack.com.br/files-pri/T/F/x.txt", "private_file_host_not_allowed"),
+        ("https://203.0.113.10/files-pri/T/F/x.txt", "private_file_host_not_allowed"),
+        ("https://[::1]/files-pri/T/F/x.txt", "private_file_host_not_allowed"),
+        ("https://files.slack.com./files-pri/T/F/x.txt", "private_file_host_not_allowed"),
+        ("https://slack.com/files-pri/T/F/x.txt", "private_file_host_not_allowed"),
+    ],
+)
+def test_bot_credential_never_leaves_the_documented_slack_file_host(tmp_path, url, code):
+    async def run():
+        requests = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            return httpx.Response(200, content=b"never reached")
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+            slack = SlackClient("xoxb-secret", "xapp-secret", http_client=http)
+            with pytest.raises(SlackApiError) as refusal:
+                await slack.stage_private_files(
+                    [{"file_id": "F1", "name": "x.txt", "size": 4, "url_private": url}],
+                    destination=tmp_path / "staged",
+                )
+        assert refusal.value.error == code
+        # The refusal happens before any request, so no origin ever saw the token.
+        assert requests == []
+        assert list((tmp_path / "staged").iterdir()) == []
+
+    asyncio.run(run())
+
+
+def test_private_file_redirect_is_refused_and_never_replays_the_credential(tmp_path):
+    async def run():
+        seen = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen.append((request.url.host, request.headers.get("authorization")))
+            if request.url.host == "files.slack.com":
+                return httpx.Response(
+                    302,
+                    headers={"Location": "https://evil.example/collect?token=1"},
+                )
+            return httpx.Response(200, content=b"attacker bytes")
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+            slack = SlackClient("xoxb-secret", "xapp-secret", http_client=http)
+            with pytest.raises(SlackApiError) as refusal:
+                await slack.stage_private_files(
+                    [{
+                        "file_id": "F1", "name": "x.txt", "size": 4,
+                        "url_private": "https://files.slack.com/files-pri/T/F/x.txt",
+                    }],
+                    destination=tmp_path / "staged",
+                )
+        assert refusal.value.error == "file_redirect_refused_302"
+        assert refusal.value.details["redirect_host"] == "evil.example"
+        # Exactly one request, to Slack; the redirect was never followed, so the
+        # bot token was never re-sent anywhere.
+        assert seen == [("files.slack.com", "Bearer xoxb-secret")]
+        assert not any(host != "files.slack.com" for host, _auth in seen)
+        assert list((tmp_path / "staged").iterdir()) == []
+
+    asyncio.run(run())
+
+
+def test_file_download_by_id_stages_from_the_documented_host(tmp_path):
+    async def run():
+        seen = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen.append((request.url.host, request.url.path))
+            if request.url.path.endswith("files.info"):
+                return httpx.Response(200, json={"ok": True, "file": {
+                    "id": "F1", "name": "brief.pdf", "mimetype": "application/pdf", "size": 5,
+                    "url_private_download": "https://files.slack.com/files-pri/T/F/download/brief.pdf",
+                }})
+            return httpx.Response(200, content=b"bytes")
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+            slack = SlackClient("xoxb-secret", "xapp-secret", http_client=http)
+            staged = await slack.download_file("F1", destination=tmp_path / "downloads")
+        assert staged.file_id == "F1" and staged.size == 5
+        assert pathlib.Path(staged.path).read_bytes() == b"bytes"
+        assert seen[-1][0] == "files.slack.com"
+
     asyncio.run(run())

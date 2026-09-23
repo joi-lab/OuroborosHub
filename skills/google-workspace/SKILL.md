@@ -1,6 +1,6 @@
 ---
 name: google-workspace
-version: 0.2.2
+version: 0.2.3
 type: extension
 entry: plugin.py
 runtime: python3
@@ -65,3 +65,23 @@ never silently changes identity or falls back between routes. An explicit
 not access to a particular file or write permission. Read the intended resource
 with the same `auth_mode` to verify its access. Resource ID parameters accept
 common Google Docs, Sheets and Drive links as well as bare IDs.
+
+## Large results and files
+
+Small JSON responses remain byte-for-byte inline. Larger responses are saved in
+full before the extension IPC limit and return `source_ref`, SHA-256, byte size,
+`result_format` and an existing `read_file` call. Use that call and its range
+continuation, or read the file from the task artifact directory with existing
+script tools. `result_complete` means the complete response to this request;
+pagination, range limits, first-sheet exports and provider omissions still apply.
+No summary replaces the saved bytes. Google export-size errors remain provider
+errors; another explicitly selected export format may work.
+
+Downloads and exports keep immutable content-addressed files in skill state and
+also return canonical task-owned paths when invoked by an agent. Text results
+include a `read_file` call; binary exports expose their MIME type and a path for
+existing document/image tools or scripts, without a UTF-8 reader hint. Files live
+in the canonical task artifact store and survive child task cleanup. Repeating a
+request cannot overwrite an earlier result with changed content or another
+export format. Standalone calls without task context return a stored absolute
+path with `actor_readable=false`; that is not a claim of access by task tools.

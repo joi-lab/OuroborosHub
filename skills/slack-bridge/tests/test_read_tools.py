@@ -6,6 +6,7 @@ from pathlib import Path
 
 import httpx
 import pytest
+from conftest import tool_json
 
 from lib import read_tools
 from lib.slack_api import SlackClient
@@ -36,8 +37,11 @@ def test_tool_schemas_match_manifest_scopes_and_specific_reads():
     assert {
         "slack_user_info", "slack_conversation_info", "slack_history", "slack_thread",
         "slack_list_conversations", "slack_list_users", "slack_lookup_user_email",
-        "slack_members", "slack_join", "slack_resolve",
+        "slack_members", "slack_resolve",
     } <= set(api.tools)
+    # slack_join is a provider mutation and lives in the durable mutation queue,
+    # never among the immediate reads.
+    assert "slack_join" not in api.tools
     assert all(len(name) <= 24 for name in api.tools)
     assert api.tools["slack_thread"][1]["schema"]["required"] == ["channel_id", "thread_ts"]
     history_schema = api.tools["slack_history"][1]["schema"]
@@ -66,8 +70,8 @@ def test_lookup_tools_return_full_current_provider_objects(monkeypatch):
             return httpx.Response(200, json={"ok": True, "channel": room})
         async with httpx.AsyncClient(transport=httpx.MockTransport(provider)) as http:
             tools = with_tools(monkeypatch, http)
-            first = await tools["slack_user_info"][0](user_id="U1")
-            second = await tools["slack_conversation_info"][0](channel_id="D1")
+            first = tool_json(await tools["slack_user_info"][0](user_id="U1"))
+            second = tool_json(await tools["slack_conversation_info"][0](channel_id="D1"))
         assert first["user"] == user and first["source"] == "users.info" and first["observed_at"]
         assert second["conversation"] == room and second["source"] == "conversations.info"
     asyncio.run(run())
@@ -100,8 +104,8 @@ def test_history_and_thread_keep_full_text_filters_and_cursor(monkeypatch, kind,
             tool = with_tools(monkeypatch, http)[kind][0]
             arguments = {"channel_id": "D1", "oldest": "1.0", "latest": "3.0", "inclusive": True, "limit": 15}
             if endpoint == "replies": arguments["thread_ts"] = "2.0"
-            first = await tool(**arguments)
-            second = await tool(**arguments, cursor=first["next_cursor"])
+            first = tool_json(await tool(**arguments))
+            second = tool_json(await tool(**arguments, cursor=first["next_cursor"]))
         assert first["messages"][0]["text"] == long_text
         assert not first["complete"] and first["has_more"] and first["next_cursor"] == "cursor value"
         assert second["complete"] and second["next_cursor"] is None
@@ -114,7 +118,7 @@ def test_more_without_cursor_stays_explicitly_incomplete(monkeypatch):
         async with httpx.AsyncClient(transport=httpx.MockTransport(lambda _: httpx.Response(
             200, json={"ok": True, "messages": [{"ts": "2.0", "text": "text"}], "has_more": True}
         ))) as http:
-            result = await with_tools(monkeypatch, http)["slack_history"][0](channel_id="D1")
+            result = tool_json(await with_tools(monkeypatch, http)["slack_history"][0](channel_id="D1"))
         assert result["complete"] is False and result["next_cursor"] is None and result["continuation_note"]
     asyncio.run(run())
 
@@ -128,7 +132,7 @@ def test_provider_denial_is_an_actionable_error_not_empty_thread(monkeypatch, st
             return httpx.Response(status, json={"ok": False, "error": error, "needed": "groups:history", "provided": "chat:write"},
                                   headers={"Retry-After": "30"})
         async with httpx.AsyncClient(transport=httpx.MockTransport(provider)) as http:
-            result = await with_tools(monkeypatch, http)["slack_thread"][0](channel_id="C1", thread_ts="1.0")
+            result = tool_json(await with_tools(monkeypatch, http)["slack_thread"][0](channel_id="C1", thread_ts="1.0"))
         assert result["ok"] is False and "messages" not in result
         assert result["error"]["code"] == error and result["error"]["http_status"] == status
         assert result["error"]["retry_after"] == 30 and result["error"]["needed"] == "groups:history"
@@ -141,6 +145,6 @@ def test_empty_thread_id_never_falls_back_to_history(monkeypatch):
     async def run():
         calls = []
         async with httpx.AsyncClient(transport=httpx.MockTransport(lambda r: calls.append(r))) as http:
-            result = await with_tools(monkeypatch, http)["slack_thread"][0](channel_id="D1", thread_ts="")
+            result = tool_json(await with_tools(monkeypatch, http)["slack_thread"][0](channel_id="D1", thread_ts=""))
         assert result["ok"] is False and "thread_ts" in result["error"]["message"] and calls == []
     asyncio.run(run())

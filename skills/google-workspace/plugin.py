@@ -20,9 +20,11 @@ except ImportError:
 try:
     from .auth import parse_service_account_info
     from .client import GoogleWorkspaceClient, VALUE_RENDER_OPTIONS
+    from .results import file_extension, result_handler, store_state_bytes
 except ImportError:
     from auth import parse_service_account_info
     from client import GoogleWorkspaceClient, VALUE_RENDER_OPTIONS
+    from results import file_extension, result_handler, store_state_bytes
 
 if TYPE_CHECKING:
     from contracts.plugin_api import PluginAPI
@@ -274,15 +276,11 @@ def _make_drive_read_text(api: PluginAPI):
 
 def _stage_drive_bytes(api: PluginAPI, result: Dict[str, Any]) -> Dict[str, Any]:
     """Persist a provider response in skill state and return an inspectable path."""
-    state_dir = Path(api.get_state_dir()) / "drive_files"
-    state_dir.mkdir(parents=True, exist_ok=True)
-    name = Path(str(result.get("name") or result.get("file_id") or "download.bin")).name
-    safe = "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in name) or "download.bin"
-    target = state_dir / f"{result.get('file_id', 'file')}_{safe}"
-    temporary = target.with_name(f".{target.name}.tmp")
-    temporary.write_bytes(bytes(result.get("content") or b""))
-    temporary.replace(target)
-    return {k: v for k, v in result.items() if k != "content"} | {"path": str(target), "stored": True}
+    content = bytes(result.get("content") or b"")
+    mime = str(result.get("mime_type") or "")
+    extension = file_extension(mime)
+    stored = store_state_bytes(api, content, name=str(result.get("name") or result.get("file_id") or "download"), extension=extension)
+    return {k: v for k, v in result.items() if k != "content"} | stored
 
 
 def _make_drive_download(api: PluginAPI):
@@ -431,8 +429,11 @@ def register(api: PluginAPI) -> None:
     """Register Google Workspace tools, settings sections, and declarative UI tab with Ouroboros."""
 
     # 1. Register Tools
+    def register_tool(*, name, handler, description, **options):
+        api.register_tool(name=name, handler=result_handler(api, name, handler),
+                          description=description + " Large JSON/text results include a complete file and a read_file pointer. Binary exports provide a file path for document/image tools or scripts. Small JSON responses remain inline.", **options)
 
-    api.register_tool(
+    register_tool(
         name="workspace_auth_status",
         handler=_make_workspace_auth_status(api),
         description="Verify the selected OAuth or Service Account actor with a read-only Google Drive user request. File permissions remain separate.",
@@ -446,7 +447,7 @@ def register(api: PluginAPI) -> None:
         timeout_sec=90,
     )
 
-    api.register_tool(
+    register_tool(
         name="workspace_request",
         handler=_make_workspace_request(api),
         description="Call any Drive v3, Docs v1 or Sheets v4 REST operation with the selected identity. Supply a relative API path, query and JSON body; Google enforces scopes and permissions. No automatic retry after transport errors.",
@@ -459,7 +460,7 @@ def register(api: PluginAPI) -> None:
         }, "required": ["service", "method", "path"]}, timeout_sec=90,
     )
 
-    api.register_tool(
+    register_tool(
         name="sheets_info",
         handler=_make_sheets_info(api),
         description="Discover spreadsheet title, locale, timezone and tabs (IDs, names and grid dimensions) without reading cells. Use tab names in sheets_read ranges.",
@@ -471,7 +472,7 @@ def register(api: PluginAPI) -> None:
         timeout_sec=60,
     )
 
-    api.register_tool(
+    register_tool(
         name="sheets_read",
         handler=_make_sheets_read(api),
         description="Read rectangular cell values from a Google Spreadsheet range (e.g. 'Sheet1!A1:D10' or 'A1:C').",
@@ -504,7 +505,7 @@ def register(api: PluginAPI) -> None:
         timeout_sec=60,
     )
 
-    api.register_tool(
+    register_tool(
         name="sheets_append",
         handler=_make_sheets_append(api),
         description="Append rows of data to a table in a Google Spreadsheet.",
@@ -537,7 +538,7 @@ def register(api: PluginAPI) -> None:
         timeout_sec=60,
     )
 
-    api.register_tool(
+    register_tool(
         name="docs_create",
         handler=_make_docs_create(api),
         description="Create a new Google Document from scratch or by copying an existing Google Doc template. Returns the document ID and edit URL.",
@@ -563,7 +564,7 @@ def register(api: PluginAPI) -> None:
         timeout_sec=60,
     )
 
-    api.register_tool(
+    register_tool(
         name="drive_list",
         handler=_make_drive_list(api),
         description="List accessible files and folders, including owners, last modifier, version and capabilities when Google provides them. Follow next_page_token for more files.",
@@ -596,7 +597,7 @@ def register(api: PluginAPI) -> None:
         timeout_sec=60,
     )
 
-    api.register_tool(
+    register_tool(
         name="drive_read_text",
         handler=_make_drive_read_text(api),
         description="Read plain text from a Google Doc or text file with available owner/version metadata. Google Sheets CSV includes only the first tab; use sheets_info and sheets_read for others. truncated reports character clipping, not workbook coverage.",
@@ -619,10 +620,10 @@ def register(api: PluginAPI) -> None:
         timeout_sec=60,
     )
 
-    api.register_tool(
+    register_tool(
         name="drive_download",
         handler=_make_drive_download(api),
-        description="Download or export Drive binary content into immutable skill state and return its staged path.",
+        description="Download or export Drive bytes to an immutable task-readable file and return its path, MIME type, size and checksum.",
         schema={"type": "object", "properties": {
             "file_id": {"type": "string"}, "export_mime_type": {"type": "string"},
             "max_bytes": {"type": "integer", "default": 52428800},
@@ -630,10 +631,10 @@ def register(api: PluginAPI) -> None:
         }, "required": ["file_id"]}, timeout_sec=120,
     )
 
-    api.register_tool(
+    register_tool(
         name="drive_export",
         handler=_make_drive_export(api),
-        description="Export a native Google document to a requested MIME type and stage the binary result.",
+        description="Export a native Google document to a requested MIME type and return the immutable file path, MIME type, size and checksum.",
         schema={"type": "object", "properties": {
             "file_id": {"type": "string"}, "mime_type": {"type": "string"},
             "max_bytes": {"type": "integer", "default": 52428800},
@@ -641,7 +642,7 @@ def register(api: PluginAPI) -> None:
         }, "required": ["file_id", "mime_type"]}, timeout_sec=120,
     )
 
-    api.register_tool(
+    register_tool(
         name="drive_upload",
         handler=_make_drive_upload(api),
         description="Upload binary content from an explicit local path or base64 payload into Drive.",
@@ -652,28 +653,28 @@ def register(api: PluginAPI) -> None:
         }}, timeout_sec=120,
     )
 
-    api.register_tool(
+    register_tool(
         name="docs_read",
         handler=_make_docs_read(api),
         description="Read structured Google Docs JSON including body elements and revision metadata.",
         schema={"type": "object", "properties": {"document_id": {"type": "string"}, "auth_mode": {"type": "string", "enum": ["service_account", "oauth"], "default": "service_account"}}, "required": ["document_id"]}, timeout_sec=60,
     )
 
-    api.register_tool(
+    register_tool(
         name="docs_update",
         handler=_make_docs_update(api),
         description="Apply Google Docs batchUpdate requests and optionally read the document back.",
         schema={"type": "object", "properties": {"document_id": {"type": "string"}, "requests": {"type": "array", "items": {"type": "object"}}, "readback": {"type": "boolean", "default": True}, "write_control": {"type": "object"}, "auth_mode": {"type": "string", "enum": ["service_account", "oauth"], "default": "service_account"}}, "required": ["document_id", "requests"]}, timeout_sec=90,
     )
 
-    api.register_tool(
+    register_tool(
         name="sheets_update",
         handler=_make_sheets_update(api),
         description="Update a rectangular Google Sheets range.",
         schema={"type": "object", "properties": {"spreadsheet_id": {"type": "string"}, "range": {"type": "string"}, "values": {"type": "array", "items": {"type": "array", "items": {}}}, "value_input_option": {"type": "string", "enum": ["USER_ENTERED", "RAW"], "default": "USER_ENTERED"}, "auth_mode": {"type": "string", "enum": ["service_account", "oauth"], "default": "service_account"}}, "required": ["spreadsheet_id", "range", "values"]}, timeout_sec=90,
     )
 
-    api.register_tool(
+    register_tool(
         name="sheets_batch_update",
         handler=_make_sheets_batch_update(api),
         description="Apply structural Google Sheets batchUpdate requests.",

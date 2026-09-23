@@ -333,6 +333,8 @@ class OutboundWorker:
                 result = await self.slack.bookmark(**payload, add=True)
             elif operation == "bookmark_remove":
                 result = await self.slack.bookmark(**payload, add=False)
+            elif operation == "join_conversation":
+                result = await self.slack.join_conversation(str(payload.get("channel_id") or ""))
             elif operation == "generic_api":
                 result = await self.slack.generic_request(
                     method=str(payload.get("method") or "POST"),
@@ -399,6 +401,8 @@ class OutboundWorker:
                 "already_reacted", "message_not_found", "cant_update_message", "missing_scope",
                 "not_in_channel", "channel_not_found", "invalid_arguments", "invalid_auth",
                 "not_allowed_token_type", "file_not_found", "invalid_channel",
+                # conversations.join refusals that no retry can change.
+                "already_in_channel", "is_archived", "method_not_supported_for_channel_type",
             }:
                 self.store.fail_outbox(item.row_id, item.lease_token, exc.error, state="failed",
                                        result={"uncertain": False})
