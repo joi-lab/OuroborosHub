@@ -5,12 +5,14 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 SKILL_ROOT = Path(__file__).resolve().parents[1]
 if str(SKILL_ROOT) not in sys.path:
     sys.path.insert(0, str(SKILL_ROOT))
 
 
-def tool_json(result: Any) -> Any:
+def _decode_tool_json(result: Any) -> Any:
     """Decode one registered tool's result, asserting the host's `str` ABI.
 
     Every assertion in these tests runs through here so a handler that silently
@@ -22,3 +24,9 @@ def tool_json(result: Any) -> Any:
         f"registered tool handlers must return str, got {type(result).__name__}"
     )
     return json.loads(result)
+
+
+@pytest.fixture
+def tool_json():
+    """Provide the JSON ABI assertion within this skill test subtree."""
+    return _decode_tool_json

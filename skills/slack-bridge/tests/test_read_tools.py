@@ -6,7 +6,6 @@ from pathlib import Path
 
 import httpx
 import pytest
-from conftest import tool_json
 
 from lib import read_tools
 from lib.slack_api import SlackClient
@@ -55,7 +54,7 @@ def test_tool_schemas_match_manifest_scopes_and_specific_reads():
             "pins:read", "pins:write", "bookmarks:read", "bookmarks:write"} <= scopes
 
 
-def test_lookup_tools_return_full_current_provider_objects(monkeypatch):
+def test_lookup_tools_return_full_current_provider_objects(tool_json, monkeypatch):
     async def run():
         user = {"id": "U1", "profile": {"display_name": "Reader", "title": "Writer", "custom": {"field": "value"}}}
         room = {"id": "D1", "is_im": True, "purpose": {"value": "Discussion"}}
@@ -78,7 +77,7 @@ def test_lookup_tools_return_full_current_provider_objects(monkeypatch):
 
 
 @pytest.mark.parametrize("kind,endpoint", [("slack_history", "history"), ("slack_thread", "replies")])
-def test_history_and_thread_keep_full_text_filters_and_cursor(monkeypatch, kind, endpoint):
+def test_history_and_thread_keep_full_text_filters_and_cursor(tool_json, monkeypatch, kind, endpoint):
     async def run():
         calls = []
         long_text = "context " * 20000
@@ -113,7 +112,7 @@ def test_history_and_thread_keep_full_text_filters_and_cursor(monkeypatch, kind,
     asyncio.run(run())
 
 
-def test_more_without_cursor_stays_explicitly_incomplete(monkeypatch):
+def test_more_without_cursor_stays_explicitly_incomplete(tool_json, monkeypatch):
     async def run():
         async with httpx.AsyncClient(transport=httpx.MockTransport(lambda _: httpx.Response(
             200, json={"ok": True, "messages": [{"ts": "2.0", "text": "text"}], "has_more": True}
@@ -124,7 +123,7 @@ def test_more_without_cursor_stays_explicitly_incomplete(monkeypatch):
 
 
 @pytest.mark.parametrize("status,error", [(403, "missing_scope"), (200, "not_allowed_token_type"), (429, "ratelimited")])
-def test_provider_denial_is_an_actionable_error_not_empty_thread(monkeypatch, status, error):
+def test_provider_denial_is_an_actionable_error_not_empty_thread(tool_json, monkeypatch, status, error):
     async def run():
         calls = []
         def provider(request):
@@ -141,7 +140,7 @@ def test_provider_denial_is_an_actionable_error_not_empty_thread(monkeypatch, st
     asyncio.run(run())
 
 
-def test_empty_thread_id_never_falls_back_to_history(monkeypatch):
+def test_empty_thread_id_never_falls_back_to_history(tool_json, monkeypatch):
     async def run():
         calls = []
         async with httpx.AsyncClient(transport=httpx.MockTransport(lambda r: calls.append(r))) as http:

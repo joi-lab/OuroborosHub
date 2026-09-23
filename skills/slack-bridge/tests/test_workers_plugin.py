@@ -9,7 +9,6 @@ from pathlib import Path
 
 import httpx
 import pytest
-from conftest import tool_json
 
 from lib.events import parse_socket_envelope
 from lib.host_adapter import HostBindingTerminalError, HostDelivery, HostTurnStatus
@@ -291,6 +290,7 @@ class _Request:
 
 
 def test_plugin_registers_companion_operational_widget_and_durable_send(
+    tool_json,
     tmp_path,
 ) -> None:
     module = _load_plugin()
@@ -322,7 +322,7 @@ def test_plugin_registers_companion_operational_widget_and_durable_send(
     assert BridgeStore(tmp_path).status()["outbox_pending"] == 1
 
 
-def test_slack_send_explicit_plain_format_is_persisted(tmp_path):
+def test_slack_send_explicit_plain_format_is_persisted(tool_json, tmp_path):
     module = _load_plugin()
     api = _Api(tmp_path)
     module.register(api)
@@ -350,7 +350,7 @@ def test_registered_tool_arrays_have_items_and_enums_have_no_empty_choices(tmp_p
             pending.extend((f"{path}[{index}]", value) for index, value in enumerate(node))
 
 
-def test_message_edit_block_fields_survive_registration_queue_and_provider_request(tmp_path):
+def test_message_edit_block_fields_survive_registration_queue_and_provider_request(tool_json, tmp_path):
     api = _Api(tmp_path)
     _load_plugin().register(api)
     edit, metadata = api.tools["slack_message_edit"]
@@ -386,7 +386,7 @@ def test_message_edit_block_fields_survive_registration_queue_and_provider_reque
     ]
 
 
-def test_slack_file_upload_copies_immutable_bytes_into_existing_outbox(tmp_path):
+def test_slack_file_upload_copies_immutable_bytes_into_existing_outbox(tool_json, tmp_path):
     module = _load_plugin()
     api = _Api(tmp_path)
     module.register(api)
@@ -433,7 +433,7 @@ def test_generic_write_transport_loss_is_uncertain_without_false_delivery(tmp_pa
     assert status["mutations_uncertain"] == 1 and status["mutations_delivered"] == 0
 
 
-def test_generic_slack_api_post_is_registered_and_uses_existing_mutation_outbox(tmp_path):
+def test_generic_slack_api_post_is_registered_and_uses_existing_mutation_outbox(tool_json, tmp_path):
     module = _load_plugin()
     api = _Api(tmp_path)
     module.register(api)
@@ -450,7 +450,7 @@ def test_generic_slack_api_post_is_registered_and_uses_existing_mutation_outbox(
     assert rejected["ok"] is False and "token" in rejected["error"]["message"]
 
 
-def test_generic_slack_api_registered_get_read_returns_provider_response(tmp_path):
+def test_generic_slack_api_registered_get_read_returns_provider_response(tool_json, tmp_path):
     module = _load_plugin()
 
     class _GenericClient:
@@ -478,7 +478,7 @@ def test_generic_slack_api_registered_get_read_returns_provider_response(tmp_pat
     assert result == {"ok": True, "state": "read", "source": "conversations.list", "response": {"ok": True, "channels": [{"id": "C1"}]}}
 
 
-def test_generic_get_write_is_queued_and_get_read_is_direct(tmp_path):
+def test_generic_get_write_is_queued_and_get_read_is_direct(tool_json, tmp_path):
     module = _load_plugin()
     api = _Api(tmp_path)
     module.register(api)
@@ -526,7 +526,7 @@ def test_generic_timeout_cannot_replay_and_rate_limit_waits(tmp_path):
     asyncio.run(run())
 
 
-def test_generic_provider_speech_reports_actual_message_while_other_effect_does_not(tmp_path):
+def test_generic_provider_speech_reports_actual_message_while_other_effect_does_not(tool_json, tmp_path):
     async def run():
         module = _load_plugin()
         api = _Api(tmp_path)
@@ -736,7 +736,7 @@ def test_shared_settings_reader_is_strict_for_plugin_and_companion(tmp_path):
         load_local_settings(directory)
 
 
-def test_slack_join_is_a_durable_queued_mutation_with_a_receipt(tmp_path):
+def test_slack_join_is_a_durable_queued_mutation_with_a_receipt(tool_json, tmp_path):
     async def run():
         module = _load_plugin()
         api = _Api(tmp_path)
@@ -771,7 +771,7 @@ def test_slack_join_is_a_durable_queued_mutation_with_a_receipt(tmp_path):
     asyncio.run(run())
 
 
-def test_slack_join_refusal_is_terminal_and_never_silently_retried(tmp_path):
+def test_slack_join_refusal_is_terminal_and_never_silently_retried(tool_json, tmp_path):
     async def run():
         module = _load_plugin()
         api = _Api(tmp_path)
