@@ -20,6 +20,7 @@ def _update():
             "message_id": 51,
             "date": 1_700_000_051,
             "message_thread_id": 7,
+            "is_topic_message": True,
             "from": {"id": 10, "first_name": "Rowan", "username": "rowan"},
             "chat": {"id": -40, "type": "supergroup", "title": "Workshop"},
             "text": "🙂 Open this with Mira",

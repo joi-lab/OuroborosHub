@@ -2,7 +2,7 @@
 name: telegram-bot
 description: Durable Telegram transport for generic Ouroboros presences, with exact actor and conversation
   provenance, media staging, and provider receipts.
-version: 0.4.2
+version: 0.4.3
 type: extension
 plugin_api: '2.0'
 runtime: python3
@@ -131,7 +131,10 @@ It provides:
 - exact Telegram actor, chat, topic, message, reply, and attachment provenance;
 - a SQLite inbox/outbox with stable event ids, leases, deduplication, bounded
   delivery retries, terminal failure state, and an offset committed in the same
-  transaction as each accepted update;
+  transaction as each accepted update; leases left by a stopped runtime return
+  to their queues when the runtime starts again, with attempts unchanged (this
+  assumes one runtime per state dir: a reload that overlaps a still-running
+  runtime can resend a row, as a lease expiry would, only sooner);
 - inbound photo/document staging through Telegram `getFile`;
 - outbound text, photo, and document provider helpers with durable receipts;
 - a namespaced `telegram_send` tool for proactive text/photo/document delivery
@@ -179,8 +182,17 @@ the existing provider retry path; reporting does not claim provider exactly-once
 ## Incoming context
 
 Each event preserves the current sender's provider identity, the chat title and
-topic ID, and the message's text or caption. Text and caption entities retain
-their original UTF-16 offsets, hidden link URLs, and text-mention user facts.
+topic ID, and the message's text or caption. A conversation is one chat, or one
+topic when Telegram marks the message with `is_topic_message`; an edit of a topic
+message stays in that topic. Telegram also sets `message_thread_id` on replies
+outside topics (ordinary groups, a forum's General topic, private chats); that
+value names a reply chain, not a topic, so the reply stays in the chat's
+conversation (`topic_id` null, replies sent without a topic) and the raw value is
+kept as `message.reply_chain_id`. Reaction updates carry no topic, so reactions
+always use the chat's conversation, also in forums. Album members keep
+Telegram's `media_group_id`.
+Text and caption entities retain their original UTF-16 offsets, hidden link
+URLs, and text-mention user facts.
 When Telegram supplies a replied-to message, the event includes its text or
 caption, original author/chat/message IDs, date, entities, and photo/document
 descriptors. Selected quotes and forwarding origins remain separate source
@@ -270,3 +282,15 @@ Telegram 400 rejection of an HTML send permits an immediate plain-text fallback;
 a timeout or unknown network response never triggers that fallback. The ordinary
 bounded outbox retry policy and its documented unknown-acceptance duplicate risk
 remain unchanged. See `FORMATTER_PROVENANCE.md` for the included helper source.
+
+## Upgrading to 0.4.3
+
+- The payload content hash changes, so each install needs a fresh owner review
+  and grant before the new version runs.
+- Updates already queued before the upgrade keep their old conversation keys; a
+  reply chain that was keyed by its `message_thread_id` is a separate history
+  once, and new updates use the chat's key.
+- A binding pinned to an exact thread that was created for a reply chain no
+  longer matches: those events now carry an empty thread and the Host refuses
+  them (403). Re-check such bindings and use the chat-level conversation.
+- Reactions in forums stay on the chat's conversation (`:0`), not the topic.

@@ -73,7 +73,11 @@ def parse_telegram_update(
     if actor_id is None or chat_id is None:
         return None
 
-    topic_id = _integer(message.get("message_thread_id"))
+    # Telegram also sets message_thread_id on replies outside topics (ordinary
+    # groups, forum General), where it names a reply chain.  Only a message that
+    # Telegram marks as a topic message opens a separate conversation.
+    raw_thread_id = _integer(message.get("message_thread_id"))
+    topic_id = raw_thread_id if message.get("is_topic_message") is True else None
     bot_id = str(bot_account_id or "unknown").strip() or "unknown"
     topic_key = str(topic_id) if topic_id is not None else "0"
     conversation_key = f"telegram:{bot_id}:{chat_id}:{topic_key}"
@@ -109,7 +113,9 @@ def parse_telegram_update(
         "reply_to_message_id": _reply_message_id(message),
         "attachments": [item.to_dict() for item in attachments],
     }
-    for key in ("entities", "caption_entities", "quote", "forward_origin"):
+    if raw_thread_id is not None and topic_id is None:
+        message_fact["reply_chain_id"] = raw_thread_id
+    for key in ("entities", "caption_entities", "quote", "forward_origin", "media_group_id"):
         if key in message:
             message_fact[key] = deepcopy(message[key])
     reply = message.get("reply_to_message")
