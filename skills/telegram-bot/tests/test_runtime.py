@@ -546,3 +546,52 @@ def test_long_text_retry_keeps_confirmed_chunks_after_restart(tmp_path):
         )
 
     asyncio.run(run())
+
+
+def test_restarted_runtime_resumes_a_leased_inbox_row_immediately(tmp_path):
+    async def run():
+        from telegram_bot.custody import CustodyStore
+
+        event = parse_telegram_update(
+            {
+                "update_id": 1,
+                "message": {
+                    "message_id": 2,
+                    "text": "answer me",
+                    "from": {"id": 3},
+                    "chat": {"id": 4, "type": "private"},
+                },
+            },
+            bot_account_id="9",
+        )
+        # A previous process leased the event for a Host turn and then died.
+        dead = CustodyStore(tmp_path / "custody.sqlite3")
+        dead.commit_update(1, event)
+        assert dead.claim_inbox(lease_sec=1860.0) is not None
+
+        class StopAfterPoll(RuntimeClient):
+            async def get_updates(self, *, offset, timeout_sec):
+                await asyncio.sleep(0.05)
+                return []
+
+        submitter = AcceptingSubmitter()
+        runtime = TelegramTransportRuntime(
+            state_dir=tmp_path,
+            token_provider=lambda: "token",
+            logger=Logger(),
+            submitter=submitter,
+            client_factory=StopAfterPoll,
+        )
+        task = asyncio.create_task(runtime.run())
+        try:
+            for _ in range(100):
+                if runtime.store.status_snapshot()["inbox_submitted"] == 1:
+                    break
+                await asyncio.sleep(0.02)
+        finally:
+            runtime.stop()
+            await asyncio.gather(task, return_exceptions=True)
+        assert [call[0]["text"] for call in submitter.calls] == ["answer me"]
+        assert runtime.store.status_snapshot()["inbox_submitted"] == 1
+
+    asyncio.run(run())

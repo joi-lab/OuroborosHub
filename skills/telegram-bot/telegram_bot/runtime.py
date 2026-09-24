@@ -65,6 +65,11 @@ class TelegramTransportRuntime:
         self._stop_event = asyncio.Event()
         self._client_lock = asyncio.Lock()
         self._run_task = asyncio.current_task()
+        # Single owner per state dir and no worker of this runtime has started,
+        # so any leased row is stale (see CustodyStore.release_own_leases).
+        released = self.store.release_own_leases()
+        if any(released.values()):
+            self._log("info", f"telegram-bot: released stale leases {released}")
         workers = [
             asyncio.create_task(
                 self._inbox_worker(), name=f"telegram-presence-inbox-{index}"

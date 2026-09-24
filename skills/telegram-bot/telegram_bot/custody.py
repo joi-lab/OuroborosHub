@@ -143,6 +143,36 @@ class CustodyStore:
                 (time.time() + max(0.0, retry_after_sec), str(reason)[:500], event_id),
             )
 
+    def release_own_leases(self) -> Dict[str, int]:
+        """Return leases left by a stopped runtime to their queues at once.
+
+        Call only from ``TelegramTransportRuntime.run()`` before its workers
+        start, never when the store is opened for status or tools.  It assumes
+        a single owner: only one runtime's workers claim rows for this state
+        dir, so a lease that exists before they start belongs to a runtime
+        that is no longer running.  Waiting for its expiry would hold the
+        conversation's FIFO for up to the full Host-turn lease.  Only ``leased``
+        rows move to ``pending``; attempts, send checkpoints, receipts, and
+        report state are left unchanged, and the next claim counts the retry.
+
+        Residual: if an extension reload starts the new runtime before the old
+        one has stopped, this can release a live lease, and the row may be sent
+        twice -- the same outcome as a lease expiring, only sooner.
+        """
+        now = time.time()
+        released: Dict[str, int] = {}
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            for table in ("inbox", "outbox", "presence_work"):
+                cursor = conn.execute(
+                    f"UPDATE {table} SET state='pending', available_at=?, lease_until=0, "
+                    "last_error='released_at_runtime_start' WHERE state='leased'",
+                    (now,),
+                )
+                released[table] = cursor.rowcount
+            conn.commit()
+        return released
+
     def mark_inbox_failed(self, event_id: str, *, reason: str) -> None:
         with self._connect() as conn:
             conn.execute(

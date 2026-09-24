@@ -1,3 +1,4 @@
+from telegram_bot.custody import CustodyStore
 from telegram_bot.events import parse_telegram_update
 
 
@@ -8,6 +9,7 @@ def test_parses_exact_actor_chat_topic_message_and_media_provenance():
             "message": {
                 "message_id": 9,
                 "message_thread_id": 42,
+                "is_topic_message": True,
                 "date": 1_700_000_000,
                 "caption": "See both files",
                 "reply_to_message": {"message_id": 8},
@@ -128,3 +130,147 @@ def test_configured_group_is_context_not_owner_authority():
         parse_telegram_update(update, bot_account_id="9", management_group_id="-42")
         is None
     )
+
+
+def _group_message(update_id, *, text="hi", thread=None, chat_extra=None, **message_extra):
+    message = {
+        "message_id": update_id,
+        "text": text,
+        "from": {"id": 30, "is_bot": False},
+        "chat": {"id": -100, "type": "supergroup", "title": "Room", **(chat_extra or {})},
+        **message_extra,
+    }
+    if thread is not None:
+        message["message_thread_id"] = thread
+    return parse_telegram_update(
+        {"update_id": update_id, "message": message}, bot_account_id="9"
+    )
+
+
+def test_reply_chain_in_ordinary_group_stays_in_the_chat_conversation():
+    top_level = _group_message(1)
+    reply = _group_message(2, thread=1, reply_to_message={"message_id": 1})
+    assert top_level is not None and reply is not None
+    # Telegram names a reply chain with message_thread_id outside forums; it is
+    # not a topic, so the reply joins the chat's single conversation key.
+    assert reply.conversation_key == top_level.conversation_key == "telegram:9:-100:0"
+    assert reply.thread_id == ""
+    assert reply.conversation["topic_id"] is None
+    assert reply.message["reply_chain_id"] == 1
+    assert reply.message["reply_to_message_id"] == 1
+    assert "reply_chain_id" not in top_level.message
+
+
+def test_only_a_topic_message_keeps_its_own_conversation_key():
+    topic = _group_message(3, thread=42, is_topic_message=True, chat_extra={"is_forum": True})
+    assert topic is not None
+    assert topic.conversation_key == "telegram:9:-100:42"
+    assert topic.thread_id == "42"
+    assert topic.conversation["topic_id"] == 42
+    assert "reply_chain_id" not in topic.message
+    general = _group_message(5, chat_extra={"is_forum": True})
+    assert general is not None and general.conversation_key == "telegram:9:-100:0"
+
+
+def test_forum_general_reply_is_a_reply_chain_not_a_topic(tmp_path):
+    # A reply in a forum's General topic carries message_thread_id but no
+    # is_topic_message; the forum flag alone must not open a topic.
+    reply = _group_message(
+        6, thread=5, chat_extra={"is_forum": True}, reply_to_message={"message_id": 5}
+    )
+    assert reply is not None
+    assert reply.conversation_key == "telegram:9:-100:0"
+    assert reply.thread_id == ""
+    assert reply.conversation["topic_id"] is None
+    assert reply.message["reply_chain_id"] == 5
+    store = CustodyStore(tmp_path / "custody.sqlite3")
+    store.commit_update(6, reply)
+    lease = store.claim_inbox()
+    store.record_submission(
+        lease.event_id, binding_id="b" * 32, turn_ref="turn-6",
+        outcome="message", text="noted", work_ref="",
+    )
+    outbox = store.claim_outbox()
+    assert outbox is not None and outbox.payload["chat_id"] == "-100"
+    assert "topic_id" not in outbox.payload
+    assert outbox.payload["reply_to_message_id"] == 6
+
+
+def test_edited_topic_message_keeps_the_topic_key():
+    edited = parse_telegram_update(
+        {
+            "update_id": 11,
+            "edited_message": {
+                "message_id": 10,
+                "message_thread_id": 42,
+                "is_topic_message": True,
+                "text": "fixed typo",
+                "from": {"id": 30, "is_bot": False},
+                "chat": {"id": -100, "type": "supergroup", "is_forum": True},
+            },
+        },
+        bot_account_id="9",
+    )
+    assert edited is not None
+    assert edited.message["event_kind"] == "edited_message"
+    assert edited.conversation_key == "telegram:9:-100:42"
+    assert edited.thread_id == "42"
+
+
+def test_private_chat_and_reactions_use_the_chat_conversation():
+    private = parse_telegram_update(
+        {
+            "update_id": 6,
+            "message": {
+                "message_id": 6,
+                "text": "hello",
+                "message_thread_id": 5,
+                "from": {"id": 3, "is_bot": False},
+                "chat": {"id": 3, "type": "private"},
+            },
+        },
+        bot_account_id="9",
+    )
+    assert private is not None
+    assert private.conversation_key == "telegram:9:3:0"
+    assert private.message["reply_chain_id"] == 5
+    private_topic = parse_telegram_update(
+        {
+            "update_id": 12,
+            "message": {
+                "message_id": 12,
+                "text": "in a private topic",
+                "message_thread_id": 5,
+                "is_topic_message": True,
+                "from": {"id": 3, "is_bot": False},
+                "chat": {"id": 3, "type": "private"},
+            },
+        },
+        bot_account_id="9",
+    )
+    assert private_topic is not None
+    assert private_topic.conversation_key == "telegram:9:3:5"
+    assert "reply_chain_id" not in private_topic.message
+    reaction = parse_telegram_update(
+        {
+            "update_id": 7,
+            "message_reaction": {
+                "user": {"id": 30, "is_bot": False},
+                "chat": {"id": -100, "type": "supergroup"},
+                "message_id": 2,
+                "new_reaction": [{"type": "emoji", "emoji": "👍"}],
+            },
+        },
+        bot_account_id="9",
+    )
+    assert reaction is not None
+    assert reaction.conversation_key == "telegram:9:-100:0"
+    assert reaction.conversation["topic_id"] is None
+
+
+def test_album_member_carries_media_group_id_only_when_telegram_sends_it():
+    album = _group_message(8, text="", caption="one of two", media_group_id="1357")
+    single = _group_message(9)
+    assert album is not None and single is not None
+    assert album.message["media_group_id"] == "1357"
+    assert "media_group_id" not in single.message
