@@ -84,6 +84,7 @@ def test_provider_mock_through_worker_persists_context_before_host(tmp_path):
             assert await InboundWorker(store, slack, host, staged_root=tmp_path / "staged").process_once()
         event = events[0]
         assert event["actor"]["platform_actor_id"] == "U_TEST"
+        assert event["message"]["provider_facts"] == {"self_user_id": "U_BOT"}
         assert event["actor"]["actor_team_id"] == "T_TEST"
         assert event["actor"]["display_name"] == "Example Reader"
         assert event["actor"]["profile"]["email"] == "reader@example.org"

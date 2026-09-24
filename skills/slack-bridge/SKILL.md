@@ -1,7 +1,7 @@
 ---
 name: slack-bridge
 description: Slack presence transport with durable delivery, directory discovery, provider updates, file transfer, message actions, and provider context.
-version: 1.4.2
+version: 1.4.3
 type: extension
 entry: plugin.py
 plugin_api: "2.0"
@@ -207,6 +207,17 @@ delay instead of pretending the result was empty. No automatic account login or
 HTTP retry is introduced.
 
 ## Inbound provider updates
+
+Accepted events expose the authenticated bot's `self_user_id`, when known, in
+`message.provider_facts`. Current messages also retain `mentioned_user_ids`
+from explicit Slack `<@ID>` tokens and rich-text user elements, plus the
+provider's `parent_user_id` when supplied. For edits these facts describe the
+current nested message, not its previous revision; reactions and deletes do
+not acquire current-message mention or parent facts. Missing fields remain
+unknown, including in older persisted events. Mentions are occurrences, which
+may be quoted, and the parent is the thread-root author; neither establishes
+the intended addressee or an obligation to reply. The model decides whether
+to participate. All otherwise admissible messages still reach Presence.
 
 Message edits (`message_changed`) are normalized from Slack's nested
 `message`/`previous_message` objects while both objects remain in provider

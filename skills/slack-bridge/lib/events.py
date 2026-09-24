@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import re
 from typing import Any, Mapping, Sequence
 
 
@@ -116,6 +117,25 @@ def _message_content_unchanged(
     )
 
 
+def _mentioned_user_ids(message: Mapping[str, Any]) -> list[str]:
+    """Collect explicit provider mention occurrences, never infer an addressee."""
+    user_ids = set(re.findall(r"<@([^<>\s|]+)(?:\|[^<>]*)?>", str(message.get("text") or "")))
+    blocks = message.get("blocks")
+    pending = list(blocks) if isinstance(blocks, list) else []
+    while pending:
+        element = pending.pop()
+        if not isinstance(element, Mapping):
+            continue
+        if element.get("type") == "user" and isinstance(element.get("user_id"), str):
+            user_id = element["user_id"].strip()
+            if user_id:
+                user_ids.add(user_id)
+        children = element.get("elements")
+        if isinstance(children, list):
+            pending.extend(children)
+    return sorted(user_ids)
+
+
 def parse_socket_envelope(
     payload: Mapping[str, Any],
     *,
@@ -188,6 +208,18 @@ def parse_socket_envelope(
     text = str(message.get("text") or event.get("text") or "")
     if not text and not files and not structured:
         return ParsedEnvelope(envelope_id, event_id, False, "empty_message", None)
+
+    # These observations enrich accepted events; they must not make an empty
+    # event admissible or turn an occurrence into a request to this bot.
+    if bot_user_id:
+        structured["self_user_id"] = bot_user_id
+    if event_type == "message" and subtype != "message_deleted":
+        mentioned = _mentioned_user_ids(message)
+        if mentioned:
+            structured["mentioned_user_ids"] = mentioned
+        parent_user_id = _text(message.get("parent_user_id"))
+        if parent_user_id:
+            structured["parent_user_id"] = parent_user_id
 
     channel_type = _text(event.get("channel_type"))
     parsed = SlackEvent(
