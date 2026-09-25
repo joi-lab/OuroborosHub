@@ -1,9 +1,34 @@
 {
-  "schema_version": 1,
-  "name": "OuroborosHub",
   "description": "Official Ouroboros skills catalog.",
+  "name": "OuroborosHub",
   "raw_base_url": "https://raw.githubusercontent.com/razzant/OuroborosHub/main",
+  "schema_version": 1,
   "skills": [
+    {
+      "description": "Геоданные 2ГИС: поиск мест и организаций, геокодирование адресов и обратное геокодирование координат, построение маршрутов (авто, пешком, вело, самокат, мото, грузовик, такси), расчёт изохрон (зоны достижимости), создание статической карты PNG с маркерами, линиями и полигонами и кликабельные ссылки на интерактивную карту 2ГИС. Требует API-ключ 2ГИС.",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "sha256": "c3822c1db3afbb5a39c68725ee6b59f6a6d308a3d02bb56c413395dbd50fca77",
+          "size": 11335
+        },
+        {
+          "path": "client.py",
+          "sha256": "5d12a992654284967ca6dd498f7dd3e3f0748063d5db7f10a348e9b8ac294de5",
+          "size": 26232
+        },
+        {
+          "path": "plugin.py",
+          "sha256": "cfa2531f360897ee5d9518d69f9d569e0395bb1e6738a59c6cfbca8091cf72ce",
+          "size": 23718
+        }
+      ],
+      "name": "2gis",
+      "slug": "2gis",
+      "type": "extension",
+      "version": "1.1.0",
+      "when_to_use": "Геозадачи через 2ГИС: поиск организаций и мест, адрес↔координаты, маршруты, изохроны, статические карты. НЕ для: поиска готовых изображений в интернете, GPS-трекинга, бронирования, отзывов о местах (2ГИС не отдаёт отзывы через эти API). Для поиска по миру вне зоны покрытия 2ГИС используй другие инструменты."
+    },
     {
       "description": "Agent-to-Agent protocol bridge for Ouroboros. Provides a local A2A-compatible server plus client tools for discovering and messaging other A2A agents.",
       "files": [
