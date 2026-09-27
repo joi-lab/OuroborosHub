@@ -100,6 +100,21 @@
       "when_to_use": "User asks to communicate with another A2A-compatible agent, discover an agent card, send an A2A message, check A2A task status, or expose this Ouroboros instance as an A2A peer."
     },
     {
+      "description": "Evidence-qualified code review adapted to the user's decision, project and risks.",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "sha256": "a1c515075216a35bbf965d05b3dbc77b7dd9b1acbba0c80749a940c1de2651f0",
+          "size": 10874
+        }
+      ],
+      "name": "adaptive-code-review",
+      "slug": "adaptive-code-review",
+      "type": "instruction",
+      "version": "0.1.0",
+      "when_to_use": "Review external code changes, assess a project or library for adoption, or check research and analysis code, including folders without Git."
+    },
+    {
       "description": "AgentRQ integration: structured HITL task board, permission gating, and real-time workspace bridge via MCP Streamable HTTP",
       "files": [
         {
