@@ -1934,6 +1934,30 @@
       "slug": "yylo-tasks",
       "type": "instruction",
       "version": "0.1.0"
+    },
+    {
+      "slug": "gigasearch",
+      "name": "gigasearch",
+      "version": "0.1.0",
+      "type": "extension",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "sha256": "bbb00a1721ac5c8feb4a72c201bdd9e154d765dfe2c07fc746888946207c2e82",
+          "size": 4474
+        },
+        {
+          "path": "plugin.py",
+          "sha256": "18bbe38c5e752c47ba4bdd1ec4bf319ebcafb3b045b47d1af4607daa53ad3861",
+          "size": 7364
+        },
+        {
+          "path": "test_gigasearch.py",
+          "sha256": "cbff28dee3b8e547c1ebeb64f7d93bffacb8ffdc237379a26a76c29f47546c4a",
+          "size": 4205
+        }
+      ],
+      "description": "Основной веб-поиск этой установки. Для обычного поиска внешней информации сначала используй GigaSearch; при явном выборе пользователя или недоступности сервиса выбери подходящую альтернативу."
     }
   ]
 }
