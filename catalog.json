@@ -1943,18 +1943,18 @@
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "bbb00a1721ac5c8feb4a72c201bdd9e154d765dfe2c07fc746888946207c2e82",
-          "size": 4474
+          "sha256": "92d926b122df09cf98c8a9b59ae852c1c8d6498f91688d16c4754960a6366ea1",
+          "size": 5581
         },
         {
           "path": "plugin.py",
-          "sha256": "18bbe38c5e752c47ba4bdd1ec4bf319ebcafb3b045b47d1af4607daa53ad3861",
-          "size": 7364
+          "sha256": "8ded516e197c9245d41658fca943372859494de4bb0b1475778b62a02766bb79",
+          "size": 8958
         },
         {
           "path": "test_gigasearch.py",
-          "sha256": "cbff28dee3b8e547c1ebeb64f7d93bffacb8ffdc237379a26a76c29f47546c4a",
-          "size": 4205
+          "sha256": "f4c73e3999d3cd300366dd93a037c41df89837bb7b76715542bc1fba16987fd6",
+          "size": 9705
         }
       ],
       "description": "Основной веб-поиск этой установки. Для обычного поиска внешней информации сначала используй GigaSearch; при явном выборе пользователя или недоступности сервиса выбери подходящую альтернативу."

@@ -17,7 +17,7 @@ _MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 
 
 def _error(message: str) -> dict[str, Any]:
-    return {"status": "error", "error": message}
+    return {"ok": False, "status": "error", "error": message}
 
 
 def _pick(mapping: dict[str, Any], *names: str) -> Any:
@@ -28,20 +28,25 @@ def _pick(mapping: dict[str, Any], *names: str) -> Any:
     return ""
 
 
-def _result_list(payload: Any) -> list[Any]:
+def _result_list(payload: Any) -> list[Any] | None:
     if isinstance(payload, list):
         return payload
     if not isinstance(payload, dict):
-        return []
-    for key in ("results", "items", "documents", "sources", "citations", "data"):
+        return None
+    empty = None
+    for key in ("results", "items", "documents", "data"):
         value = payload.get(key)
         if isinstance(value, list):
-            return value
-        if isinstance(value, dict):
+            nested = value
+        elif isinstance(value, dict):
             nested = _result_list(value)
-            if nested:
-                return nested
-    return []
+        else:
+            continue
+        if nested:
+            return nested
+        if nested is not None:
+            empty = []
+    return empty
 
 
 def _normalise_result(item: Any) -> dict[str, str] | None:
@@ -78,30 +83,60 @@ def _normalise_response(query: str, payload: Any) -> dict[str, Any]:
             return _error(f"GigaSearch service error: {message or 'unspecified error'}")
 
     raw_results = _result_list(payload)
-    results = [result for item in raw_results if (result := _normalise_result(item))]
+    results = [result for item in raw_results or [] if (result := _normalise_result(item))]
+    if raw_results is not None and len(results) != len(raw_results):
+        return _error("GigaSearch returned an invalid result record; expected an object with a URL")
     answer = ""
     if isinstance(payload, dict):
         answer = str(_pick(payload, "answer", "summary")).strip()
 
-    if not results and not answer:
-        return {"status": "empty", "query": query, "results": [], "count": 0}
+    # Explicit references belong to the summary, independently of search hits.
+    sources = None
+    source_payload = payload
+    while isinstance(source_payload, dict):
+        for key in ("sources", "citations"):
+            references = source_payload.get(key)
+            if references is None:
+                continue
+            if isinstance(references, dict):
+                references = _result_list(references)
+            if not isinstance(references, list):
+                return _error(f"GigaSearch returned invalid {key}; expected a list")
+            if sources is None:
+                sources = []
+            for reference in references:
+                item = _normalise_result(reference)
+                if item is None:
+                    return _error(f"GigaSearch returned an invalid {key} record; expected an object with a URL")
+                sources.append(item)
+        source_payload = source_payload.get("data")
+
+    if raw_results is None:
+        if sources is not None:
+            results = sources
+        elif not answer:
+            return _error("GigaSearch returned an unsupported response structure")
+    if not results and not answer and not sources:
+        return {"ok": True, "status": "empty", "query": query, "results": [], "count": 0}
 
     response: dict[str, Any] = {
+        "ok": True,
         "status": "ok",
         "query": query,
         "results": results,
         "count": len(results),
     }
+    if sources is not None:
+        response["sources"] = [{"title": item["title"], "url": item["url"]} for item in sources]
     if answer:
         response.update(
             {
                 "summary": answer,
                 "summary_kind": "model_generated",
-                "sources": [
-                    {"title": item["title"], "url": item["url"]} for item in results
-                ],
             }
         )
+        if sources is None:
+            response["sources"] = [{"title": item["title"], "url": item["url"]} for item in results]
     return response
 
 
