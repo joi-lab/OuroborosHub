@@ -207,7 +207,9 @@ class GigaSearchTests(unittest.TestCase):
             self.assertEqual(api.requested_settings, list(plugin._SETTINGS))
 
     def test_configuration_errors_are_explicit(self):
-        self.assertEqual(plugin._search("q", 5, "http://example.test", "key")["status"], "error")
+        with patch.object(plugin.urllib.request, "urlopen", return_value=_Response({"results": []})):
+            self.assertEqual(plugin._search("q", 5, "http://example.test", "key")["status"], "empty")
+        self.assertEqual(plugin._search("q", 5, "ftp://example.test", "key")["status"], "error")
         self.assertEqual(plugin._search("q", 5, "https://example.test", "")["status"], "error")
 
 
