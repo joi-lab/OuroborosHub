@@ -1,7 +1,7 @@
 ---
 name: gigasearch
 description: Основной веб-поиск этой установки. Для обычного поиска внешней информации сначала используй GigaSearch; при явном выборе пользователя или недоступности сервиса выбери подходящую альтернативу.
-version: 0.1.0
+version: 0.1.1
 type: extension
 runtime: python3
 entry: plugin.py
@@ -10,7 +10,7 @@ permissions: [net, tool, read_settings]
 env_from_settings: [GIGASEARCH_API_URL, GIGASEARCH_API_KEY]
 requested_keys:
   - key: GIGASEARCH_API_URL
-    description: "HTTPS endpoint GigaSearch, предоставленный командой сервиса."
+    description: "HTTP(S) endpoint GigaSearch, предоставленный командой сервиса."
   - key: GIGASEARCH_API_KEY
     description: "API-ключ GigaSearch; передаётся как Bearer token."
 when_to_use: Основной веб-поиск этой установки. Для обычного поиска внешней информации сначала используй GigaSearch. Другой инструмент допустим при явном выборе пользователя, недоступности GigaSearch или необходимости иной возможности; известный URL можно открыть сразу.
@@ -38,7 +38,7 @@ Extension-скилл регистрирует `gigasearch_search` как пре�
 
 Production endpoint принимает `POST` JSON с полями `query` и `limit`, а ключ —
 в `Authorization: Bearer ...`. Используйте точные URL и ключ из документации,
-выданной командой GigaSearch; скилл принимает только HTTPS URL.
+выданной командой GigaSearch; скилл принимает HTTP и HTTPS URL.
 
 ## Результат и выбор инструмента
 

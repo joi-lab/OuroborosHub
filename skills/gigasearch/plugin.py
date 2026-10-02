@@ -155,8 +155,8 @@ def _search(query: str, limit: int, api_url: str, api_key: str) -> dict[str, Any
     api_url = str(api_url or "").strip()
     api_key = str(api_key or "").strip()
     parsed = urlparse(api_url)
-    if parsed.scheme != "https" or not parsed.netloc:
-        return _error("GIGASEARCH_API_URL must be a valid HTTPS URL")
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return _error("GIGASEARCH_API_URL must be a valid HTTP(S) URL")
     if not api_key:
         return _error("GIGASEARCH_API_KEY is not configured")
 
