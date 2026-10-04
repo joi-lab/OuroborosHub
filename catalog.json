@@ -869,39 +869,44 @@
       "when_to_use": "Пользователь просит создать или изменить изображение либо видео (генерация, не поиск). Граница и пограничные случаи: если просят НАЙТИ готовое изображение в интернете, ОПИСАТЬ или распознать содержимое присланного фото, либо построить график по числам — это НЕ сюда. «Аватарка/аватар как картинка профиля» — обычная генерация изображения (kandinsky_image), а не kandinsky_avatar. Маршрут по глаголу: «отфотошопь, поправь, дорисуй, замени фон, замени лицо» существующее фото → kandinsky_edit_image; «улучши качество, увеличь, апскейл» → kandinsky_upscale; «оживи картинку, добавь движение» (без звука) → kandinsky_animate; «заставь фото говорить, липсинк, озвучь по аудио» (нужны фото и аудиофайл) → kandinsky_avatar."
     },
     {
-      "description": "Keenable web search and page fetch over the vendor's keyless MCP endpoint.",
+      "description": "Focused web search and source reading, with site/date filters and a searchable page reader.",
       "files": [
         {
           "path": "OPERATOR_NOTES.md",
-          "sha256": "2320e4c2a5aadc41cc5f6c3aaaef9ea805ebe23bf2175e21175751e44e055dd1",
-          "size": 19377
+          "sha256": "f93294e5e6b40a82d4830a9dce5a9d4b4eb14b3cdede1df0bfd2e0b97e752289",
+          "size": 7780
         },
         {
           "path": "SKILL.md",
-          "sha256": "f9cb49332f6bd54b3733a021be2512c2176d442900ff9ef9ef48eeb329657cf8",
-          "size": 23605
+          "sha256": "4d3f392c28080aa87138c0719df1420f0a3dc86a5e6672c1fce525d581b2176e",
+          "size": 11719
         },
         {
           "path": "keenable_client.py",
-          "sha256": "40cac213d4dd30c80ba2c4ab52402829bc5c19c951e143a6a2a3b37a7e7c8b70",
-          "size": 63845
+          "sha256": "98787fb57f89167446ccf1967754dcdca3adcc59be5ad5edf321f3fe1003d43b",
+          "size": 65370
         },
         {
           "path": "plugin.py",
-          "sha256": "a16c96abf1f5ee0cac4353c2097a542f35500c4e0460ad1a8b281d893d1a979c",
-          "size": 46756
+          "sha256": "19d18f23ee0d4cbf8c517b4303f96db48cbe9f923831ab69313541a755e63b90",
+          "size": 15923
         },
         {
           "path": "verify_envelope_bounds.py",
-          "sha256": "ba2b15943115a088d01e035246f0f81f86a9b3fa23ac968ece4a30310190ee9d",
-          "size": 17569
+          "sha256": "7653c5b2f3fa794a086c38e715d41407f469ba4bb884823d88107be1941ebaa5",
+          "size": 17925
+        },
+        {
+          "path": "widget.js",
+          "sha256": "bef972cb1267e65aa4979832eb29ba0cc6c08a244077a4eae1880c4c126900e9",
+          "size": 37137
         }
       ],
       "name": "keenable",
       "slug": "keenable",
       "type": "extension",
-      "version": "0.3.1",
-      "when_to_use": "The user wants web search or page extraction through Keenable, especially for fresh pages, site-scoped or date-filtered retrieval, or an LLM-extracted summary of one page."
+      "version": "0.4.0",
+      "when_to_use": "Focused fact checks, finding primary sources, documentation lookup, reading a known URL, site/date-filtered retrieval, or supplying sources for Ouroboros's own research. Use live fetch for current pages and a focused extraction question for a section beyond the excerpt. Choose a broader research workflow when the task needs many searches and a synthesized report."
     },
     {
       "description": "Структурирует OCR-текст лабораторных анализов и объясняет отклонения; не заменяет врача или экстренную помощь.",
