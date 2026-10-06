@@ -88,14 +88,16 @@ class InboundWorker:
                 snapshot = await capture_context(self.slack, item, self.store.workspace_name())
                 self.store.set_provider_context(item.row_id, item.lease_token, snapshot)
                 item = dataclasses.replace(item, provider_context=snapshot)
-            if item.files and not item.staged_files:
-                staged = await self.slack.stage_private_files(
+            if item.files and not item.staged_files and not item.host_reference:
+                # One outcome per declared file is committed before submit, so a
+                # refused file never repeats and a lost Host reply resubmits the
+                # same event. A retryable failure raises and commits nothing.
+                staged = await self.slack.stage_inbound_files(
                     item.files,
                     destination=self.staged_root / _event_directory_name(item),
                 )
-                staged_dicts = tuple(file.as_dict() for file in staged)
-                self.store.set_staged_files(item.row_id, item.lease_token, staged_dicts)
-                item = dataclasses.replace(item, staged_files=staged_dicts)
+                self.store.set_staged_files(item.row_id, item.lease_token, staged)
+                item = dataclasses.replace(item, staged_files=staged)
 
             reference = item.host_reference
             if not reference:

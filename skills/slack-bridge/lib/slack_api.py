@@ -27,6 +27,11 @@ TEXT_FORMATS = ("markdown", "mrkdwn", "plain")
 # trailing-dot forms.
 SLACK_PRIVATE_FILE_HOSTS = frozenset({"files.slack.com"})
 _REDIRECT_STATUS_CODES = frozenset({301, 302, 303, 307, 308})
+# Transport failures after a request may have reached Slack: a write behind one
+# of them may already be applied, so it is reported uncertain, never resent.
+_RESPONSE_LOST_ERRORS = (
+    httpx.ReadTimeout, httpx.WriteTimeout, httpx.ReadError, httpx.WriteError, httpx.RemoteProtocolError,
+)
 
 
 def normalize_text_format(value: str) -> str:
@@ -105,7 +110,8 @@ def chunk_message(text: str, max_length: int = 3900) -> list[str]:
 def _safe_filename(name: str, fallback: str) -> str:
     leaf = pathlib.PurePath(str(name or "")).name
     clean = re.sub(r"[^A-Za-z0-9._ -]+", "_", leaf).strip(" .")
-    return clean[:180] or fallback
+    # Trim again after the cut: Host strips the staged paths it opens.
+    return clean[:180].rstrip(" .") or fallback
 
 
 def private_file_host(url: str) -> str:
@@ -118,8 +124,8 @@ def private_file_host(url: str) -> str:
     """
 
     raw = str(url or "").strip()
-    parsed = urlsplit(raw)
     try:
+        parsed = urlsplit(raw)
         port = parsed.port
     except ValueError:
         raise SlackApiError("invalid_private_file_url") from None
@@ -136,6 +142,20 @@ def private_file_host(url: str) -> str:
             "private_file_host_not_allowed", details={"host": parsed.hostname}
         )
     return parsed.hostname
+
+
+def _url_host(value: Any) -> str:
+    try:
+        return urlsplit(str(value or "")).hostname or ""
+    except ValueError:
+        return ""
+
+
+def _declared_size(value: Any) -> int:
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError, OverflowError):
+        return 0
 
 
 class SlackClient:
@@ -304,8 +324,7 @@ class SlackClient:
             raise SlackConfigurationError("generic Slack API payload must not include token")
         try:
             return await self._request(selected, endpoint, payload, token=self.bot_token)
-        except (httpx.ReadTimeout, httpx.WriteTimeout, httpx.ReadError,
-                httpx.WriteError, httpx.RemoteProtocolError) as exc:
+        except _RESPONSE_LOST_ERRORS as exc:
             if effect == "write":
                 raise SlackMutationUncertain(type(exc).__name__) from exc
             raise
@@ -612,6 +631,9 @@ class SlackClient:
             payload["initial_comment"] = str(initial_comment)
         try:
             return await self._post("files.completeUploadExternal", payload, token=self.bot_token)
+        except _RESPONSE_LOST_ERRORS as exc:
+            # Completion is the call that shares the file; a fresh upload could duplicate it.
+            raise SlackMutationUncertain(type(exc).__name__) from exc
         except SlackApiError as exc:
             if exc.status_code >= 500 or exc.status_code in {0, 408} or exc.error in {
                 "fatal_error", "internal_error", "request_timeout", "service_unavailable",
@@ -639,71 +661,155 @@ class SlackClient:
         max_files: int = 10,
         max_total_bytes: int = 50 * 1024 * 1024,
     ) -> tuple[StagedSlackFile, ...]:
-        destination.mkdir(parents=True, exist_ok=True)
-        staged: list[StagedSlackFile] = []
+        """Stage every file or raise the first refusal before touching the next file."""
+        staged = await self._stage_batch(
+            files, destination=destination, strict=True,
+            max_files=max_files, max_total_bytes=max_total_bytes,
+        )
+        return tuple(item for item in staged if isinstance(item, StagedSlackFile))
+
+    async def stage_inbound_files(
+        self,
+        files: Sequence[Mapping[str, Any]],
+        *,
+        destination: pathlib.Path,
+        max_files: int = 10,
+        max_total_bytes: int = 50 * 1024 * 1024,
+    ) -> tuple[dict[str, Any], ...]:
+        """Return one outcome per declared file, in declared order.
+
+        A staged file keeps its path. A refusal this attempt observed - a URL the
+        bot credential may not read, the batch limits, a redirect, or a completed
+        HTTP answer other than 408, 429 or 5xx - becomes a blank path with its
+        reason. Conditions a retry may change (408, 429, 5xx, transport, local
+        write) raise and leave the whole batch to the caller's retry.
+        """
+        outcomes = await self._stage_batch(
+            files, destination=destination, strict=False,
+            max_files=max_files, max_total_bytes=max_total_bytes,
+        )
+        records: list[dict[str, Any]] = []
+        for item, outcome in zip(files, outcomes):
+            if isinstance(outcome, StagedSlackFile):
+                records.append(outcome.as_dict())
+                continue
+            records.append({
+                "file_id": str(item.get("file_id") or ""),
+                "name": str(item.get("name") or ""),
+                "mimetype": str(item.get("mimetype") or ""),
+                "size": _declared_size(item.get("size")),
+                "path": "",
+                "stage_error": outcome.error,
+                "stage_error_details": dict(outcome.details),
+            })
+        return tuple(records)
+
+    async def _stage_batch(
+        self,
+        files: Sequence[Mapping[str, Any]],
+        *,
+        destination: pathlib.Path,
+        strict: bool,
+        max_files: int,
+        max_total_bytes: int,
+    ) -> list[StagedSlackFile | SlackApiError]:
+        # One loop owns the declared ordinal, the NN-name path and the accepted
+        # byte budget, so strict and inbound staging cannot drift apart.
+        outcomes: list[StagedSlackFile | SlackApiError] = []
         total = 0
         for index, item in enumerate(files):
-            if index >= max_files:
-                raise SlackApiError("too_many_files")
-            file_id = str(item.get("file_id") or "").strip()
-            url = str(item.get("url_private") or "").strip()
+            outcome = await self._stage_file(
+                index, item, destination=destination, strict=strict,
+                max_files=max_files, remaining_bytes=max_total_bytes - total,
+            )
+            if isinstance(outcome, SlackApiError):
+                if strict:
+                    raise outcome
+            else:
+                total += outcome.size
+            outcomes.append(outcome)
+        return outcomes
+
+    async def _stage_file(
+        self,
+        index: int,
+        item: Mapping[str, Any],
+        *,
+        destination: pathlib.Path,
+        strict: bool,
+        max_files: int,
+        remaining_bytes: int,
+    ) -> StagedSlackFile | SlackApiError:
+        """Stage one file, return this attempt's refusal, or raise a retryable error."""
+        if index >= max_files:
+            return SlackApiError("too_many_files")
+        file_id = str(item.get("file_id") or "").strip()
+        url = str(item.get("url_private") or "").strip()
+        if not url and not strict:
+            # Inbound names the absent locator; strict keeps its URL refusal below.
+            return SlackApiError("missing_private_file_url")
+        try:
             # Refuse before the credential is built, not after the request.
             private_file_host(url)
-            declared_size = max(0, int(item.get("size") or 0))
-            if declared_size and total + declared_size > max_total_bytes:
-                raise SlackApiError("file_batch_too_large")
-            filename = _safe_filename(
-                str(item.get("name") or ""), file_id or f"file-{index}"
-            )
-            path = destination / f"{index:02d}-{filename}"
-            part = path.with_name(path.name + f".part.{os.getpid()}")
-            try:
-                async with self._http.stream(
-                    "GET",
-                    url,
-                    headers={"Authorization": f"Bearer {self.bot_token}"},
-                    # The shared client follows redirects; an authenticated file
-                    # read must not. A redirect is where the bot token would
-                    # otherwise be re-sent to another origin, and an unauthorized
-                    # url_private read redirects to a login page whose HTML would
-                    # silently be staged as the file's bytes.
-                    follow_redirects=False,
-                ) as response:
-                    if response.status_code in _REDIRECT_STATUS_CODES:
-                        raise SlackApiError(
-                            f"file_redirect_refused_{response.status_code}",
-                            status_code=response.status_code,
-                            details={
-                                "redirect_host": urlsplit(
-                                    response.headers.get("location") or ""
-                                ).hostname
-                                or "",
-                            },
-                        )
-                    if response.status_code != 200:
-                        raise SlackApiError(
-                            f"file_http_{response.status_code}",
-                            status_code=response.status_code,
-                        )
-                    written = 0
-                    with part.open("wb") as handle:
-                        async for chunk in response.aiter_bytes():
-                            written += len(chunk)
-                            if total + written > max_total_bytes:
-                                raise SlackApiError("file_batch_too_large")
-                            handle.write(chunk)
-                os.replace(part, path)
-            finally:
-                if part.exists():
-                    part.unlink()
-            total += written
-            staged.append(
-                StagedSlackFile(
-                    file_id=file_id,
-                    name=filename,
-                    mimetype=str(item.get("mimetype") or "application/octet-stream"),
-                    size=written,
-                    path=str(path),
-                )
-            )
-        return tuple(staged)
+            # httpx refuses some URLs urlsplit admits (control characters,
+            # length); no request can exist for them, so no retry changes them.
+            httpx.URL(url)
+        except httpx.InvalidURL:
+            return SlackApiError("invalid_private_file_url")
+        except SlackApiError as refusal:
+            return refusal
+        declared_size = _declared_size(item.get("size"))
+        if declared_size and declared_size > remaining_bytes:
+            return SlackApiError("file_batch_too_large")
+        # The fallback goes through the same leaf, charset and length bound.
+        filename = _safe_filename(
+            str(item.get("name") or ""), _safe_filename(file_id, f"file-{index}")
+        )
+        path = destination / f"{index:02d}-{filename}"
+        part = path.with_name(path.name + f".part.{os.getpid()}")
+        refusal: SlackApiError | None = None
+        written = 0
+        try:
+            async with self._http.stream(
+                "GET",
+                url,
+                headers={"Authorization": f"Bearer {self.bot_token}"},
+                # The shared client follows redirects; an authenticated file
+                # read must not. A redirect is where the bot token would
+                # otherwise be re-sent to another origin, and an unauthorized
+                # url_private read redirects to a login page whose HTML would
+                # silently be staged as the file's bytes.
+                follow_redirects=False,
+            ) as response:
+                status = response.status_code
+                if status in _REDIRECT_STATUS_CODES:
+                    return SlackApiError(
+                        f"file_redirect_refused_{status}",
+                        status_code=status,
+                        details={"redirect_host": _url_host(response.headers.get("location"))},
+                    )
+                if status in {408, 429} or status >= 500:
+                    raise SlackApiError(f"file_http_{status}", status_code=status)
+                if status != 200:
+                    return SlackApiError(f"file_http_{status}", status_code=status)
+                destination.mkdir(parents=True, exist_ok=True)
+                with part.open("wb") as handle:
+                    async for chunk in response.aiter_bytes():
+                        written += len(chunk)
+                        if written > remaining_bytes:
+                            refusal = SlackApiError("file_batch_too_large")
+                            break
+                        handle.write(chunk)
+            if refusal is not None:
+                return refusal
+            os.replace(part, path)
+        finally:
+            if part.exists():
+                part.unlink()
+        return StagedSlackFile(
+            file_id=file_id,
+            name=filename,
+            mimetype=str(item.get("mimetype") or "application/octet-stream"),
+            size=written,
+            path=str(path),
+        )

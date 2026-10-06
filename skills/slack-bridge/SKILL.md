@@ -1,7 +1,7 @@
 ---
 name: slack-bridge
 description: Slack presence transport with durable delivery, directory discovery, provider updates, file transfer, message actions, and provider context.
-version: 1.4.3
+version: 1.4.4
 type: extension
 entry: plugin.py
 plugin_api: "2.0"
@@ -104,8 +104,33 @@ Every DM, MPDM, public channel, and private channel event that the installed app
 can receive is transported; the selected host binding decides admission. Invite the bot where Slack requires explicit
 membership; there is no second bridge-local channel allowlist.
 
-Inbound Slack files are downloaded from their authenticated `url_private`
-locations into the skill state directory before the host adapter sees them.
+Every file a Slack message declares becomes one entry of the event's
+`message.attachments`: its Slack ID, name, type and size, the curated file facts
+Slack supplied (such as `title`, `mode`, `external_type`, `external_url`,
+`permalink`, `file_access`) and what staging observed. Bytes from Slack's
+authenticated `url_private` locations are downloaded into the skill state
+directory and submitted to the host (`content_available: true`; `staged_as` is
+the staged file's basename, up to 180 characters after its ordinal; the host
+derives its attachment label from it but may shorten or normalize that label, so
+the two need not match exactly). A file this attempt could not stage is
+described with `content_available: false`, `stage_error` and
+`stage_error_details` while the message and its other files are still
+delivered: no private URL, a URL outside the private-file host (for example a
+Google Drive document), beyond ten files or 50 MiB of accepted bytes, a
+redirect, or a completed HTTP answer other than 408, 429 or 5xx. That is a
+fact about this attempt, not a promise the file stays unavailable. A 408, 429
+or 5xx answer, a network failure or a local write failure keeps the message
+queued and retried. `content_available` describes the bridge's staging; the
+host attachment manifest decides what the model can open. Credentialed URLs
+(`url_private*`, `permalink_public`) and previews are never placed in the
+event, including the file lists of edited and deleted messages.
+
+Rows queued by an earlier bridge version keep the file declarations they were
+stored with: those versions dropped files without a private URL (such as
+external or ID-only files) and their curated facts, and that is not recovered
+from raw storage on upgrade. Such a row drains with what it kept, and a message
+an earlier version ignored stays ignored.
+
 `slack_file_download` exposes the same provider-authenticated path for a file
 ID. Because those reads carry the bot credential, they are confined to Slack's
 documented private-file host `files.slack.com`: another scheme, an embedded
@@ -118,8 +143,11 @@ Outbound `slack_file_upload` copies immutable bytes into the skill state
 directory at enqueue, then the companion runs Slack's current three-phase
 External Upload API (`files.getUploadURLExternal`, raw bytes POST,
 `files.completeUploadExternal`). A lost response after bytes or completion is
-recorded as `uncertain`; the bridge never claims a provider-side exactly-once
-mutation.
+recorded as `uncertain` and the upload is not started again; a completion
+request that never reached Slack (connection failure) retries the whole upload.
+The bridge never claims a provider-side exactly-once mutation. Each staged copy
+gets its own random file name: `request_id` stays an opaque dedupe key, and a retry
+with the same ID keeps the first copy's bytes.
 
 `slack_list_conversations` and `slack_list_users` remain one-page low-level tools:
 follow `next_cursor` yourself and treat `complete=false` as incomplete.
@@ -232,7 +260,11 @@ source of [`message_changed`](https://docs.slack.dev/reference/events/message/me
 This snapshot comparison does not recover an original message missed while
 disconnected: an unchanged revision remains ignored even if it arrives first.
 History reads remain explicit; the bridge does not backfill old messages.
-Deletes preserve the deleted timestamp and previous message facts.
+A delete's `message_id` is the deleted message (`deleted_ts`, else
+`previous_message.ts`) and its `thread_id` is that message's original thread;
+the deletion's own timestamp stays its `event_ts`, and `deleted_ts` and the
+previous message remain provider facts. Deletes already queued by an earlier
+version keep the identity they were stored with.
 `reaction_added` and `reaction_removed` preserve the reacted message ID,
 reaction name and actor. Blocks-only messages are accepted when `blocks` carry
 content even if Slack's `text` field is empty. Other bot/app events remain
@@ -302,7 +334,10 @@ An absent settings file simply means "not configured yet". A settings file that
 exists but cannot be read, is not JSON, or is not a JSON object is reported as
 `binding_state: "unreadable"` with `local_settings_error` in the status route,
 the companion refuses to start on it, and saving settings returns HTTP 409
-without overwriting the bytes nobody could parse.
+without overwriting the bytes nobody could parse. Opening the settings form
+reads the saved Binding ID and worker counts back without writing anything, so
+changing one field keeps the others; an unreadable file answers that read with
+409 as well, which disables Save.
 
 Delivery is durable and retries are bounded. A network interruption after Slack
 accepts a send but before the receipt is stored can still cause a repeated send;

@@ -12,6 +12,7 @@ from urllib.parse import quote, urlsplit
 
 import httpx
 
+from .events import DECLARED_FILE_KEYS, file_facts
 from .store import InboxItem
 from .provider_context import enrich_event
 
@@ -165,6 +166,56 @@ def _is_loopback_url(url: str) -> bool:
         return False
 
 
+def _staged_path(record: Mapping[str, Any]) -> str:
+    """The one predicate for bytes the bridge staged and submits to Host.
+
+    A nonblank path is the name the bridge wrote and is kept byte-for-byte;
+    whitespace only decides whether there is a path at all.
+    """
+    path = str(record.get("path") or "")
+    return path if path.strip() else ""
+
+
+def _attachments(item: InboxItem) -> list[dict[str, Any]]:
+    """Describe every declared file and what this bridge's staging observed.
+
+    ``content_available`` means the bridge staged bytes; the Host attachment
+    manifest remains authoritative for what the model can actually open.
+    """
+    attachments = []
+    for index, file in enumerate(item.files):
+        outcome = item.staged_files[index] if index < len(item.staged_files) else {}
+        path = _staged_path(outcome)
+        entry = {
+            "file_id": str(file.get("file_id") or ""),
+            "file_name": str(file.get("name") or ""),
+            "mime_type": str(file.get("mimetype") or ""),
+            "file_size": int(file.get("size") or 0),
+            **{key: value for key, value in file_facts(file).items() if key not in DECLARED_FILE_KEYS},
+            "content_available": bool(path),
+        }
+        if path:
+            # The staged basename; Host derives its attachment label from it
+            # and may shorten or normalize that label.
+            entry["staged_as"] = os.path.basename(path)
+        if outcome.get("stage_error"):
+            entry["stage_error"] = str(outcome["stage_error"])
+            details = outcome.get("stage_error_details")
+            entry["stage_error_details"] = dict(details) if isinstance(details, Mapping) else {}
+        attachments.append(entry)
+    return attachments
+
+
+def _provider_facts(structured: Mapping[str, Any]) -> dict[str, Any]:
+    """Keep edit/delete provenance while projecting its known file leaves."""
+    facts = dict(structured)
+    for key in ("message", "previous_message"):
+        carrier = facts.get(key)
+        if isinstance(carrier, Mapping) and isinstance(carrier.get("files"), list):
+            facts[key] = {**carrier, "files": [file_facts(file) for file in carrier["files"]]}
+    return facts
+
+
 def slack_presence_event(item: InboxItem) -> dict[str, Any]:
     """Map exact Slack facts into the frozen provider-neutral event shape."""
 
@@ -198,17 +249,9 @@ def slack_presence_event(item: InboxItem) -> dict[str, Any]:
             "client_msg_id": item.client_msg_id,
             "event_type": item.event_type,
             "subtype": item.subtype,
-            "attachments": [
-                {
-                    "file_id": str(file.get("file_id") or ""),
-                    "file_name": str(file.get("name") or ""),
-                    "mime_type": str(file.get("mimetype") or ""),
-                    "file_size": int(file.get("size") or 0),
-                }
-                for file in item.files
-            ],
+            "attachments": _attachments(item),
             "blocks": list(item.structured.get("blocks") or []),
-            "provider_facts": dict(item.structured),
+            "provider_facts": _provider_facts(item.structured),
         },
         "text": item.text,
     }
@@ -383,9 +426,7 @@ class LoopbackPresenceHostAdapter:
                 "binding_id": self.binding_id,
                 "event": slack_presence_event(event),
                 "staged_files": [
-                    str(file.get("path") or "")
-                    for file in event.staged_files
-                    if str(file.get("path") or "").strip()
+                    _staged_path(file) for file in event.staged_files if _staged_path(file)
                 ],
                 **({"delivery_reporting_version": 1} if mode else {}),
             },

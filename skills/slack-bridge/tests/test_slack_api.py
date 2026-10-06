@@ -176,6 +176,8 @@ def test_dedicated_bookmark_declares_slack_link_type():
         ("https:///files-pri/T/F/x.txt", "invalid_private_file_url"),
         # urlsplit reads "files.slack.com" here as userinfo; the real host is evil.example.
         ("https://files.slack.com@evil.example/files-pri/T/F/x.txt", "invalid_private_file_url"),
+        # urlsplit admits the control character; httpx cannot build the request.
+        ("https://files.slack.com/files-pri/T/F/x\x01.txt", "invalid_private_file_url"),
         ("https://files.slack.com.evil.example/files-pri/T/F/x.txt", "private_file_host_not_allowed"),
         ("https://evil-files.slack.com.br/files-pri/T/F/x.txt", "private_file_host_not_allowed"),
         ("https://203.0.113.10/files-pri/T/F/x.txt", "private_file_host_not_allowed"),
@@ -202,7 +204,35 @@ def test_bot_credential_never_leaves_the_documented_slack_file_host(tmp_path, ur
         assert refusal.value.error == code
         # The refusal happens before any request, so no origin ever saw the token.
         assert requests == []
-        assert list((tmp_path / "staged").iterdir()) == []
+        # Nothing is written; the directory itself is created only for bytes.
+        assert list((tmp_path / "staged").glob("*")) == []
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("declared", [{}, {"url_private": ""}, {"url_private": "  "}])
+def test_absent_private_url_keeps_each_staging_mode_error_code(tmp_path, declared):
+    async def run():
+        requests = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            return httpx.Response(200, content=b"never reached")
+
+        item = {"file_id": "F1", "name": "x.txt", "size": 4, **declared}
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+            slack = SlackClient("xoxb-secret", "xapp-secret", http_client=http)
+            # The strict tool contract predates inbound outcomes: an absent URL
+            # is still the same invalid URL refusal callers already match on.
+            with pytest.raises(SlackApiError) as refusal:
+                await slack.stage_private_files([item], destination=tmp_path / "strict")
+            (outcome,) = await slack.stage_inbound_files(
+                [item], destination=tmp_path / "inbound"
+            )
+        assert refusal.value.error == "invalid_private_file_url"
+        assert outcome["path"] == ""
+        assert outcome["stage_error"] == "missing_private_file_url"
+        assert requests == []
 
     asyncio.run(run())
 
@@ -236,7 +266,8 @@ def test_private_file_redirect_is_refused_and_never_replays_the_credential(tmp_p
         # bot token was never re-sent anywhere.
         assert seen == [("files.slack.com", "Bearer xoxb-secret")]
         assert not any(host != "files.slack.com" for host, _auth in seen)
-        assert list((tmp_path / "staged").iterdir()) == []
+        # Nothing is written; the directory itself is created only for bytes.
+        assert list((tmp_path / "staged").glob("*")) == []
 
     asyncio.run(run())
 
