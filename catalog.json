@@ -1,8 +1,8 @@
 {
-  "description": "Official Ouroboros skills catalog.",
-  "name": "OuroborosHub",
-  "raw_base_url": "https://raw.githubusercontent.com/razzant/OuroborosHub/main",
   "schema_version": 1,
+  "name": "OuroborosHub",
+  "description": "Official Ouroboros skills catalog.",
+  "raw_base_url": "https://raw.githubusercontent.com/razzant/OuroborosHub/main",
   "skills": [
     {
       "description": "Геоданные 2ГИС: поиск мест и организаций, геокодирование адресов и обратное геокодирование координат, построение маршрутов (авто, пешком, вело, самокат, мото, грузовик, такси), расчёт изохрон (зоны достижимости), создание статической карты PNG с маркерами, линиями и полигонами и кликабельные ссылки на интерактивную карту 2ГИС. Требует API-ключ 2ГИС.",
@@ -1324,8 +1324,8 @@
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "827ef7296159f1bd33cdbcd1bd8fe9bde1941a40cfaf529f2c3b8b8abe4a4198",
-          "size": 22167
+          "sha256": "64835b7ad2b97970c58dbc46add985c925dd022f6ee30c4c1157e2b416651410",
+          "size": 24626
         },
         {
           "path": "lib/__init__.py",
@@ -1339,13 +1339,13 @@
         },
         {
           "path": "lib/events.py",
-          "sha256": "646063b74ff4ee2a79ef34174325edb7524c920c8c7049959c5c23515b044b91",
-          "size": 9973
+          "sha256": "a7ced552b638010e9ebeac577a0dfdf5ca872fd0e13764039913917731ed78e6",
+          "size": 12214
         },
         {
           "path": "lib/host_adapter.py",
-          "sha256": "28b9d54901aaab4c2d5ef518f38a8152159da638f7decfb9513d64c66df709d0",
-          "size": 19839
+          "sha256": "5079ae490d2a718908cca36a71f7db24e9c02037eb8dcc77827b13cd36dcfef2",
+          "size": 21722
         },
         {
           "path": "lib/local_settings.py",
@@ -1364,13 +1364,13 @@
         },
         {
           "path": "lib/runtime.py",
-          "sha256": "8537581708099560936c2852313a70d50118fb9a9431675d69de1dd35f9a92be",
-          "size": 24013
+          "sha256": "2ced737e7c8f6cde01e5228506029700699bfae7260d491ec0ab0013e5e8ab22",
+          "size": 24197
         },
         {
           "path": "lib/slack_api.py",
-          "sha256": "c8cd398d20c674aed48684ef2edbb36ef1d734d912a308a080a6f217f9462889",
-          "size": 30720
+          "sha256": "d6892d37eedccf38b5e06886fecdaf946374cc0654992e360f1b8d8dd789ae63",
+          "size": 34918
         },
         {
           "path": "lib/socket_mode.py",
@@ -1394,8 +1394,8 @@
         },
         {
           "path": "plugin.py",
-          "sha256": "5a4d0dbd54d34d9efe660afdbc6d0fbf22b257299ac407500fefb22bb73330db",
-          "size": 28272
+          "sha256": "2c4abaa52d5d975926b8d23092432ab42c7256da719bf5a19a8c8a70996bae55",
+          "size": 29047
         },
         {
           "path": "scripts/slack_daemon.py",
@@ -1433,6 +1433,16 @@
           "size": 12590
         },
         {
+          "path": "tests/test_inbound_files.py",
+          "sha256": "92bb846d7d52bc3735269bcaeb9fb3bccfdc5d7d533dc11a9fa3f88be25499c0",
+          "size": 29022
+        },
+        {
+          "path": "tests/test_message_deletion.py",
+          "sha256": "e1b98a6487d119d9deb5881d7890294c29a7ec7ed1eee9f60fc0eb62374d7ca4",
+          "size": 7019
+        },
+        {
           "path": "tests/test_message_format.py",
           "sha256": "d2febd8ef33de8dbc40b47b555b378ebef9940bb114768c78154699da006f4ae",
           "size": 5110
@@ -1454,8 +1464,8 @@
         },
         {
           "path": "tests/test_slack_api.py",
-          "sha256": "e6d98b3234340077d44ad3759ad541bc2bd41345bec284a87bb2de26240a4160",
-          "size": 12681
+          "sha256": "bf1336fa0ab4e23c6b535b2b78bac5e2e733eb3960880386d36e74199b98d166",
+          "size": 14287
         },
         {
           "path": "tests/test_socket_mode.py",
@@ -1468,15 +1478,20 @@
           "size": 4668
         },
         {
+          "path": "tests/test_upload_completion.py",
+          "sha256": "40e2496ffdb6dde6bfddd52380ebb04f1910c0778e5250a1e825f9915569d14f",
+          "size": 5676
+        },
+        {
           "path": "tests/test_workers_plugin.py",
-          "sha256": "ae9410eac1c85c1d09b5051b176c039c425f8aeb53249c279fee6d5069b719de",
-          "size": 32389
+          "sha256": "7b7085e66d872adb41dcfd5f48fdf6493b0c81ddbb76a67423af70e0e9b0d70a",
+          "size": 41922
         }
       ],
       "name": "slack-bridge",
       "slug": "slack-bridge",
       "type": "extension",
-      "version": "1.4.3"
+      "version": "1.4.4"
     },
     {
       "description": "Inspect, filter, sort, group, and aggregate CSV and XLSX tables while reporting truncation and non-numeric values honestly.",
