@@ -4,7 +4,8 @@ The Python cases cover projection and actual registered handlers. A bundled-Node
 in-process harness executes widget.js itself (without a browser framework) for:
 - Per-facet provenance and notes (ok, not_read, failed, indeterminate, missing reads).
 - Timestamp and future-detection handling.
-- Constraint views, ratio clamping, and NaN handling.
+- Constraint views: out-of-range and NaN ratios refused (never clamped), unrounded
+  percents with display-only rounding, and the at-limit verdict.
 - Quota projection: fresh, stale, no-data, degraded facet, global exhaustion vs per-model caps.
 - Verification view tones and "last known" degradation.
 - Account and group structuring (native vs profile, next_up resolution, harness ordering).
@@ -41,6 +42,7 @@ from plugin import (
     _is_future,
     _constraint_view,
     _spent,
+    _used_text,
     quota_for,
     verification_view,
     build_groups,
@@ -138,36 +140,67 @@ class TestConstraintView:
         }
         view = _constraint_view(c)
         assert view["label"] == "5-hour window"
-        assert view["used_pct"] == 46
+        # The unrounded percent for bars and tones; the words round for the eye.
+        assert view["used_pct"] == 45.6
+        assert view["used_text"] == "45.6"
+        assert view["at_limit"] is False and view["ratio_problem"] == ""
         assert view["window_seconds"] == 18000
         assert view["scoped_models"] == ["claude-3-opus"]
 
-    def test_ratio_clamping(self):
-        assert _constraint_view({"used_ratio": 1.5})["used_pct"] == 100
-        assert _constraint_view({"used_ratio": -0.2})["used_pct"] == 0
+    def test_out_of_range_ratio_is_refused_never_clamped(self):
+        # The reserve refuses these (quota_summary.ratio_of); the account view
+        # used to clamp 1.5 into a "100%" nobody reported.
+        for bad, problem in ((1.5, "out_of_range"), (-0.2, "out_of_range"), ("0.5", "not_a_number"),
+                             (True, "not_a_number")):
+            view = _constraint_view({"used_ratio": bad}, at_limit=True)
+            assert view["used_pct"] is None and view["used_text"] is None, bad
+            assert view["ratio_problem"] == problem and view["at_limit"] is False, bad
 
     def test_missing_or_nan_ratio(self):
         assert _constraint_view({"used_ratio": None})["used_pct"] is None
+        assert _constraint_view({"used_ratio": None})["ratio_problem"] == ""
         assert _constraint_view({"used_ratio": float("nan")})["used_pct"] is None
+        assert _constraint_view({"used_ratio": float("nan")})["ratio_problem"] == "not_finite"
         assert _constraint_view({})["used_pct"] is None
+
+    @pytest.mark.parametrize(("ratio", "text"), [
+        (0.996, "99.6"), (1.0, "100"), (1 - 5e-10, "100"), (0.9999999, "<100"), (0.9996, "<100"),
+        (0.57, "57"), (0.0, "0"), (1e-9, ">0"), (0.0004, ">0"),
+        (0.456, "45.6"), (0.4, "40"), (0.004, "0.4"),
+    ])
+    def test_display_rounding_never_reads_as_full_or_empty(self, ratio, text):
+        assert _used_text(ratio) == text
+
+    def test_a_full_last_known_reading_still_reads_full_without_a_verdict(self):
+        # Stale or not current: the known fact is printed as reported, and
+        # carries no spent verdict (the caller gives none).
+        view = _constraint_view({"used_ratio": 1.0})
+        assert view["used_text"] == "100" and view["at_limit"] is False
 
 
 class TestSpentLogic:
-    def test_spent_when_used_pct_100_or_more(self):
-        assert _spent({"used_pct": 100, "cooldown_until": ""}) is True
-        assert _spent({"used_pct": 105, "cooldown_until": ""}) is True
-        assert _spent({"used_pct": 99, "cooldown_until": ""}) is False
+    def test_spent_only_on_the_at_limit_verdict_not_a_rounded_percent(self):
+        assert _spent({"used_pct": 100.0, "at_limit": True, "cooldown_until": ""}) is True
+        # 99.6% used rounds to "100" on a whole-percent screen; it is not spent.
+        assert _spent({"used_pct": 99.6, "at_limit": False, "cooldown_until": ""}) is False
+        assert _spent({"used_pct": 100, "cooldown_until": ""}) is False
 
-    def test_spent_when_cooldown_active(self):
+    def test_a_live_cooldown_is_not_a_spent_share(self):
+        # 0.6.1 account closure: a cooldown is carried as a cooldown of its
+        # own (quota["cooldowns"]), never as a window at its limit.
         future = (dt.datetime.now(dt.timezone.utc) + dt.timedelta(minutes=30)).isoformat()
-        assert _spent({"used_pct": 10, "cooldown_until": future}) is True
+        assert _spent({"used_pct": 10, "cooldown_until": future}) is False
 
     def test_not_spent_when_cooldown_in_past(self):
         past = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(minutes=30)).isoformat()
         assert _spent({"used_pct": 50, "cooldown_until": past}) is False
 
-    def test_spent_when_cooldown_unparseable(self):
-        assert _spent({"used_pct": 20, "cooldown_until": "corrupt-date"}) is True
+    def test_an_unparseable_cooldown_is_not_a_spent_share(self):
+        assert _spent({"used_pct": 20, "cooldown_until": "corrupt-date"}) is False
+
+
+AUG_NOW = dt.datetime(2026, 8, 15, 12, 0, tzinfo=dt.timezone.utc).timestamp()
+AUG_OBSERVED = "2026-08-15T11:59:00Z"
 
 
 class TestQuotaFor:
@@ -205,6 +238,7 @@ class TestQuotaFor:
             {
                 "subject": {"harness": "claude", "subject_id": ""},
                 "freshness": "fresh",
+                "observed_at": AUG_OBSERVED,
                 "availability": {"state": "available"},
                 "constraints": [
                     {
@@ -222,7 +256,7 @@ class TestQuotaFor:
                 ],
             }
         ]
-        res = quota_for(snapshots, "claude", "", READ_OK)
+        res = quota_for(snapshots, "claude", "", READ_OK, now=AUG_NOW)
         assert res["state"] == "ok"
         assert "70% used" in res["label"]
         assert res["resets_at"] == "2026-08-16T00:00:00Z"
@@ -233,6 +267,7 @@ class TestQuotaFor:
             {
                 "subject": {"harness": "claude", "subject_id": "p1"},
                 "freshness": "fresh",
+                "observed_at": AUG_OBSERVED,
                 "constraints": [
                     {
                         "label": "5-Hour",
@@ -243,7 +278,7 @@ class TestQuotaFor:
                 ],
             }
         ]
-        res = quota_for(snapshots, "claude", "p1", READ_OK)
+        res = quota_for(snapshots, "claude", "p1", READ_OK, now=AUG_NOW)
         assert res["state"] == "exhausted"
         assert res["label"] == "Limit reached"
         assert res["resets_at"] == "2026-08-15T23:00:00Z"
@@ -253,6 +288,7 @@ class TestQuotaFor:
             {
                 "subject": {"harness": "claude", "subject_id": "p1"},
                 "freshness": "fresh",
+                "observed_at": AUG_OBSERVED,
                 "constraints": [
                     {
                         "label": "Opus Cap",
@@ -269,7 +305,7 @@ class TestQuotaFor:
                 ],
             }
         ]
-        res = quota_for(snapshots, "claude", "p1", READ_OK)
+        res = quota_for(snapshots, "claude", "p1", READ_OK, now=AUG_NOW)
         assert res["state"] == "ok"
         assert "40% used" in res["label"]
         assert "per-model caps spent: Opus Cap" in res["note"]
@@ -279,16 +315,18 @@ class TestQuotaFor:
             {
                 "subject": {"harness": "claude", "subject_id": None},
                 "freshness": "fresh",
+                "observed_at": AUG_OBSERVED,
                 "constraints": [{"label": "Native", "used_ratio": 0.99}],
             },
             {
                 "subject": {"harness": "claude", "subject_id": "profile_1"},
                 "freshness": "fresh",
+                "observed_at": AUG_OBSERVED,
                 "constraints": [{"label": "Profile", "used_ratio": 0.10}],
             },
         ]
-        native_res = quota_for(snapshots, "claude", "", READ_OK)
-        profile_res = quota_for(snapshots, "claude", "profile_1", READ_OK)
+        native_res = quota_for(snapshots, "claude", "", READ_OK, now=AUG_NOW)
+        profile_res = quota_for(snapshots, "claude", "profile_1", READ_OK, now=AUG_NOW)
         assert native_res["constraints"][0]["label"] == "Native"
         assert profile_res["constraints"][0]["label"] == "Profile"
 
@@ -348,7 +386,10 @@ class TestQuotaFor:
             }],
             [{"vendor": "claude", "not_before": "2099-09-01T08:05:00+00:00"}],
         )
-        assert result["state"] == "no_fresh_window"
+        # 0.6.1 account closure: the stale reading's live cooldown holds the
+        # account, as it does in the reserve's "cooling" restriction.
+        assert (result["state"], result["label"]) == ("cooling", "Cooling down")
+        assert [(c["freshness"], c["until"]) for c in result["cooldowns"]] == [("stale", "2099-09-01T09:00:00Z")]
         assert result["stale"][0]["constraints"][0]["used_pct"] == 83
         assert result["absence"]["action_kind"] == "retry"
         assert result["absence"]["retry_at"] == "2099-09-01T08:05:00+00:00"
@@ -407,6 +448,99 @@ class TestQuotaFor:
         )
         assert result["absence"]["action_kind"] == "sign_in_if_unverified"
         assert result["absence"]["retry_at"] == ""
+
+
+def _fresh(sid, constraints, *, source="claude_oauth_usage", observed="2026-08-15T11:59:00Z"):
+    row = {"subject": {"harness": "claude", "subject_id": sid}, "freshness": "fresh",
+           "source": source, "constraints": constraints}
+    if observed is not None:
+        row["observed_at"] = observed
+    return row
+
+
+def _window(ratio, reset="2026-08-15T16:00:00Z", **extra):
+    return dict({"id": "five_hour", "label": "5 hour", "used_ratio": ratio,
+                 "window_seconds": 18000, "resets_at": reset}, **extra)
+
+
+class TestAccountViewUsesTheReserveRules:
+    """The account view draws a current window only for the reading the
+    reserve overview counts (quota_summary.reading_of / resolve_member):
+    the same validity, the same reset rule, the same source policy. Rounding
+    is for display; the spent verdict is taken on the unrounded share."""
+
+    def test_nearly_full_is_not_the_limit(self):
+        res = quota_for([_fresh("p", [_window(0.996)])], "claude", "p", READ_OK, now=AUG_NOW)
+        assert res["state"] == "ok" and res["label"] == "99.6% used"
+        view = res["constraints"][0]
+        assert view["used_text"] == "99.6" and view["at_limit"] is False
+        assert view["used_pct"] == pytest.approx(99.6)
+
+    def test_exactly_full_is_the_limit(self):
+        res = quota_for([_fresh("p", [_window(1.0)])], "claude", "p", READ_OK, now=AUG_NOW)
+        assert res["state"] == "exhausted" and res["label"] == "Limit reached"
+        assert res["constraints"][0]["at_limit"] is True and res["constraints"][0]["used_text"] == "100"
+
+    @pytest.mark.parametrize(("constraint", "observed", "why"), [
+        (_window(1.4), "2026-08-15T11:59:00Z", "ratio outside 0–100%"),
+        (_window("0.4"), "2026-08-15T11:59:00Z", "ratio not a number"),
+        (_window(0.3, reset="2026-08-15T11:00:00Z"), "2026-08-15T10:59:00Z", "its reported reset has passed"),
+        (_window(0.3), None, "no observation time"),
+        (_window(0.3), "2026-08-15T13:00:00Z", "observed in the future"),
+    ])
+    def test_a_reading_the_reserve_refuses_is_not_current(self, constraint, observed, why):
+        res = quota_for([_fresh("p", [constraint], observed=observed)], "claude", "p", READ_OK, now=AUG_NOW)
+        assert res["state"] == "not_current" and res["label"] == "No current reading — " + why
+        assert res["constraints"] == []  # no current bar, no spent verdict
+        assert "Limit reached" not in json.dumps(res)
+        aside = res["stale"][0]
+        assert aside["why"] == why and aside["freshness"] == "fresh"
+        # The known fact stays in view, as it was reported (never clamped).
+        view = aside["constraints"][0]
+        assert view["at_limit"] is False
+        if constraint["used_ratio"] == 1.4:
+            assert view["used_pct"] is None and view["ratio_problem"] == "out_of_range"
+        elif isinstance(constraint["used_ratio"], float):
+            assert view["used_pct"] == pytest.approx(30.0)
+
+    def test_sources_that_disagree_at_one_moment_draw_no_current_bar(self):
+        rows = [_fresh("p", [_window(0.2)], source="a"), _fresh("p", [_window(0.5)], source="b")]
+        res = quota_for(rows, "claude", "p", READ_OK, now=AUG_NOW)
+        assert res["state"] == "not_current" and res["label"] == "No current reading — its sources disagree"
+        assert res["constraints"] == []
+        assert sorted(v["used_pct"] for e in res["stale"] for v in e["constraints"]) == [20.0, 50.0]
+
+    def test_two_sources_of_one_limit_are_one_window_the_newest(self):
+        rows = [_fresh("p", [_window(0.2)], source="a", observed="2026-08-15T11:50:00Z"),
+                _fresh("p", [dict(_window(0.3), id="claude:five_hour")], source="b")]
+        res = quota_for(rows, "claude", "p", READ_OK, now=AUG_NOW)
+        assert res["state"] == "ok" and res["label"] == "30% used"
+        assert len(res["constraints"]) == 1 and res["stale"] == []
+
+    def test_a_window_with_no_ratio_stays_a_window_without_a_bar(self):
+        res = quota_for([_fresh("p", [_window(None), {"id": "reset_credits", "label": "1 reset credit"}])],
+                        "claude", "p", READ_OK, now=AUG_NOW)
+        assert res["state"] == "no_data"
+        assert [v["label"] for v in res["constraints"]] == ["5 hour", "1 reset credit"]
+        assert all(v["used_pct"] is None and v["ratio_problem"] == "" for v in res["constraints"])
+
+    def test_a_live_cooldown_still_counts_where_the_share_does_not(self):
+        future = (dt.datetime.fromtimestamp(AUG_NOW, dt.timezone.utc) + dt.timedelta(days=400)).isoformat()
+        res = quota_for([_fresh("p", [_window(1.4, cooldown_until=future)])], "claude", "p", READ_OK,
+                        now=AUG_NOW)
+        # The cooldown is its own reported fact with its own time; the share
+        # beside it is refused and never read as full. It is "Cooling down"
+        # until its end — not "Limit reached", and its end is not a reset.
+        assert (res["state"], res["label"], res["resets_at"]) == ("cooling", "Cooling down", "")
+        assert res["cooling_until"] == plugin.qs.iso(plugin.qs.parse_instant(future))
+        assert [(c["scope"], c["until_note"]) for c in res["cooldowns"]] == [("account", "")]
+        assert "Limit reached" not in json.dumps(res)
+        assert res["constraints"] == [] and res["stale"][0]["constraints"][0]["used_pct"] is None
+
+    def test_a_healthy_neighbour_is_unaffected(self):
+        rows = [_fresh("bad", [_window(1.4)]), _fresh("ok", [_window(0.3)])]
+        assert quota_for(rows, "claude", "ok", READ_OK, now=AUG_NOW)["label"] == "30% used"
+        assert quota_for(rows, "claude", "bad", READ_OK, now=AUG_NOW)["state"] == "not_current"
 
 
 class TestVerificationView:
@@ -475,6 +609,7 @@ class TestBuildGroupsAndView:
                 {
                     "subject": {"harness": "claude", "subject_id": None},
                     "freshness": "fresh",
+                    "observed_at": "2026-09-01T08:00:00Z",
                     "constraints": [{"label": "Session", "used_ratio": 0.2}],
                 }
             ],
@@ -626,19 +761,44 @@ def test_foreground_update_rejects_malformed_success_envelope():
 
 
 class _MockAPI:
-    def __init__(self):
+    """A MOCKED host: it records registrations the way a worker process does
+    and never starts a supervised task. The real host lifecycle (publication,
+    cancellation on disable/unload) is exercised by the parent's live checks."""
+
+    def __init__(self, state_dir=None):
         self.routes = {}
         self.tabs = {}
+        self.tools = {}
+        self.tasks = []
+        self.unload = []
         self.logs = []
+        self._state_dir = state_dir
 
     def get_runtime_info(self):
         return {"server_port": 8765}
+
+    def get_state_dir(self):
+        if self._state_dir is None:
+            raise RuntimeError("no state dir in this mock")
+        return str(self._state_dir)
 
     def register_route(self, name, handler, methods=("GET",)):
         self.routes[name] = {"handler": handler, "methods": methods}
 
     def register_ui_tab(self, tab_id, title, icon=None, render=None):
         self.tabs[tab_id] = {"title": title, "icon": icon, "render": render}
+
+    def register_tool(self, name, handler, *, description, schema, timeout_sec=60):
+        self.tools[name] = {"handler": handler, "description": description,
+                            "schema": schema, "timeout_sec": timeout_sec}
+
+    def register_supervised_task(self, name, factory, *, restart_policy="on_failure",
+                                 max_restarts=5, backoff_seconds=2.0):
+        self.tasks.append({"name": name, "factory": factory, "restart_policy": restart_policy,
+                           "max_restarts": max_restarts, "backoff_seconds": backoff_seconds})
+
+    def on_unload(self, callback):
+        self.unload.append(callback)
 
     def log(self, level, message):
         self.logs.append((level, message))
@@ -868,6 +1028,9 @@ async function boot(view, postValue) {
     clearInterval(id) { if (id === 17) intervalCleared = true; },
     addEventListener(name, handler) { (windowListeners[name] ||= []).push(handler); },
     setTimeout: (callback, ms) => setTimeout(callback, ms),
+    // 0.7.0: the widget bounds every request with a backstop timer and
+    // clears it when the request settles.
+    clearTimeout: (id) => clearTimeout(id),
     __ouroWidgetOnDispose(fn) { disposeHooks.push(fn); },
   };
   const context = vm.createContext({
@@ -971,7 +1134,9 @@ function view(accounts) {
   assert.match(env.root.textContent, /cooldown/);
   assert.match(env.root.textContent, /cooldown evidence may still deny or rank/);
   assert.ok(classes(env.root, 'quota-tile').some((node) => String(node.className).includes('stale')));
-  assert.equal(walk(env.root).filter((node) => String(node.className).includes('progress-fill bad')).length, 0);
+  // Last known claims neither the limit nor the cooldown: a muted bar, never red or amber.
+  assert.equal(walk(env.root).filter((node) => /\bmeter\b.*\b(spent|restricted)\b/.test(String(node.className))).length, 0);
+  assert.ok(walk(env.root).some((node) => /\bmeter\b.*\bstale\b/.test(String(node.className))));
   assert.doesNotMatch(env.root.textContent, /Limit reached/);
 
   // Fresh exhaustion remains the distinct red state.
@@ -980,7 +1145,10 @@ function view(accounts) {
     constraints: [Object.assign({}, staleConstraint, { cooldown_until: '' })], stale: [],
   }))]));
   assert.match(env.root.textContent, /Limit reached/);
-  assert.ok(walk(env.root).some((node) => String(node.className).includes('progress-fill bad')));
+  // At the limit: no fill, only the red base — the reserve's own mark.
+  const spentBars = walk(env.root).filter((node) => /\bmeter\b.*\bspent\b/.test(String(node.className)));
+  assert.ok(spentBars.length);
+  spentBars.forEach((b) => assert.equal(b.childNodes.length, 0));
 
   // Approved absence actions only, with raw diagnostics excluded from text, ARIA, and titles.
   for (const item of [
@@ -1072,7 +1240,9 @@ function view(accounts) {
   assert.equal(mergedDirect.groups[0].accounts[0].quota.label, '10% used');
   assert.equal(mergedDirect.groups[0].accounts[1].quota.label, '91% used');
   const PREFIX = process.env.WIDGET_ROUTE_PREFIX;
-  assert.deepEqual(env.calls, [{ url: PREFIX + 'quotas', method: 'GET' }]);
+  assert.equal(env.calls.length, 1);
+  assert.equal(env.calls[0].method, 'GET');
+  assert.ok(env.calls[0].url.startsWith(PREFIX + 'quotas?'), env.calls[0].url);
   env.interval()();
   await settle();
   assert.equal(env.calls[1].method, 'GET');
@@ -1161,7 +1331,7 @@ function view(accounts) {
   // Every tone the mark can carry has a colour rule of its own; an unpainted
   // pip would be an invisible answer.
   ['ok', 'warn', 'bad', 'muted'].forEach((tone) => {
-    assert.ok(widgetSource.includes(`'.pip.${tone}{`), `.pip.${tone} has no colour`);
+    assert.match(widgetSource, new RegExp(`\\.pip\\.${tone}[^{}]*\\{background:`), `.pip.${tone} has no colour`);
   });
 
   // A redraw arriving under the reader's hand must not throw them back to the
@@ -1219,7 +1389,7 @@ function view(accounts) {
   const tilesOf = (e) => classes(e.root, 'quota-tile').map((node) => node.title);
   const linesOf = (e) => classes(e.root, 'acct-rl').map((node) => node.textContent);
   env = await openedWith(['spark-week', 'codex-week', 'spark-5h']);
-  assert.deepEqual(groupsOf(env), ['codexweek100%', 'GPT-5.3-Codex-Spark5 hours0%week0%']);
+  assert.deepEqual(groupsOf(env), ['codexweek100% used', 'GPT-5.3-Codex-Spark5 hours0% usedweek0% used']);
   assert.deepEqual(tilesOf(env), ['codex primary', 'GPT-5.3-Codex-Spark primary', 'GPT-5.3-Codex-Spark secondary']);
   // The line under the bars names the pool beside the length, so two "week"
   // lines cannot read as one window twice; the old "windows:" footnote is gone.
@@ -1243,7 +1413,7 @@ function view(accounts) {
     cooldown_until: '', scoped_models: [], window_seconds: 18000 };
   CODEX['Codex-week'] = { id: 'Cw', label: 'Codex secondary', used_pct: 0, resets_at: '',
     cooldown_until: '', scoped_models: [], window_seconds: 604800 };
-  const spelled = ['Codex5 hours0%week0%', 'codex5 hours0%week100%'];
+  const spelled = ['Codex5 hours0% usedweek0% used', 'codex5 hours0% usedweek100% used'];
   env = await openedWith(['codex-week', 'Codex-5h', 'codex-5h', 'Codex-week']);
   assert.deepEqual(groupsOf(env), spelled);
   env = await openedWith(['Codex-week', 'codex-5h', 'Codex-5h', 'codex-week']);
@@ -1254,7 +1424,7 @@ function view(accounts) {
   CODEX['codex-week-2'] = { id: 'cw2', label: 'codex secondary', used_pct: 0, resets_at: '',
     cooldown_until: '', scoped_models: [], window_seconds: 604800 };
   env = await openedWith(['codex-week-2', 'codex-week']);
-  assert.deepEqual(groupsOf(env), ['codexweek primary100%week secondary0%']);
+  assert.deepEqual(groupsOf(env), ['codexweek primary100% usedweek secondary0% used']);
   assert.equal(linesOf(env).length, 2);
   assert.match(linesOf(env)[0], /^week primarycodexspent/);
   assert.equal(linesOf(env)[1], 'week secondarycodex0% usedavailable');
@@ -1268,24 +1438,48 @@ function view(accounts) {
     { id: 'h', label: '5 hour', used_pct: 20, resets_at: '', cooldown_until: '', scoped_models: [], window_seconds: 18000 },
   ] }))]));
   byFocus(env.root, 'account-btn').listeners.click[0]({ stopPropagation() {} });
-  assert.deepEqual(groupsOf(env), ['5 hours20%week40%', 'Fableweek100%']);
+  assert.deepEqual(groupsOf(env), ['5 hours20% usedweek40% used', 'Fableweek100% used']);
   assert.deepEqual(tilesOf(env), ['5 hour', '7 day', '7 day (Fable)']);
 
-  // One word for "spent": a model window cooling until a date the widget
-  // cannot read is spent everywhere at once — the tile's chip, the pool's chip
-  // in the row, the line under the bars, the family mark — the way plugin.py
-  // counts it. Each place used to ask its own way, and the card was red while
-  // the row stayed neutral.
+  // Two words and two colours, each the same everywhere at once — the tile's
+  // chip, the pool's chip in the row, the line under the bars, the family
+  // mark. A model window cooling until a date the widget cannot read is held:
+  // amber, "cooling down", its end unreadable (not a reset). Red is the
+  // measured share at its limit and nothing else. Each place used to ask its
+  // own way, and the card was red while the row stayed neutral; then the
+  // cooldown was red everywhere, as if its share were spent.
   env = await boot(view([account('p1', quota({ constraints: [
     { id: 'f', label: '7 day (Fable)', used_pct: 10, resets_at: '', cooldown_until: 'not-a-date',
       scoped_models: ['fable'], window_seconds: 604800 },
     { id: 'w', label: '7 day', used_pct: 40, resets_at: '', cooldown_until: '', scoped_models: [], window_seconds: 604800 },
   ] }))]));
   byFocus(env.root, 'account-btn').listeners.click[0]({ stopPropagation() {} });
-  assert.match(String(classes(env.root, 'tile-model')[0].className), /\bspent\b/);
-  assert.match(String(classes(env.root, 'acct-pool')[0].className), /\bexhausted\b/);
+  const toneOf = (node) => String(node.className);
+  assert.match(toneOf(classes(env.root, 'tile-model')[0]), /\bheld\b/);
+  assert.doesNotMatch(toneOf(classes(env.root, 'tile-model')[0]), /\bspent\b/);
+  assert.ok(classes(env.root, 'acct-pool').length >= 1);
+  classes(env.root, 'acct-pool').forEach((chip) => {
+    assert.match(toneOf(chip), /\bheld\b/);
+    assert.doesNotMatch(toneOf(chip), /\bexhausted\b/);
+  });
   assert.equal(pipTone(env.root), 'warn');
-  assert.deepEqual(linesOf(env), ['weekFablecooling downno reset time', 'others40% usedavailable']);
+  assert.deepEqual(linesOf(env), ['weekFablecooling downend time unreadable', 'others40% usedavailable']);
+  assert.match(toneOf(classes(env.root, 'acct-rl-tag')[0]), /\bwarn\b/);
+  assert.match(toneOf(classes(env.root, 'acct-rl-when')[0]), /\bwarn\b/);
+  assert.equal(classes(env.root, 'tile-pct').filter((n) => /\bspent\b/.test(toneOf(n))).length, 0);
+  assert.equal(classes(env.root, 'exhausted').length, 0);
+  // The same window measured at its limit is spent: red, with its reset.
+  env = await boot(view([account('p1', quota({ constraints: [
+    { id: 'f', label: '7 day (Fable)', used_pct: 100, at_limit: true, resets_at: sixDays,
+      cooldown_until: '', scoped_models: ['fable'], window_seconds: 604800 },
+    { id: 'w', label: '7 day', used_pct: 40, resets_at: '', cooldown_until: '', scoped_models: [], window_seconds: 604800 },
+  ] }))]));
+  byFocus(env.root, 'account-btn').listeners.click[0]({ stopPropagation() {} });
+  assert.match(toneOf(classes(env.root, 'tile-model')[0]), /\bspent\b/);
+  classes(env.root, 'acct-pool').forEach((chip) => assert.match(toneOf(chip), /\bexhausted\b/));
+  assert.match(linesOf(env)[0], /^weekFablespent.*in 6d$/);
+  assert.match(toneOf(classes(env.root, 'acct-rl-tag')[0]), /\bbad\b/);
+  assert.equal(classes(env.root, 'held').length, 0);
 
   // All three display choices travel in one body. The skill writes what it is
   // given, so a save that carried only the density would wipe the folds — and
@@ -1522,6 +1716,9 @@ function view(accounts) {
   env = await boot(view([account('p1', quota())]));
   assert.equal(env.disposeHooks.length, 1);
   assert.equal(env.disposeHooks[0](), undefined);
+  assert.equal(env.intervalCleared(), true);
+  // A disposed instance is terminal; a fresh mount tests a pending save.
+  env = await boot(view([account('p1', quota())]));
   byFocus(env.root, 'settings').listeners.click[0]({ stopPropagation() {} });
   byFocus(env.root, 'density:compact').listeners.click[0]({ stopPropagation() {} });
   const flushed = env.disposeHooks[0]();
