@@ -18,6 +18,10 @@ The [separate-process consumer](PRESENCE_PROCESS_CONSUMER.md) documents the
 opt-in command, its six scenarios, retained evidence and exact production versus
 synthetic boundaries. An unset core root reports SKIP, not consumer evidence.
 
+The [inbound lease boundary](INBOUND_LEASE.md) documents the finite first-poll
+budget regression, typed lease-loss containment, tests and remaining ownership
+limits.
+
 `test_presence_continuation.py` separately controls blocked author/child HTTP
 polls, promoted child plus parent tail, equal-text selection identities,
 replay/disconnect, legacy delivery, interrupted-author projection and observation

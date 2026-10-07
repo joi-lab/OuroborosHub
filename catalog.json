@@ -1364,8 +1364,8 @@
         },
         {
           "path": "lib/runtime.py",
-          "sha256": "ebd144139ca17b71faa7b6495ffc9949d552b6b14f8a5a4e162855ab133fcbcc",
-          "size": 28268
+          "sha256": "20ba6730f4ee4c90ebf02bbd5a2cd85062dc80cb542e0cc46169a56684fa4af7",
+          "size": 29239
         },
         {
           "path": "lib/slack_api.py",
@@ -1379,8 +1379,8 @@
         },
         {
           "path": "lib/store.py",
-          "sha256": "6a531ae21fb55fa14cc65416d6c108a392b15a37dd554869b19ea557affbcb9a",
-          "size": 47474
+          "sha256": "1742acab142d4e017b0a1ffd36e645520a6767014920da36a7e93bd2d09de45a",
+          "size": 48068
         },
         {
           "path": "lib/tool_results.py",
@@ -1403,14 +1403,19 @@
           "size": 4153
         },
         {
+          "path": "tests/INBOUND_LEASE.md",
+          "sha256": "63a8533393d61708de84f40aa6b5c30b18e81577463e3dd08e89dec61f1dbf09",
+          "size": 3222
+        },
+        {
           "path": "tests/PRESENCE_PROCESS_CONSUMER.md",
           "sha256": "b49cf2bfc45b9eddb2ba28ceb7f2c64ff40da4542b85461c833a06106aab7c43",
           "size": 4704
         },
         {
           "path": "tests/README.md",
-          "sha256": "7355fbf9d1cdb0deb5841c5c07f6f7a41a75baf043af92d4dbea7a267274dab5",
-          "size": 2144
+          "sha256": "8eb047f1a13c8ba549a01b19b60e59eaf4aaca48619db1cfff55ab61cfb5c9a3",
+          "size": 2311
         },
         {
           "path": "tests/conftest.py",
@@ -1451,6 +1456,16 @@
           "path": "tests/test_inbound_files.py",
           "sha256": "92bb846d7d52bc3735269bcaeb9fb3bccfdc5d7d533dc11a9fa3f88be25499c0",
           "size": 29022
+        },
+        {
+          "path": "tests/test_inbound_lease.py",
+          "sha256": "bfc7112fc639f5228eb2cace9b7366d56d2661583026bb61487bfda92efef84a",
+          "size": 15864
+        },
+        {
+          "path": "tests/test_inbound_lease_runtime.py",
+          "sha256": "c29f5c59106afca788384c64201e5ac6afa95cf4bdaa90cde7204cde96ed5e20",
+          "size": 12901
         },
         {
           "path": "tests/test_message_deletion.py",

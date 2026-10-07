@@ -13,6 +13,10 @@ from .events import ParsedEnvelope, provider_facts
 from .slack_api import normalize_text_format
 
 
+class InboxLeaseLost(RuntimeError):
+    """The inbound attempt no longer owns its row; do not write with its token."""
+
+
 @dataclass(frozen=True)
 class InboxItem:
     row_id: int
@@ -523,6 +527,12 @@ class BridgeStore:
             "inbox", row_id, lease_token, "host_reference=?", (str(reference),)
         )
 
+    def renew_inbox_lease(self, row_id: int, lease_token: str, *, lease_seconds: float) -> None:
+        """Budget the next finite phase only if this attempt still owns the row."""
+        self._leased_update(
+            "inbox", row_id, lease_token, "lease_until=?", (time.time() + lease_seconds,)
+        )
+
     def complete_inbox(self, row_id: int, lease_token: str) -> None:
         self._terminal_update("inbox", row_id, lease_token, "delivered", "")
 
@@ -555,7 +565,7 @@ class BridgeStore:
                 ),
             )
             if updated.rowcount != 1:
-                raise RuntimeError("Slack inbox lease no longer belongs to this worker")
+                raise InboxLeaseLost("Slack inbox lease no longer belongs to this worker")
 
     def enqueue_outbox(
         self,
@@ -900,7 +910,8 @@ class BridgeStore:
                 (*values, now, row_id, lease_token),
             )
             if updated.rowcount != 1:
-                raise RuntimeError(
+                error_type = InboxLeaseLost if table == "inbox" else RuntimeError
+                raise error_type(
                     f"Slack {table} lease no longer belongs to this worker"
                 )
 
@@ -923,7 +934,8 @@ class BridgeStore:
                 (state, str(error)[:1000], now, row_id, lease_token),
             )
             if updated.rowcount != 1:
-                raise RuntimeError(
+                error_type = InboxLeaseLost if table == "inbox" else RuntimeError
+                raise error_type(
                     f"Slack {table} lease no longer belongs to this worker"
                 )
 

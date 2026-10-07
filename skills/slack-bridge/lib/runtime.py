@@ -15,13 +15,13 @@ from .host_adapter import HostBindingTerminalError, HostOutput, HostTurnStatus, 
 from .provider_context import capture_context
 from .slack_api import SlackApiError, SlackClient, SlackMutationUncertain, chunk_message, mutation_may_have_applied
 from .socket_mode import SocketModeClient
-from .store import BridgeStore, InboxItem, OutboxItem
+from .store import BridgeStore, InboxItem, InboxLeaseLost, OutboxItem
 
 log = logging.getLogger(__name__)
 _MAX_OUTBOX_ATTEMPTS = 5
-# The host Presence endpoint may spend up to 1800 seconds on one turn. Keep
-# the inbox lease alive for that full request plus a recovery buffer so a slow
-# turn cannot be claimed and submitted a second time by another worker.
+# Budget the Host's 1800-second initial request plus a recovery buffer, and
+# refresh once before its finite continuation poll. Staging or suspension can
+# still outlast this budget; the token checks remain the ownership authority.
 _INBOUND_LEASE_SECONDS = 2100.0
 
 
@@ -109,6 +109,15 @@ class InboundWorker:
         if item is None:
             return False
         try:
+            return await self._process_claimed(item)
+        except InboxLeaseLost:
+            # Also covers loss during the retry/failure handlers below. Only
+            # the new owner may checkpoint this row; never retry its old token.
+            log.info("Slack inbound event %s lease lost; ending obsolete attempt", item.row_id)
+            return True
+
+    async def _process_claimed(self, item: InboxItem) -> bool:
+        try:
             if not item.host_reference and item.provider_context is None:
                 snapshot = await capture_context(self.slack, item, self.store.workspace_name())
                 self.store.set_provider_context(item.row_id, item.lease_token, snapshot)
@@ -139,6 +148,13 @@ class InboundWorker:
                         "Presence Host adapter returned an empty reference"
                     )
                 self.store.set_host_reference(item.row_id, item.lease_token, reference)
+                if reference.startswith("continuing:"):
+                    # The durable reference separates submit from the new finite
+                    # queue-report/poll phase. Later attempts already claim fresh
+                    # leases. This is a token-checked renewal, not a heartbeat.
+                    self.store.renew_inbox_lease(
+                        item.row_id, item.lease_token, lease_seconds=_INBOUND_LEASE_SECONDS
+                    )
 
             updates_factory = getattr(self.host, "status_updates", None)
             if updates_factory is None:
@@ -198,6 +214,8 @@ class InboundWorker:
             self.store.complete_inbox(item.row_id, item.lease_token)
             return True
         except asyncio.CancelledError:
+            raise
+        except InboxLeaseLost:
             raise
         except HostBindingTerminalError as exc:
             self.store.fail_inbox(item.row_id, item.lease_token, str(exc))
