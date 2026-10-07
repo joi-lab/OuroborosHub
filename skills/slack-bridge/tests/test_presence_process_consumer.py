@@ -31,6 +31,7 @@ TOKEN = "isolated-presence-token"
 ANSWER = "The status report is complete: all three checks passed."
 NEW_WORDS = "Please also mention the backup window."
 CORRECTED = ANSWER + " The backup window is 02:00-03:00 UTC."
+CHILD_ANSWER = "The promoted child has completed its independent report."
 QUEUED_TEXTS = [f"Queued-{index}: " + "full source words " * 80 + f" end-{index}" for index in range(12)]
 pytestmark = pytest.mark.serial
 
@@ -94,6 +95,42 @@ def test_queued_facts_reach_resumed_model_through_frozen_reader(tmp_path):
     assert facts["queue_source_binding"] == "Review-1"
     assert facts["queue_refresh_posts"] >= 1
     assert facts["provider_texts"] == ["Noted.", ANSWER]
+
+
+@pytest.mark.parametrize("dead_parent", [False, True])
+def test_late_promoted_child_survives_bridge_restart_before_parent_completion(tmp_path, dead_parent):
+    facts = _run_consumer(tmp_path, "blocking", 1, "dead-child" if dead_parent else "late-child")
+    assert facts["host_pid"] != facts["bridge_pid"] and facts["host_exit_code"] == 0
+    assert facts["core_sources_unchanged"]
+    assert facts["initial_status"] == "continuing" and facts["initial_child_ref"] == ""
+    assert facts["discovered_child_ref"] and facts["child_completed_before_parent"]
+    assert facts["parent_discovery_status"] == ("interrupted" if dead_parent else "pending")
+    assert facts["bridge_restarts"] == 2
+    assert facts["original_event_posts"] == 1
+    assert facts["provider_texts"] == [CHILD_ANSWER]
+    assert facts["outbox_states"] == ["delivered"]
+    assert facts["output_task_ids"] == [facts["discovered_child_ref"]]
+    assert facts["final_inbox_state"] == ("failed" if dead_parent else "pending")
+    if dead_parent:
+        assert "interrupted" in facts["final_inbox_error"]
+        assert len(facts["host_pids"]) == 2 and len(set(facts["host_pids"])) == 2
+        assert facts["killed_host_exit_codes"] == [-9]
+
+
+def test_real_host_409_preserves_admitted_child_and_original_refusal_after_restart(tmp_path):
+    facts = _run_consumer(tmp_path, "blocking", 1, "refused-child")
+    assert facts["host_pid"] != facts["bridge_pid"] and facts["host_exit_code"] == 0
+    assert facts["core_sources_unchanged"]
+    assert facts["initial_http_status"] == 409
+    assert facts["original_refusal"] and facts["discovered_child_ref"]
+    assert facts["refusal_preserved_exactly"]
+    assert facts["bridge_restarts"] == 2
+    assert facts["original_event_posts"] == 1
+    assert facts["provider_texts"] == [CHILD_ANSWER]
+    assert facts["outbox_states"] == ["delivered"]
+    assert facts["output_task_ids"] == [facts["discovered_child_ref"]]
+    assert facts["final_inbox_state"] == "failed"
+    assert facts["original_refusal"] in facts["final_inbox_error"]
 
 
 def _run_consumer(tmp_path, mode, reporting, scenario="main"):
@@ -174,6 +211,7 @@ class Provider:
     def __init__(self, root: Path, mode: str, scenario: str):
         self.root, self.mode, self.scenario = root, mode, scenario
         self.release, self.review_entered = threading.Event(), threading.Event()
+        self.parent_release, self.parent_review_entered = threading.Event(), threading.Event()
         self.inputs, self.reviews = [], []
         self.queue_facts = {}
         self.lock = threading.Lock()
@@ -191,6 +229,8 @@ class Provider:
             if not resumed:
                 return _finish("nominate", message=ANSWER, **({"pending_review": "finish"}
                                                               if self.mode == "advisory" else {}))
+            if self.scenario in {"late-child", "dead-child"}:
+                return _finish("nominate-after-promotion", message=ANSWER + " The child is preparing details.")
             if self.scenario == "queue":
                 # Behave as the actual consumer model: read the advertised, scoped
                 # source in ordinary tool rounds. No host-side private-file shortcut.
@@ -233,11 +273,17 @@ class Provider:
         assert path == "/review", path
         with self.lock:
             self.reviews.append(body)
+            review_number = len(self.reviews)
             (self.root / "review-requests.json").write_text(json.dumps(self.reviews, indent=2))
-        self.review_entered.set()
-        assert self.release.wait(90), "test did not release synthetic review"
-        return {"verdict": "FAIL" if self.mode == "advisory" else "PASS", "summary": "Independent review",
-                "findings": [], "outcome_tier": "best_effort" if self.mode == "advisory" else "solved",
+        if self.scenario in {"late-child", "dead-child"} and review_number > 1:
+            self.parent_review_entered.set()
+            assert self.parent_release.wait(90), "test did not release the promoted author's review"
+        else:
+            self.review_entered.set()
+            assert self.release.wait(90), "test did not release synthetic review"
+        failed = self.mode == "advisory" or (self.scenario in {"late-child", "dead-child"} and review_number == 1)
+        return {"verdict": "FAIL" if failed else "PASS", "summary": "Independent review",
+                "findings": [], "outcome_tier": "best_effort" if failed else "solved",
                 "completion_coach": "Mention the backup." if self.mode == "advisory" else "Deliver it.",
                 "criteria_used": [{"criterion": "complete report", "status": "supported",
                                    "evidence_refs": [body["ref"]]}]}
@@ -291,7 +337,7 @@ def _drive(root: Path, mode: str, reporting: int, scenario: str) -> dict:
     server, thread = _server(provider)
     url = f"http://127.0.0.1:{server.server_address[1]}"
     with (root / "host.log").open("w") as log:
-        process = spawn_supervised([sys.executable, str(HOST_SCRIPT), str(root), url, mode],
+        process = spawn_supervised([sys.executable, str(HOST_SCRIPT), str(root), url, mode, scenario],
                                    drive_root=root / "data", purpose="presence-consumer-fixture", scope="session",
                                    cwd=root, env=dict(os.environ), stdout=log, stderr=subprocess.STDOUT)
         try:
@@ -307,16 +353,45 @@ def _drive(root: Path, mode: str, reporting: int, scenario: str) -> dict:
                     return None
 
             identity = _wait(ready)
+            host_pids = [process.pid]
+            killed_exit_codes, used_modules = [], set()
+
+            def restart_host():
+                # Kill the actual parked author process; its canonical row stays
+                # RUNNING. Core's controller witness, not a fabricated status,
+                # must project the lost author as interrupted after restart.
+                nonlocal process, host_url
+                with httpx.Client(trust_env=False, timeout=5) as client:
+                    used_modules.update(client.get(host_url + "/fixture-sources").json())
+                process.kill()
+                process.wait(timeout=5)
+                killed_exit_codes.append(process.returncode)
+                (root / "host-address.json").unlink()
+                process = spawn_supervised(
+                    [sys.executable, str(HOST_SCRIPT), str(root), url, mode, scenario],
+                    drive_root=root / "data", purpose="presence-consumer-fixture", scope="session",
+                    cwd=root, env=dict(os.environ), stdout=log, stderr=subprocess.STDOUT)
+                _wait(lambda: (root / "host-address.json").is_file() or process.poll() is not None)
+                assert process.poll() is None, (root / "host.log").read_text()
+                host_url = json.loads((root / "host-address.json").read_text())["url"]
+                restarted = _wait(ready)
+                host_pids.append(process.pid)
+                return host_url, restarted
+
             facts = {"host_pid": process.pid, "bridge_pid": os.getpid(),
-                     **asyncio.run(_consume(root, host_url, identity, provider, reporting, scenario))}
+                     **asyncio.run(_consume(root, host_url, identity, provider, reporting, scenario,
+                                          restart_host=restart_host)), "host_pids": host_pids,
+                     "killed_host_exit_codes": killed_exit_codes}
             with httpx.Client(trust_env=False, timeout=5) as client:
-                used = client.get(host_url + "/fixture-sources").json()
+                used_modules.update(client.get(host_url + "/fixture-sources").json())
+            used = sorted(used_modules)
             (root / "host-core-modules.json").write_text(json.dumps(used, indent=2))
         except BaseException:
             print((root / "host.log").read_text(), file=sys.stderr)
             raise
         finally:
             provider.release.set()
+            provider.parent_release.set()
             if process.poll() is None:
                 try:
                     with httpx.Client(trust_env=False, timeout=2) as client:
@@ -355,7 +430,8 @@ def _drive(root: Path, mode: str, reporting: int, scenario: str) -> dict:
     return facts
 
 
-async def _consume(root: Path, host_url: str, identity: dict, provider: Provider, reporting: int, scenario: str) -> dict:
+async def _consume(root: Path, host_url: str, identity: dict, provider: Provider, reporting: int, scenario: str,
+                   *, restart_host=None) -> dict:
     import httpx
     from lib.host_adapter import LoopbackPresenceHostAdapter
     from lib.runtime import InboundWorker, OutboundWorker
@@ -365,7 +441,7 @@ async def _consume(root: Path, host_url: str, identity: dict, provider: Provider
     from ouroboros.presence_runner import _read_previous_turn
     from ouroboros.task_results import load_task_result
 
-    posted, submitted, submit_statuses, queue_posts = [], [], [], []
+    posted, submitted, submit_statuses, queue_posts, wire_responses = [], [], [], [], []
 
     def slack_api(request):
         method = request.url.path.rsplit("/", 1)[-1]
@@ -387,6 +463,11 @@ async def _consume(root: Path, host_url: str, identity: dict, provider: Provider
     async def observe_response(response):
         if response.request.url.path == "/presence/turn":
             submit_statuses.append(response.status_code)
+        if response.request.url.path == "/presence/turn" or (
+                response.request.method == "GET" and response.request.url.path.startswith("/presence/work/")):
+            await response.aread()
+            wire_responses.append({"path": response.request.url.path,
+                                   "status_code": response.status_code, "body": response.json()})
 
     store = BridgeStore(root / "bridge")
     store.set_runtime(workspace_id="T1")
@@ -437,7 +518,110 @@ async def _consume(root: Path, host_url: str, identity: dict, provider: Provider
                     return
             raise AssertionError("outbound did not settle")
 
+        async def restart_bridge():
+            # Reopen the durable store and discard every adapter/worker cache.
+            # HTTP connections and the synthetic provider do not own bridge state.
+            nonlocal store, adapter, slack, socket, inbound, outbound
+            await outbound.aclose()
+            await adapter.aclose()
+            await slack.aclose()
+            store = BridgeStore(root / "bridge")
+            adapter = LoopbackPresenceHostAdapter(binding_id=identity["binding"], host_service_url=host_url,
+                                                  skill_token=TOKEN, http_client=host_http)
+            await adapter.discover_delivery_support()
+            adapter.delivery_reporting_version = reporting
+            adapter.delivery_reporting_status = "supported" if reporting else "unsupported"
+            slack = SlackClient("xoxb-fixture", "xapp-fixture", http_client=slack_http)
+            socket = SocketModeClient(slack, store, bot_user_id="U_BOT")
+            inbound = InboundWorker(store, slack, adapter, staged_root=root / "bridge" / "staged")
+            outbound = OutboundWorker(store, slack, adapter)
+
         try:
+            if scenario in {"late-child", "dead-child", "refused-child"}:
+                await ingest("Review-1", "1.0", "Please prepare the status report.")
+                assert await inbound.process_once()
+                initial = next(row for row in wire_responses if row["path"] == "/presence/turn")
+                first = initial["body"]
+                retained = rows("inbox")[0]["host_reference"]
+                assert retained, rows("inbox")
+                assert rows("inbox")[0]["state"] == "pending", rows("inbox")
+
+                async def child_state(predicate):
+                    deadline = time.monotonic() + 60
+                    while time.monotonic() < deadline:
+                        state = (await host_http.get(host_url + "/fixture-child")).json()
+                        if state.get("ready") and predicate(state):
+                            return state
+                        await asyncio.sleep(0.05)
+                    raise AssertionError("child lifecycle did not reach the required state")
+
+                if scenario == "refused-child":
+                    assert initial["status_code"] == 409, initial
+                    assert first["code"] == "presence_resources_unavailable", first
+                    assert first["disposition"] == "retry", first
+                    assert first["work_ref"] and not first.get("text"), first
+                    state = await child_state(lambda _state: True)
+                    await restart_bridge()
+                    assert rows("inbox")[0]["host_reference"] == retained
+                    due()
+                    assert await inbound.process_once()  # still pending, poll only after restart
+                    assert len(submitted) == 1, submitted
+                else:
+                    assert first["status"] == "continuing" and first["work_ref"] == "", first
+                    assert provider.review_entered.is_set() and not provider.release.is_set()
+                    provider.release.set()
+                    state = await child_state(lambda value: provider.parent_review_entered.is_set() and (
+                        value["parent"]["presence_continuation"]["lent_at"]
+                        != value["parent"]["presence_continuation"]["first_lent_at"]))
+                    assert state["parent"]["status"] == "running", state
+                    assert state["parent"]["presence_continuation"]["initial"]["work_ref"] == ""
+                completed = (await host_http.post(host_url + "/fixture-child",
+                                                  json={"action": "complete"})).json()
+                assert completed["child"]["status"] == "completed", completed
+                if scenario == "dead-child":
+                    assert restart_host is not None
+                    host_url, identity = restart_host()
+                if scenario != "refused-child":
+                    await restart_bridge()
+                due()
+                assert await inbound.process_once()
+                await flush()
+                assert [body["markdown_text"] for body in posted] == [CHILD_ANSWER], wire_responses
+                author_polls = [row["body"] for row in wire_responses
+                                if row["path"] == "/presence/work/" + first["turn_ref"]]
+                discovered = first["work_ref"] if scenario == "refused-child" else author_polls[-1].get("child_work_ref")
+                assert discovered == state["work_ref"], (discovered, state)
+                await restart_bridge()
+                await ingest("Review-1", "1.0", "Please prepare the status report.")
+                for _ in range(3):
+                    due()
+                    await inbound.process_once()
+                    await flush()
+                inbox, outbox = rows("inbox")[0], rows("outbox")
+                refusal_preserved = False
+                if scenario == "refused-child":
+                    from lib.host_adapter import _decode_refused_reference
+                    refusal = _decode_refused_reference(inbox["host_reference"])
+                    refusal_preserved = (inbox["host_reference"] == retained
+                                         and refusal["http_status"] == initial["status_code"]
+                                         and refusal["response"] == first)
+                facts = {"initial_status": first.get("status"), "initial_child_ref": first.get("work_ref", ""),
+                         "initial_http_status": initial["status_code"],
+                         "original_refusal": first.get("code", ""),
+                         "refusal_preserved_exactly": refusal_preserved,
+                         "discovered_child_ref": discovered,
+                         "parent_discovery_status": author_polls[-1]["status"] if author_polls else "",
+                         "child_completed_before_parent": completed["parent"]["status"] == "running",
+                         "bridge_restarts": 2, "restart_boundary": "store, adapter, workers and transport objects",
+                         "original_event_posts": len(submitted),
+                         "provider_texts": [body["markdown_text"] for body in posted],
+                         "outbox_states": [row["state"] for row in outbox],
+                         "output_task_ids": [json.loads(row["origin_json"])["task_id"] for row in outbox],
+                         "final_inbox_state": inbox["state"], "final_inbox_error": inbox["last_error"]}
+                (root / "wire-turns.json").write_text(json.dumps(submitted, indent=2))
+                (root / "outbox.json").write_text(json.dumps(outbox, indent=2))
+                (root / "final-inbox.json").write_text(json.dumps(inbox, indent=2))
+                return facts
             if scenario == "six":
                 for index in range(6):
                     await ingest(f"Review-{index}", f"1.{index}", "Please prepare the status report.", f"1.{index}")
@@ -540,6 +724,7 @@ async def _consume(root: Path, host_url: str, identity: dict, provider: Provider
             (root / "outbox.json").write_text(json.dumps(outbox, indent=2))
             return facts
         finally:
+            (root / "wire-responses.json").write_text(json.dumps(wire_responses, indent=2))
             await outbound.aclose()
             await adapter.aclose()
             await slack.aclose()

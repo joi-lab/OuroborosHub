@@ -62,8 +62,8 @@ def _author(ref: str, outputs: list, mode: int) -> dict:
             "outputs": outputs, "delivery_reporting_version": mode}
 
 
-def author_pending(ref: str, outputs: list, mode: int = 1) -> tuple[int, dict]:
-    return 202, {**_author(ref, outputs, mode), "status": "pending"}
+def author_pending(ref: str, outputs: list, mode: int = 1, *, child: str = "") -> tuple[int, dict]:
+    return 202, {**_author(ref, outputs, mode), "status": "pending", "child_work_ref": child}
 
 
 def author_terminal(ref: str, outputs: list, *, status: str = "completed", outcome: str = "silent",
@@ -72,18 +72,18 @@ def author_terminal(ref: str, outputs: list, *, status: str = "completed", outco
                  "output_ref": output_ref, "child_work_ref": child}
 
 
-def author_interrupted(ref: str, outputs: list, mode: int = 1) -> tuple[int, dict]:
+def author_interrupted(ref: str, outputs: list, mode: int = 1, *, child: str = "") -> tuple[int, dict]:
     return 200, {**_author(ref, outputs, mode), "status": "interrupted", "outcome": "silent", "text": "",
-                 "output_ref": ""}
+                 "output_ref": "", "child_work_ref": child}
 
 
 def child_pending(ref: str, mode: int = 1) -> tuple[int, dict]:
     return 202, {"ok": True, "status": "pending", "work_ref": ref, "delivery_reporting_version": mode}
 
 
-def child_done(ref: str, text: str, mode: int = 1) -> tuple[int, dict]:
+def child_done(ref: str, text: str, mode: int = 1, *, output_ref: str = "") -> tuple[int, dict]:
     return 200, {"ok": True, "status": "completed", "outcome": "message", "text": text, "work_ref": ref,
-                 "delivery_reporting_version": mode}
+                 "delivery_reporting_version": mode, "output_ref": output_ref}
 
 
 class FakeHost:
@@ -402,6 +402,242 @@ def test_promoted_child_and_parent_tail_are_polled_independently(tmp_path, tail_
             ["child-2"] if tail_child == "child-2" else [])
         origins = [row["origin"]["task_id"] for row in bridge.outbox()]
         assert origins == ["child-1", "turn-1"] + (["child-2"] if tail_child == "child-2" else [])
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("reporting", [True, False])
+@pytest.mark.parametrize("author_state", ["pending", "interrupted"])
+def test_late_child_discovery_keeps_output_identity_through_restart(tmp_path, reporting, author_state):
+    async def run():
+        host, slack = FakeHost(reporting=reporting), FakeSlack()
+        early = out("out-parent", "Same words")
+        host.scripts["Ev-1"] = lambda body: continuing(
+            "turn-1", body, outcome="message", text="Same words", output_ref="out-parent")
+        discovery = author_pending if author_state == "pending" else author_interrupted
+        host.work["turn-1"] = [author_pending("turn-1", [early]),
+                               discovery("turn-1", [early], child="child-late")]
+        if author_state == "pending":
+            host.work["turn-1"] += [author_pending("turn-1", [early], child="child-late"),
+                                   author_terminal("turn-1", [early], child="child-late")]
+        host.work["child-late"] = [child_done("child-late", "Same words", output_ref="out-child")]
+        bridge = Bridge(tmp_path, host, slack)
+        try:
+            await bridge.ingest(envelope("Ev-1", ts="1.0", text="Research this"))
+            assert await bridge.inbound.process_once()
+            await bridge.send_all()
+            assert slack.texts() == ["Same words"] and host.polls == ["turn-1"]
+            assert host.answers["Ev-1"]["work_ref"] == ""
+
+            bridge.due()
+            assert await bridge.inbound.process_once()
+            await bridge.send_all()
+            # Promotion happened on reentry, after the initial envelope was
+            # already durable. Pending and interrupted authors both expose it.
+            assert slack.texts() == ["Same words", "Same words"]
+            assert "child-late" in host.polls
+            assert bridge.inbox() == {"Ev-1": "pending" if author_state == "pending" else "failed"}
+            assert [row["output_ref"] for row in bridge.outbox()] == ["out-parent", "out-child"]
+            assert [row["origin"] for row in bridge.outbox()] == [
+                _origin("Ev-1", "turn-1"), _origin("Ev-1", "child-late")]
+
+            await bridge.close()
+            bridge = Bridge(tmp_path, host, slack)
+            if author_state == "pending":
+                # Replaying both selections after the adapter cache is gone
+                # must not repeat either send, even though their text is equal.
+                for _ in range(2):
+                    bridge.due()
+                    assert await bridge.inbound.process_once()
+                assert bridge.inbox() == {"Ev-1": "delivered"}
+            else:
+                assert "interrupted" in bridge.inbox_error("Ev-1")
+                assert "not restarted" in bridge.inbox_error("Ev-1")
+            bridge.due()
+            assert await bridge.inbound.process_once() is False
+            await bridge.send_all()
+            assert slack.texts() == ["Same words", "Same words"]
+            assert len({row["request_id"] for row in bridge.outbox()}) == 2
+            assert host.generations == ["Ev-1"] and len(host.turn_bodies) == 1
+            assert {post["thread_ts"] for post in slack.posts} == {"1.0"}
+            if reporting:
+                assert [report["message"]["output_ref"] for report in host.reports] == ["out-parent", "out-child"]
+            else:
+                assert host.reports == []
+        finally:
+            await bridge.close()
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("parent_poll,error,final_state", [
+    ((500, {"ok": False}), "HTTP 500", "pending"),
+    ((404, {"ok": False}), "HTTP 404", "failed"),
+    (author_interrupted("turn-1", []), "interrupted", "failed"),
+])
+def test_late_child_survives_restart_and_unavailable_parent(tmp_path, parent_poll, error, final_state):
+    async def run():
+        host, slack = FakeHost(), FakeSlack()
+        host.scripts["Ev-1"] = lambda body: continuing("turn-1", body)
+        host.work["turn-1"] = [author_pending("turn-1", []),
+                               author_pending("turn-1", [], child="child-late"), parent_poll]
+        host.work["child-late"] = [child_pending("child-late"), child_pending("child-late"),
+                                   child_done("child-late", "Child result", output_ref="out-child")]
+        bridge = Bridge(tmp_path, host, slack)
+        try:
+            await bridge.ingest(envelope("Ev-1", ts="1.0", text="Research this"))
+            assert await bridge.inbound.process_once()
+            bridge.due()
+            assert await bridge.inbound.process_once()
+            assert host.polls.count("child-late") == 1 and bridge.outbox() == []
+            await bridge.close()
+
+            # The only available parent answer has no child reference. Child
+            # custody must therefore come from SQLite, not adapter memory or a
+            # successful rediscovery poll after restart.
+            bridge = Bridge(tmp_path, host, slack)
+            bridge.due()
+            assert await bridge.inbound.process_once()
+            assert host.polls.count("child-late") == 2
+            assert bridge.inbox() == {"Ev-1": "pending"}
+            bridge.due()
+            assert await bridge.inbound.process_once()
+            await bridge.send_all()
+            assert slack.texts() == ["Child result"]
+            assert bridge.inbox() == {"Ev-1": final_state}
+            assert error in bridge.inbox_error("Ev-1")
+            assert bridge.outbox()[0]["origin"] == _origin("Ev-1", "child-late")
+            assert bridge.outbox()[0]["output_ref"] == "out-child"
+            assert host.generations == ["Ev-1"] and len(host.turn_bodies) == 1
+            if final_state == "pending":
+                host.work["turn-1"] = [author_terminal("turn-1", [])]
+                bridge.due()
+                assert await bridge.inbound.process_once()
+                assert bridge.inbox() == {"Ev-1": "delivered"}
+            bridge.due()
+            assert await bridge.inbound.process_once() is False
+        finally:
+            await bridge.close()
+
+    asyncio.run(run())
+
+
+def test_late_child_completes_before_slow_parent_poll_after_restart(tmp_path):
+    async def run():
+        entered, release = asyncio.Event(), asyncio.Event()
+
+        class GatedHost(FakeHost):
+            block_parent = False
+
+            async def handle(self, request):
+                if self.block_parent and request.method == "GET" and request.url.path == "/presence/work/turn-1":
+                    entered.set()
+                    await release.wait()
+                return await super().handle(request)
+
+        host, slack = GatedHost(), FakeSlack()
+        host.scripts["Ev-1"] = lambda body: continuing("turn-1", body)
+        host.work["turn-1"] = [author_pending("turn-1", []),
+                               author_pending("turn-1", [], child="child-late"), author_pending("turn-1", [])]
+        host.work["child-late"] = [child_pending("child-late"),
+                                   child_done("child-late", "Child result", output_ref="out-child")]
+        bridge = Bridge(tmp_path, host, slack)
+        work = None
+        try:
+            await bridge.ingest(envelope("Ev-1", ts="1.0", text="Research this"))
+            for _ in range(2):
+                bridge.due()
+                assert await bridge.inbound.process_once()
+            assert host.polls.count("child-late") == 1
+            await bridge.close()
+            bridge = Bridge(tmp_path, host, slack)
+            bridge.due()
+            host.block_parent = True
+            work = asyncio.create_task(bridge.inbound.process_once())
+            await asyncio.wait_for(entered.wait(), 2)
+            for _ in range(100):
+                await asyncio.sleep(0)
+                await bridge.send_all()
+                if slack.texts():
+                    break
+            assert slack.texts() == ["Child result"] and not work.done()
+            assert bridge.outbox()[0]["output_ref"] == "out-child"
+            assert len(host.turn_bodies) == 1
+            release.set()
+            assert await asyncio.wait_for(work, 2)
+            assert bridge.inbox() == {"Ev-1": "pending"}
+        finally:
+            release.set()
+            if work is not None:
+                work.cancel()
+                await asyncio.gather(work, return_exceptions=True)
+            await bridge.close()
+
+    asyncio.run(run())
+
+
+def test_late_child_custody_survives_cancelled_poll_and_unknown_send(tmp_path):
+    async def run():
+        entered, release = asyncio.Event(), asyncio.Event()
+
+        class GatedHost(FakeHost):
+            async def handle(self, request):
+                if request.method == "GET" and request.url.path == "/presence/work/child-late":
+                    entered.set()
+                    await release.wait()
+                return await super().handle(request)
+
+        host, slack = GatedHost(), FakeSlack(lose_posts=True)
+        host.scripts["Ev-1"] = lambda body: continuing("turn-1", body)
+        host.work["turn-1"] = [author_pending("turn-1", []),
+                               author_pending("turn-1", [], child="child-late")]
+        host.work["child-late"] = [child_done("child-late", "Child result", output_ref="out-child")]
+        bridge = Bridge(tmp_path, host, slack)
+        work = None
+        try:
+            await bridge.ingest(envelope("Ev-1", ts="1.0", text="Research this"))
+            assert await bridge.inbound.process_once()
+            bridge.due()
+            work = asyncio.create_task(bridge.inbound.process_once())
+            await asyncio.wait_for(entered.wait(), 2)
+            # Stop before the discovered child's first HTTP request returns.
+            # Its reference must already be durable, not merely checkpointed
+            # after all polls complete or the final pending status is emitted.
+            work.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await work
+            await bridge.close()
+            with sqlite3.connect(bridge.store.path) as db:
+                db.execute("UPDATE inbox SET lease_until=0, available_at=0")
+            host.work["turn-1"] = [(500, {"ok": False})]
+            release.set()
+
+            bridge = Bridge(tmp_path, host, slack)
+            assert await bridge.inbound.process_once()
+            await bridge.send_all()
+            assert slack.attempts == 1
+            assert [row["state"] for row in bridge.outbox()] == ["uncertain"]
+            assert bridge.outbox()[0]["output_ref"] == "out-child"
+            request_id = bridge.outbox()[0]["request_id"]
+            await bridge.close()
+
+            bridge = Bridge(tmp_path, host, slack)
+            bridge.due()
+            assert await bridge.inbound.process_once()
+            await bridge.send_all()
+            assert slack.attempts == 1
+            assert [row["request_id"] for row in bridge.outbox()] == [request_id]
+            assert bridge.inbox() == {"Ev-1": "pending"}
+            assert "HTTP 500" in bridge.inbox_error("Ev-1")
+            assert len(host.turn_bodies) == 1 and host.generations == ["Ev-1"]
+            assert [(report["state"], report["message"]["output_ref"]) for report in host.reports] == [
+                ("uncertain", "out-child")]
+        finally:
+            release.set()
+            if work is not None:
+                work.cancel()
+                await asyncio.gather(work, return_exceptions=True)
+            await bridge.close()
 
     asyncio.run(run())
 

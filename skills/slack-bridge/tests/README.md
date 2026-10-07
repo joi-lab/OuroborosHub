@@ -15,7 +15,7 @@ and changes its working directory to core, so the bridge test path is absolute.
 It is not an OS sandbox. Test state is retained for diagnosis.
 
 The [separate-process consumer](PRESENCE_PROCESS_CONSUMER.md) documents the
-opt-in command, its six scenarios, retained evidence and exact production versus
+opt-in command, its nine scenarios, retained evidence and exact production versus
 synthetic boundaries. An unset core root reports SKIP, not consumer evidence.
 
 The [inbound lease boundary](INBOUND_LEASE.md) documents the finite first-poll
@@ -28,6 +28,15 @@ replay/disconnect, legacy delivery, interrupted-author projection and observatio
 ACK loss. Those Host answers are scripted; they are not additional real-author
 process scenarios.
 
+Late promotion cases discover `child_work_ref` on pending and interrupted polls,
+then reopen the store and adapter with the parent slow, unavailable or dead. The
+child finishes independently, including cancellation before its first reply and
+an uncertain Slack send that must not repeat. `test_host_refusals.py` covers typed
+turn refusals with admitted work, retained refusal facts across restart, child
+selection identity, same-thread progress and explicit retries without an attempt
+cap. These tests run the actual adapter, SQLite store and inbound/outbound workers
+against scripted Host HTTP responses.
+
 `test_send_custody.py` uses production outbound code and a synthetic provider.
 Its crash case exits a separate child after provider acceptance and before the
 local receipt checkpoint. Recovery settles the marked row as uncertain without
@@ -39,9 +48,10 @@ controls at generic dispatch and all three upload phases stay uncertain without
 resending. This establishes the bridge's attempt boundary, not Slack
 exactly-once delivery.
 
-Proactive initiation, full Host crash/manual author continuation, Stop/Panic and
-cancellation during core reacquisition remain core test obligations; this bridge
-fixture does not certify those variants. Full application bootstrap, configured
+Proactive initiation, explicit manual author continuation, Stop/Panic and
+cancellation during core reacquisition remain core test obligations. The child
+fixture covers Host death/restart at its second parked-author boundary, with
+synthetic child admission/completion. Full application bootstrap, configured
 review qualification, platform/native behavior and live adoption require their
 own evidence. Run logs and dated pass counts belong in the source-bound handoff,
 not in this maintained test description.

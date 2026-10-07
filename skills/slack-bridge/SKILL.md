@@ -384,6 +384,10 @@ A Host may then answer while the author's result still waits for review:
 stores that write-once envelope as the event's Host reference; a retried event
 receives the identical stored envelope, never a rerun. Like deferred work, the
 event then only polls, so later messages in its thread are submitted meanwhile.
+If promotion happens on a later reentry, a pending, interrupted or terminal
+author poll can supply `child_work_ref`. The bridge checkpoints each discovered
+reference beside the initial envelope before polling it. After a restart, the
+child remains independently pollable even if the author is unavailable.
 The author and the child are polled concurrently through `/presence/work`.
 The existing inbound worker commits the initial selection before starting
 either poll, then commits each response's outputs as it arrives. A child
@@ -412,6 +416,18 @@ that role.
 A lost author (`status: "interrupted"`) is not restarted and its event is not
 resubmitted: once any child has finished, the inbox row ends `failed` with a
 visible error, keeping everything already sent.
+
+A Host turn response with `disposition: rejected` or `blocked` is retained
+durably, including its HTTP status, code and complete response body. If it carries an admitted `work_ref`
+(including HTTP 409), the bridge polls that work and queues its selected result
+without resubmitting the original event. Child success does not resolve the
+original refusal: once the child settles, the inbox row ends `failed` and retains
+the refusal. Refusal text itself is never sent as speech. Without admitted work,
+the refusal ends the row immediately. `disposition: retry` without a work reference
+continues normal backoff with no attempt cap; an admitted reference always moves
+the row to polling. The typed disposition controls recovery independently of
+HTTP status class. This handling is confined to turn submissions, not arbitrary
+responses from other Host endpoints.
 
 With a continuation-capable Host, each submission also carries
 `event.conversation.transport_queue`: a snapshot of this thread's later events

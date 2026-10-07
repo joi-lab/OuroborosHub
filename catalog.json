@@ -1324,8 +1324,8 @@
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "cbbf06479d414257e09addcf9ed24ab9cc2444723ed7ac1efae24442b22dc8f1",
-          "size": 32145
+          "sha256": "64dfa8b8f2037744f3b999812aba97ba00a9c895db3fd9a723615a8ac5680ea2",
+          "size": 33311
         },
         {
           "path": "lib/__init__.py",
@@ -1344,8 +1344,8 @@
         },
         {
           "path": "lib/host_adapter.py",
-          "sha256": "36291bd5e4335e1f1dbfad92247f6968e164d0b95c26545920f70bef80f04910",
-          "size": 35368
+          "sha256": "7c28a8d322bf2e753062d85b0278178960e76c5df0114829187fc3d9c3a8afc0",
+          "size": 40558
         },
         {
           "path": "lib/local_settings.py",
@@ -1364,8 +1364,8 @@
         },
         {
           "path": "lib/runtime.py",
-          "sha256": "8eddb6286dfead0f4cf48c6cde1cbeec3d478e59638a2af1ddc1ed691c3b7312",
-          "size": 29675
+          "sha256": "8bf920f76de598a383f284c05bfaa51b6f5b2dde92ffd9332f0df6651a9a1e6c",
+          "size": 29952
         },
         {
           "path": "lib/slack_api.py",
@@ -1379,8 +1379,8 @@
         },
         {
           "path": "lib/store.py",
-          "sha256": "1742acab142d4e017b0a1ffd36e645520a6767014920da36a7e93bd2d09de45a",
-          "size": 48068
+          "sha256": "a6556b7d9d8d1bb14532e933122c481c0089a4a76d1010c269c818eb09e00edf",
+          "size": 48120
         },
         {
           "path": "lib/tool_results.py",
@@ -1409,13 +1409,13 @@
         },
         {
           "path": "tests/PRESENCE_PROCESS_CONSUMER.md",
-          "sha256": "b49cf2bfc45b9eddb2ba28ceb7f2c64ff40da4542b85461c833a06106aab7c43",
-          "size": 4704
+          "sha256": "27022e89c53ece75b33a74063dfe34efc3d82614567b43fde0b125abecc7571f",
+          "size": 6610
         },
         {
           "path": "tests/README.md",
-          "sha256": "76a3c10798b16c9ad1cc9e2d4786af78392159672390a0357ee9b8345e7bde80",
-          "size": 2614
+          "sha256": "cb97987d267818dc0060e929105b4cbe7cc4ede0c8759e3c867ecf5e139e4003",
+          "size": 3287
         },
         {
           "path": "tests/conftest.py",
@@ -1424,8 +1424,8 @@
         },
         {
           "path": "tests/presence_process_host.py",
-          "sha256": "b736aa77cf4eefc7f3f684c0723a985f1f45e4c56516ee8b1d0ddf200d4fd74c",
-          "size": 10453
+          "sha256": "aa82396b436d2d6c124ac4effee5b85123e370f041f2973f96264d50f80282ac",
+          "size": 13644
         },
         {
           "path": "tests/test_conversation_facts.py",
@@ -1451,6 +1451,11 @@
           "path": "tests/test_host_adapter.py",
           "sha256": "092396a0c3288067de7ec404a94df1192dfbe87eeb3f699e77b1b5dc037d7182",
           "size": 12590
+        },
+        {
+          "path": "tests/test_host_refusals.py",
+          "sha256": "ded7219e1a969c4c952fc98676be7c2c5e4390362543dfaa12206d96c8aad835",
+          "size": 19456
         },
         {
           "path": "tests/test_inbound_files.py",
@@ -1484,13 +1489,13 @@
         },
         {
           "path": "tests/test_presence_continuation.py",
-          "sha256": "e7a860b761e2a7a29c655bc18e849c1e6c8aa183308009aa58ea09dbf6ca9940",
-          "size": 47438
+          "sha256": "6db95ff5af9292e91103dce8ca4aff8798dfb24613f3a89907a04d8abd21e829",
+          "size": 59053
         },
         {
           "path": "tests/test_presence_process_consumer.py",
-          "sha256": "26f103df8ae61c57d98369097436d0a57655295a7f8b6ea58d483d4eb5d74ef7",
-          "size": 30967
+          "sha256": "ecd55e71f88848197982a9d4beed0d5161f591ff3f2b54a5040d9fccfaff4a0b",
+          "size": 42885
         },
         {
           "path": "tests/test_provider_context.py",

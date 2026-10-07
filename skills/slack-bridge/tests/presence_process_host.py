@@ -4,7 +4,9 @@ The HTTP Host, token validation, binding admission, turn gate, continuation,
 acceptance coordinator, tool registry, LLM loop and terminal pipeline are production
 code. LoopAgent is a small lifecycle harness, not OuroborosAgent's full bootstrap.
 Only inference and the review-route executor cross to the synthetic localhost
-provider. No production auth/admission/continuation function is replaced.
+provider. The child scenarios additionally supply a supervisor admission receipt
+and child terminal through this lifecycle harness; they do not dispatch a real
+subagent. No production auth/admission/continuation/HTTP function is replaced.
 """
 from __future__ import annotations
 
@@ -17,6 +19,8 @@ from types import SimpleNamespace
 
 
 TOKEN = "isolated-presence-token"
+CHILD_REF = "fixture-promoted-child"
+CHILD_ANSWER = "The promoted child has completed its independent report."
 
 
 def seed_installation(data: Path) -> str:
@@ -33,6 +37,10 @@ def seed_installation(data: Path) -> str:
     from ouroboros.utils import atomic_write_json
 
     skill = data / "skills" / "external" / "slack-bridge"
+    if skill.exists():
+        # A deliberate Host restart reuses this fixture's admitted installation.
+        from ouroboros.presence_bindings import load_presence_binding
+        return load_presence_binding(data, "slack-bridge", "d" * 32).binding_id
     skill.mkdir(parents=True)
     (skill / "SKILL.md").write_text(
         "---\nname: slack-bridge\ndescription: Synthetic transport identity.\nversion: 0.1\n"
@@ -67,7 +75,7 @@ def seed_installation(data: Path) -> str:
     return save_presence_binding(data, binding).binding_id
 
 
-def main(root: Path, provider_url: str, mode: str) -> None:
+def main(root: Path, provider_url: str, mode: str, scenario: str = "main") -> None:
     import faulthandler
     faulthandler.dump_traceback_later(30, repeat=True)
     import httpx
@@ -81,14 +89,29 @@ def main(root: Path, provider_url: str, mode: str) -> None:
     from ouroboros.presence_context import build_presence_context_section
     from ouroboros.presence_runner import run_presence_turn
     from ouroboros.review_execution import ReviewAttemptResult
-    from ouroboros.task_results import write_task_result
+    from ouroboros.task_results import load_task_result, write_task_result
     from ouroboros.tools.registry import ToolRegistry
 
     data, repo = root / "data", root / "repo"
     binding = seed_installation(data)
     current = threading.local()
 
+    def admit_fixture_child(task, ctx=None):
+        """The lifecycle harness supplies the confirmed supervisor-side handoff."""
+        write_task_result(data, CHILD_REF, "scheduled", delegation_role="root", root_task_id=CHILD_REF,
+                          description="Prepare an independent child report.",
+                          metadata={"presence": dict(task["metadata"]["presence"])})
+        if ctx is not None:
+            ctx._swarm_handoff_attempt = {"status": "scheduled", "task_id": CHILD_REF}
+        (root / "child-state.json").write_text(json.dumps({"work_ref": CHILD_REF, "turn_ref": task["id"]}))
+
     def inference(_llm, messages, *_args, **kwargs):
+        if (scenario in {"late-child", "dead-child"}
+                and "[PRESENCE CONVERSATION RESUMED]" in str(messages)
+                and not getattr(current.ctx, "_swarm_handoff_attempt", None)):
+            # Admission happens after the first real review reentry. The next
+            # real park must retain this new ref without changing its initial.
+            admit_fixture_child(current.task, current.ctx)
         observer = kwargs.get("model_context_observer")
         if callable(observer):
             observer(messages)
@@ -140,6 +163,14 @@ def main(root: Path, provider_url: str, mode: str) -> None:
 
     class LoopAgent:
         def handle_task(self, task):
+            if scenario == "refused-child":
+                admit_fixture_child(task)
+                write_task_result(data, task["id"], "failed",
+                                  metadata={**task["metadata"], "presence_work_ref": CHILD_REF},
+                                  reason_code="resource_refusal_no_resend", result="Private fixture diagnostic.")
+                # run_presence_turn must refuse this unresolved original event
+                # and retain the admitted child in its own PresenceTurnError.
+                return [{"type": "presence_result", "outcome": "deferred", "text": "", "work_ref": CHILD_REF}]
             registry = ToolRegistry(repo_dir=repo, drive_root=data)
             ctx = registry._ctx
             ctx.is_direct_chat = True
@@ -153,6 +184,7 @@ def main(root: Path, provider_url: str, mode: str) -> None:
             ctx.task_attempt, ctx.current_chat_id = 1, task["chat_id"]
             ctx.review_wait_callback = getattr(self, "review_wait_callback", None)
             current.source, current.task_id = source, task["id"]
+            current.ctx, current.task = ctx, task
             task["_skip_post_task_synthesis"] = True
             messages = [{"role": "system", "content": "Presence turn.\n" +
                          build_presence_context_section(data, task["metadata"]["presence"], task["id"])},
@@ -186,6 +218,22 @@ def main(root: Path, provider_url: str, mode: str) -> None:
         return JSONResponse(used)
 
     app.routes.append(Route("/fixture-sources", sources))
+
+    async def child(request):
+        state_path = root / "child-state.json"
+        if not state_path.is_file():
+            return JSONResponse({"ready": False})
+        state = json.loads(state_path.read_text())
+        if request.method == "POST":
+            assert (await request.json()) == {"action": "complete"}
+            write_task_result(data, state["work_ref"], "completed", result=CHILD_ANSWER,
+                              terminal_origin="model_final",
+                              metadata=load_task_result(data, state["work_ref"])["metadata"])
+        parent = load_task_result(data, state["turn_ref"])
+        return JSONResponse({"ready": True, **state, "parent": parent,
+                             "child": load_task_result(data, state["work_ref"])})
+
+    app.routes.append(Route("/fixture-child", child, methods=["GET", "POST"]))
     async def shutdown(_request):
         server.should_exit = True
         return JSONResponse({"stopping": True})
@@ -203,4 +251,4 @@ def main(root: Path, provider_url: str, mode: str) -> None:
 
 if __name__ == "__main__":
     import sys
-    main(Path(sys.argv[1]), sys.argv[2], sys.argv[3])
+    main(Path(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4] if len(sys.argv) > 4 else "main")

@@ -360,12 +360,13 @@ class BridgeStore:
 
     @staticmethod
     def _claimable_sql(table: str) -> str:
-        # A deferred or continuing Host reference owns the long task already. Once
-        # its durable initial reference exists, later conversation events may be
+        # A deferred, continuing or refused turn with admitted work only polls.
+        # Once its durable reference exists, later conversation events may be
         # admitted, including while this row's independent polls are in flight.
         deferred = (
             "AND NOT (earlier.host_reference LIKE 'deferred:%'"
-            " OR earlier.host_reference LIKE 'continuing:%')"
+            " OR earlier.host_reference LIKE 'continuing:%'"
+            " OR earlier.host_reference LIKE 'refused:%')"
             if table == "inbox"
             else ""
         )
