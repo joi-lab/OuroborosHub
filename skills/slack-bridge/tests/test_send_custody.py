@@ -263,6 +263,143 @@ def test_known_no_effect_clears_attempt_marker_before_retry(tmp_path, refusal, o
     asyncio.run(run())
 
 
+@pytest.mark.parametrize("operation,payload,error", [
+    ("update_message", {"channel": " ", "ts": "1.0"}, "channel and ts are required"),
+    ("update_message", {"channel": "C1", "ts": "1.0", "text_format": "html"}, "text_format must be"),
+    ("delete_message", {"channel": "C1", "ts": ""}, "channel and ts are required"),
+    ("reaction_add", {"channel": "C1", "ts": "1.0", "name": " "}, "channel, ts and name are required"),
+    ("reaction_remove", {"channel": "C1", "ts": "", "name": "eyes"}, "channel, ts and name are required"),
+    ("pin_add", {"channel": "", "ts": "1.0"}, "channel and ts are required"),
+    ("pin_remove", {"channel": "C1", "ts": ""}, "channel and ts are required"),
+    ("bookmark_add", {"channel": ""}, "channel is required"),
+    ("bookmark_add", {"channel": "C1", "link": "https://example.com"}, "title and link are required"),
+    ("bookmark_add", {"channel": "C1", "title": "Example"}, "title and link are required"),
+    ("bookmark_remove", {"channel": "C1", "bookmark_id": " "}, "bookmark_id is required"),
+    ("join_conversation", {"channel_id": " "}, "channel_id is required"),
+    ("generic_api", {"method": "PUT", "path": "chat.delete"}, "method must be GET or POST"),
+    ("generic_api", {"path": "https://example.com/api/chat.delete"}, "path must stay on slack.com/api"),
+    ("generic_api", {"path": "../chat.delete"}, "path is invalid"),
+    ("generic_api", {"path": "chat.delete?channel=C1"}, "path must be one Slack Web API method"),
+    ("generic_api", {"path": "chat.delete", "body": {"token": "not-a-credential"}}, "payload must not include token"),
+    ("generic_api", {"method": "GET", "path": "chat.delete", "params": {"token": "not-a-credential"}}, "payload must not include token"),
+])
+def test_local_mutation_argument_refusal_is_failed_without_provider_request(tmp_path, operation, payload, error):
+    asyncio.run(_local_refusal(tmp_path, operation, payload, error))
+
+
+@pytest.mark.parametrize("input_state", ["missing", "directory", "empty", "permission", "read_error"])
+def test_local_upload_input_refusal_is_failed_without_provider_request(tmp_path, monkeypatch, input_state):
+    artifact = tmp_path / "upload.txt"
+    if input_state == "directory":
+        artifact.mkdir()
+    elif input_state != "missing":
+        artifact.write_bytes(b"" if input_state == "empty" else b"immutable upload")
+    if input_state in {"permission", "read_error"}:
+        original = pathlib.Path.read_bytes
+
+        def unreadable(path):
+            if path == artifact:
+                error = PermissionError if input_state == "permission" else OSError
+                raise error("controlled local read failure")
+            return original(path)
+
+        monkeypatch.setattr(pathlib.Path, "read_bytes", unreadable)
+    asyncio.run(_local_refusal(
+        tmp_path, "upload_file", {"path": str(artifact), "filename": "upload.txt", "channel": "C1"},
+        "file must not be empty" if input_state == "empty" else "could not read upload input",
+    ))
+    # Terminal cleanup removes staged files, but does not recursively delete a directory.
+    assert artifact.is_dir() if input_state == "directory" else not artifact.exists()
+
+
+async def _local_refusal(tmp_path, operation, payload, error):
+    store = BridgeStore(tmp_path)
+    store.set_runtime(workspace_id="T1")
+    arguments = dict(request_id="local-refusal", operation=operation, payload=payload,
+                     delivery_reporting_version=1)
+    assert store.enqueue_mutation(**arguments)
+    calls = []
+
+    def provider(request):
+        calls.append(request)
+        return httpx.Response(200, json={"ok": True})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(provider)) as http:
+        slack = SlackClient("xoxb-test", "xapp-test", http_client=http)
+        worker = OutboundWorker(store, slack)
+        assert await worker.process_once()
+        assert calls == []  # Even upload URL allocation must not have happened.
+        [part] = store.delivery_receipt("local-refusal")["parts"]
+        assert (part["state"], part["attempts"]) == ("failed", 1)
+        assert part["provider_result"] == {"uncertain": False}
+        assert error in part["error"]
+        assert _row(store)["send_started"] == 0
+        assert store.claim_report() is None  # No provider-returned speech to report.
+        await worker.aclose()
+
+        _expire(store)
+        reopened = BridgeStore(tmp_path)
+        assert not reopened.enqueue_mutation(**arguments)
+        restarted = OutboundWorker(reopened, slack)
+        assert not await restarted.process_once()
+        assert reopened.delivery_receipt("local-refusal")["parts"] == [part]
+        assert calls == []
+        await restarted.aclose()
+
+
+@pytest.mark.parametrize("failure", [OSError, httpx.ReadTimeout])
+@pytest.mark.parametrize("phase", ["generic", "upload_url", "upload_bytes", "upload_complete"])
+def test_dispatched_failure_stays_uncertain_without_resend(tmp_path, failure, phase):
+    async def run():
+        store = BridgeStore(tmp_path)
+        artifact = tmp_path / "upload.txt"
+        _enqueue(store, 1, operation="generic" if phase == "generic" else "upload", path=artifact)
+        calls = []
+
+        def provider(request):
+            calls.append(request.url.path)
+            current = {
+                "/api/chat.postMessage": "generic",
+                "/api/files.getUploadURLExternal": "upload_url",
+                "/bytes": "upload_bytes",
+                "/api/files.completeUploadExternal": "upload_complete",
+            }[request.url.path]
+            if current == phase:
+                raise failure("provider dispatched; outcome unknown")
+            if current == "upload_url":
+                return httpx.Response(200, json={"ok": True, "file_id": "F1", "upload_url": "https://uploads.example/bytes"})
+            assert current == "upload_bytes"
+            return httpx.Response(200, text="uploaded")
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(provider)) as http:
+            slack = SlackClient("xoxb-test", "xapp-test", http_client=http)
+            worker = OutboundWorker(store, slack)
+            assert await worker.process_once()
+            expected_calls = {
+                "generic": ["/api/chat.postMessage"],
+                "upload_url": ["/api/files.getUploadURLExternal"],
+                "upload_bytes": ["/api/files.getUploadURLExternal", "/bytes"],
+                "upload_complete": ["/api/files.getUploadURLExternal", "/bytes", "/api/files.completeUploadExternal"],
+            }[phase]
+            assert calls == expected_calls
+            [part] = store.delivery_receipt("selection")["parts"]
+            assert (part["state"], part["attempts"]) == ("uncertain", 1)
+            assert part["provider_result"] == {"uncertain": True}
+            assert _row(store)["send_started"] == 0
+            await worker.aclose()
+            _expire(store)
+            reopened = BridgeStore(tmp_path)
+            restarted = OutboundWorker(reopened, slack)
+            assert not await restarted.process_once()
+            assert reopened.delivery_receipt("selection")["parts"] == [part]
+            assert calls == expected_calls
+            assert store.claim_report() is None
+            await restarted.aclose()
+        assert not artifact.exists()
+
+    asyncio.run(run())
+
+
 def test_send_requires_the_current_unexpired_and_unstarted_lease(tmp_path):
     store = BridgeStore(tmp_path)
     _enqueue(store, 1)

@@ -640,7 +640,12 @@ class SlackClient:
     async def upload_file(self, *, path: pathlib.Path, filename: str, title: str = "",
                           channel: str = "", thread_ts: str = "", initial_comment: str = "") -> dict[str, Any]:
         """Upload immutable bytes through Slack's current External Upload API."""
-        data = path.read_bytes()
+        try:
+            data = path.read_bytes()
+        except OSError as exc:
+            # This read precedes every provider request. Do not classify an
+            # OSError from any later upload phase as a local refusal.
+            raise SlackConfigurationError(f"could not read upload input: {exc}") from exc
         if not data:
             raise SlackConfigurationError("file must not be empty")
         request = await self._post_form("files.getUploadURLExternal", {

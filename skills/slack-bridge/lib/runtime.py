@@ -13,7 +13,7 @@ from typing import Any, Sequence
 
 from .host_adapter import HostBindingTerminalError, HostOutput, HostTurnStatus, PresenceHostAdapter
 from .provider_context import capture_context
-from .slack_api import SlackApiError, SlackClient, SlackMutationUncertain, chunk_message, mutation_may_have_applied
+from .slack_api import SlackApiError, SlackClient, SlackConfigurationError, SlackMutationUncertain, chunk_message, mutation_may_have_applied
 from .socket_mode import SocketModeClient
 from .store import BridgeStore, InboxItem, InboxLeaseLost, OutboxItem
 
@@ -456,6 +456,13 @@ class OutboundWorker:
                 self._cancel_started_send(item)
                 cleanup_artifact()
             raise
+        except SlackConfigurationError as exc:
+            # Mutation arguments/input were rejected before any provider request,
+            # despite the conservative marker already being persisted.
+            self.store.fail_outbox(item.row_id, item.lease_token, str(exc), state="failed",
+                                   result={"uncertain": False})
+            cleanup_artifact()
+            return True
         except SlackMutationUncertain as exc:
             self.store.fail_outbox(item.row_id, item.lease_token, exc.error, state="uncertain", result={"uncertain": True})
             cleanup_artifact()

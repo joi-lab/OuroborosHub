@@ -354,6 +354,11 @@ to resend. A 429 rate-limit refusal or a connection/pool failure before the
 request can be sent clears the marker for a bounded retry. The marker precedes
 the network call, so a crash in that small gap can leave an unsent item
 uncertain. This is a deliberate unresolved result, not a delivery claim.
+If the client rejects mutation arguments locally, or cannot obtain nonempty
+bytes from a staged upload before any provider request, the receipt ends `failed`
+with `uncertain: false`. No provider request was sent, and the same request ID
+is not automatically retried. This applies only to those local refusals;
+an unclassified error after dispatch remains `uncertain`.
 
 On upgrade, pre-marker leased rows are treated conservatively as started.
 Historical pending retries retain their queued identity; the new bridge cannot

@@ -32,7 +32,11 @@ process scenarios.
 Its crash case exits a separate child after provider acceptance and before the
 local receipt checkpoint. Recovery settles the marked row as uncertain without
 resending. Other cases cover cancellation, migration, stale leases and known
-no-effect retries. This establishes the bridge's attempt boundary, not Slack
+no-effect retries. Local argument refusals and unreadable/empty upload input
+exercise the real client and worker: zero provider requests, a failed receipt,
+and no retry after restart or duplicate enqueue. OSError and lost-response
+controls at generic dispatch and all three upload phases stay uncertain without
+resending. This establishes the bridge's attempt boundary, not Slack
 exactly-once delivery.
 
 Proactive initiation, full Host crash/manual author continuation, Stop/Panic and
