@@ -35,6 +35,19 @@ def file_facts(raw: Any) -> dict[str, Any]:
     return facts
 
 
+def provider_facts(structured: Mapping[str, Any]) -> dict[str, Any]:
+    """Preserve event facts while omitting private file URLs and previews.
+
+    Submitted events and queued-event observations use the same projection.
+    """
+    facts = dict(structured)
+    for key in ("message", "previous_message"):
+        carrier = facts.get(key)
+        if isinstance(carrier, Mapping) and isinstance(carrier.get("files"), list):
+            facts[key] = {**carrier, "files": [file_facts(file) for file in carrier["files"]]}
+    return facts
+
+
 @dataclass(frozen=True)
 class SlackFile:
     file_id: str

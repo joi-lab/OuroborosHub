@@ -31,6 +31,7 @@ _REDIRECT_STATUS_CODES = frozenset({301, 302, 303, 307, 308})
 # of them may already be applied, so it is reported uncertain, never resent.
 _RESPONSE_LOST_ERRORS = (
     httpx.ReadTimeout, httpx.WriteTimeout, httpx.ReadError, httpx.WriteError, httpx.RemoteProtocolError,
+    httpx.DecodingError, TimeoutError,
 )
 
 
@@ -62,6 +63,28 @@ class SlackMutationUncertain(SlackApiError):
     def __init__(self, error: str, *, status_code: int = 0, details: Mapping[str, Any] | None = None) -> None:
         super().__init__(error, status_code=status_code, details=details)
         self.uncertain = True
+
+
+def mutation_may_have_applied(error: BaseException) -> bool:
+    """Classify one provider result, without treating a timeout as retry consent.
+
+    Rate limiting is an explicit refusal. Connection/pool failures occur before
+    sending the request. A lost or malformed response, server failure, or Slack's
+    internal/timeout response does not establish whether the mutation happened.
+    This is an uncertainty boundary, not a provider exactly-once guarantee.
+    """
+    if isinstance(error, SlackMutationUncertain):
+        return True
+    if isinstance(error, _RESPONSE_LOST_ERRORS):
+        return True
+    if not isinstance(error, SlackApiError):
+        return False
+    if error.status_code == 429 or error.error == "ratelimited":
+        return False
+    return error.status_code >= 500 or error.status_code == 408 or error.error in {
+        "invalid_json", "invalid_response", "unknown_error", "fatal_error",
+        "internal_error", "request_timeout", "service_unavailable",
+    }
 
 
 @dataclass(frozen=True)
@@ -234,6 +257,20 @@ class SlackClient:
     ) -> dict[str, Any]:
         return await self._request("GET", endpoint, payload, token=token)
 
+    async def _mutate(
+        self, endpoint: str, payload: Mapping[str, Any], *, method: str = "POST",
+    ) -> dict[str, Any]:
+        try:
+            return await self._request(method, endpoint, payload, token=self.bot_token)
+        except Exception as exc:
+            if mutation_may_have_applied(exc):
+                raise SlackMutationUncertain(
+                    exc.error if isinstance(exc, SlackApiError) else type(exc).__name__,
+                    status_code=exc.status_code if isinstance(exc, SlackApiError) else 0,
+                    details=exc.details if isinstance(exc, SlackApiError) else None,
+                ) from exc
+            raise
+
     async def _request(
         self,
         method: str,
@@ -322,12 +359,9 @@ class SlackClient:
         payload = dict(params or {}) if selected == "GET" else dict(body or {})
         if "token" in payload:
             raise SlackConfigurationError("generic Slack API payload must not include token")
-        try:
-            return await self._request(selected, endpoint, payload, token=self.bot_token)
-        except _RESPONSE_LOST_ERRORS as exc:
-            if effect == "write":
-                raise SlackMutationUncertain(type(exc).__name__) from exc
-            raise
+        if effect == "write":
+            return await self._mutate(endpoint, payload, method=selected)
+        return await self._request(selected, endpoint, payload, token=self.bot_token)
 
     async def auth_test(self) -> dict[str, Any]:
         return await self._post("auth.test", {}, token=self.bot_token)
@@ -449,7 +483,7 @@ class SlackClient:
         channel_id = str(channel_id or "").strip()
         if not channel_id:
             raise SlackConfigurationError("channel_id is required")
-        return await self._post("conversations.join", {"channel": channel_id}, token=self.bot_token)
+        return await self._mutate("conversations.join", {"channel": channel_id})
 
     async def read_messages(
         self, channel_id: str, *, thread_ts: str = "", cursor: str = "",
@@ -522,7 +556,7 @@ class SlackClient:
             payload.update(text=str(text), mrkdwn=selected == "mrkdwn")
         if thread_ts:
             payload["thread_ts"] = str(thread_ts)
-        return await self._post("chat.postMessage", payload, token=self.bot_token)
+        return await self._mutate("chat.postMessage", payload)
 
     async def update_message(self, *, channel: str, ts: str, text: str = "",
                              blocks: Sequence[Mapping[str, Any]] | None = None,
@@ -538,27 +572,27 @@ class SlackClient:
             payload["markdown_text"] = str(text)
         else:
             payload.update(text=str(text), mrkdwn=selected == "mrkdwn")
-        return await self._post("chat.update", payload, token=self.bot_token)
+        return await self._mutate("chat.update", payload)
 
     async def delete_message(self, *, channel: str, ts: str) -> dict[str, Any]:
         channel, ts = str(channel or "").strip(), str(ts or "").strip()
         if not channel or not ts:
             raise SlackConfigurationError("channel and ts are required")
-        return await self._post("chat.delete", {"channel": channel, "ts": ts}, token=self.bot_token)
+        return await self._mutate("chat.delete", {"channel": channel, "ts": ts})
 
     async def reaction(self, *, channel: str, ts: str, name: str, add: bool = True) -> dict[str, Any]:
         channel, ts, name = str(channel or "").strip(), str(ts or "").strip(), str(name or "").strip()
         if not channel or not ts or not name:
             raise SlackConfigurationError("channel, ts and name are required")
         endpoint = "reactions.add" if add else "reactions.remove"
-        return await self._post(endpoint, {"channel": channel, "timestamp": ts, "name": name}, token=self.bot_token)
+        return await self._mutate(endpoint, {"channel": channel, "timestamp": ts, "name": name})
 
     async def pin(self, *, channel: str, ts: str, add: bool = True) -> dict[str, Any]:
         channel, ts = str(channel or "").strip(), str(ts or "").strip()
         if not channel or not ts:
             raise SlackConfigurationError("channel and ts are required")
         endpoint = "pins.add" if add else "pins.remove"
-        return await self._post(endpoint, {"channel": channel, "timestamp": ts}, token=self.bot_token)
+        return await self._mutate(endpoint, {"channel": channel, "timestamp": ts})
 
     async def bookmark(self, *, channel: str, bookmark_id: str = "", title: str = "",
                        link: str = "", emoji: str = "", add: bool = True) -> dict[str, Any]:
@@ -571,11 +605,11 @@ class SlackClient:
             payload = {"channel_id": channel, "title": str(title), "type": "link", "link": str(link)}
             if emoji:
                 payload["emoji"] = str(emoji)
-            return await self._post("bookmarks.add", payload, token=self.bot_token)
+            return await self._mutate("bookmarks.add", payload)
         bookmark_id = str(bookmark_id or "").strip()
         if not bookmark_id:
             raise SlackConfigurationError("bookmark_id is required")
-        return await self._post("bookmarks.remove", {"channel_id": channel, "bookmark_id": bookmark_id}, token=self.bot_token)
+        return await self._mutate("bookmarks.remove", {"channel_id": channel, "bookmark_id": bookmark_id})
 
     async def file_info(self, file_id: str) -> dict[str, Any]:
         file_id = str(file_id or "").strip()
@@ -606,7 +640,12 @@ class SlackClient:
     async def upload_file(self, *, path: pathlib.Path, filename: str, title: str = "",
                           channel: str = "", thread_ts: str = "", initial_comment: str = "") -> dict[str, Any]:
         """Upload immutable bytes through Slack's current External Upload API."""
-        data = path.read_bytes()
+        try:
+            data = path.read_bytes()
+        except OSError as exc:
+            # This read precedes every provider request. Do not classify an
+            # OSError from any later upload phase as a local refusal.
+            raise SlackConfigurationError(f"could not read upload input: {exc}") from exc
         if not data:
             raise SlackConfigurationError("file must not be empty")
         request = await self._post_form("files.getUploadURLExternal", {
@@ -629,17 +668,8 @@ class SlackClient:
             payload["thread_ts"] = str(thread_ts)
         if initial_comment:
             payload["initial_comment"] = str(initial_comment)
-        try:
-            return await self._post("files.completeUploadExternal", payload, token=self.bot_token)
-        except _RESPONSE_LOST_ERRORS as exc:
-            # Completion is the call that shares the file; a fresh upload could duplicate it.
-            raise SlackMutationUncertain(type(exc).__name__) from exc
-        except SlackApiError as exc:
-            if exc.status_code >= 500 or exc.status_code in {0, 408} or exc.error in {
-                "fatal_error", "internal_error", "request_timeout", "service_unavailable",
-            }:
-                raise SlackMutationUncertain(exc.error, status_code=exc.status_code, details=exc.details) from exc
-            raise
+        # Completion shares the file; an unknown result must not start a fresh upload.
+        return await self._mutate("files.completeUploadExternal", payload)
 
     async def resolve_target(self, target: str) -> str:
         clean = str(target or "").strip()
