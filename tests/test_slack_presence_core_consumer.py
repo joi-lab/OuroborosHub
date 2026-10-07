@@ -89,6 +89,15 @@ def test_slack_attachment_facts_reach_the_real_presence_route(tmp_path):
         assert turn["identity_matches_without_message"] is True
         assert not any(marker in turn["context"] for marker in ("url_private", "files-pri", "slack-files.com"))
 
+    if facts["continuation_version"] == 1:
+        # A #1536 core: every submission negotiated continuation, and core kept each event's
+        # bridge-queue snapshot with the event in its canonical log and the model's context.
+        assert facts["turn_continuation"] == [1, 1, 1, 1]
+        assert facts["logged_queue"] == {"Ev-1": ["Ev-2"], "Ev-2": [], "Ev-3": []}
+        assert '"transport_queue"' in first["context"] and '"after_source_event_id": "Ev-1"' in first["context"]
+    else:
+        assert facts["turn_continuation"] == [0, 0, 0, 0] and facts["logged_queue"] == {}
+
 
 def _drive(root: Path) -> dict:
     """Run the bridge against core's app; return observed facts as JSON-safe data."""
@@ -245,10 +254,18 @@ def _drive(root: Path) -> dict:
         states = dict(db.execute("SELECT event_id, state FROM inbox"))
         outbox = [row[0] for row in db.execute("SELECT text FROM outbox ORDER BY id")]
     posted = [body["event"]["source_event_id"] for body in turn_bodies]
+    logged_queue = {}
+    for line in (data / "logs" / "chat.jsonl").read_text(encoding="utf-8").splitlines():
+        row = json.loads(line)
+        queue = ((row.get("transport") or {}).get("conversation") or {}).get("transport_queue")
+        if row.get("direction") == "in" and queue is not None:
+            logged_queue[row["client_message_id"]] = [event["source_event_id"] for event in queue["events"]]
     return {
         "file_requests": file_requests, "agent_calls": agent_calls, "turn_posts": posted,
         "identical_resubmission": turn_bodies[0] == turn_bodies[2], "inbox_states": states,
-        "outbox": outbox, "turns": turns,
+        "outbox": outbox, "turns": turns, "continuation_version": store.runtime_value("presence_continuation_version", 0),
+        "turn_continuation": [body.get("continuation_version", 0) for body in turn_bodies],
+        "logged_queue": logged_queue,
     }
 
 

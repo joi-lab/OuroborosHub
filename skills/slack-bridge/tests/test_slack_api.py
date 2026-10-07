@@ -12,7 +12,9 @@ from lib.slack_api import (
     SlackApiError,
     SlackClient,
     SlackConfigurationError,
+    SlackMutationUncertain,
     chunk_message,
+    mutation_may_have_applied,
 )
 
 
@@ -21,6 +23,140 @@ def test_chunking_is_bounded_and_lossless() -> None:
     chunks = chunk_message(text, max_length=128)
     assert all(0 < len(chunk) <= 128 for chunk in chunks)
     assert "".join(chunks) == text
+
+
+@pytest.mark.parametrize("operation", [
+    "message", "update", "delete", "reaction", "pin", "bookmark", "join", "generic",
+])
+def test_every_message_mutation_classifies_the_first_lost_response(operation):
+    async def run():
+        calls = []
+
+        def provider(request):
+            calls.append(request)
+            raise httpx.ReadTimeout("provider accepted; reply lost", request=request)
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(provider)) as http:
+            slack = SlackClient("xoxb-test", "xapp-test", http_client=http)
+            actions = {
+                "message": lambda: slack.post_message(channel="C1", text="text"),
+                "update": lambda: slack.update_message(channel="C1", ts="1.0", text="text"),
+                "delete": lambda: slack.delete_message(channel="C1", ts="1.0"),
+                "reaction": lambda: slack.reaction(channel="C1", ts="1.0", name="wave"),
+                "pin": lambda: slack.pin(channel="C1", ts="1.0"),
+                "bookmark": lambda: slack.bookmark(channel="C1", title="text", link="https://example.org"),
+                "join": lambda: slack.join_conversation("C1"),
+                "generic": lambda: slack.generic_request(
+                    method="POST", path="chat.postMessage", body={"channel": "C1", "text": "text"},
+                    effect="write",
+                ),
+            }
+            with pytest.raises(SlackMutationUncertain) as failure:
+                await actions[operation]()
+        assert failure.value.error == "ReadTimeout"
+        assert mutation_may_have_applied(failure.value)
+        assert len(calls) == 1
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("error", [
+    httpx.ReadTimeout, httpx.WriteTimeout, httpx.ReadError, httpx.WriteError,
+    httpx.RemoteProtocolError, httpx.DecodingError, TimeoutError,
+])
+def test_post_message_never_turns_transport_uncertainty_into_retry_consent(error):
+    async def run():
+        calls = []
+
+        def provider(request):
+            calls.append(request)
+            raise error("lost reply")
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(provider)) as http:
+            slack = SlackClient("xoxb-test", "xapp-test", http_client=http)
+            with pytest.raises(SlackMutationUncertain) as failure:
+                await slack.post_message(channel="C1", text="text")
+        assert failure.value.error == error.__name__ and len(calls) == 1
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("answer,code", [
+    (httpx.Response(408), "http_408"),
+    (httpx.Response(503), "http_503"),
+    (httpx.Response(200, text="response lost halfway"), "invalid_json"),
+    (httpx.Response(200, json=[]), "invalid_response"),
+    (httpx.Response(200, json={}), "unknown_error"),
+    (httpx.Response(200, json={"ok": False, "error": "internal_error"}), "internal_error"),
+    (httpx.Response(200, json={"ok": False, "error": "request_timeout"}), "request_timeout"),
+])
+def test_ambiguous_provider_response_is_uncertain_on_first_message_attempt(answer, code):
+    async def run():
+        calls = []
+
+        def provider(request):
+            calls.append(request)
+            return answer
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(provider)) as http:
+            slack = SlackClient("xoxb-test", "xapp-test", http_client=http)
+            with pytest.raises(SlackMutationUncertain) as failure:
+                await slack.post_message(channel="C1", text="text")
+        assert failure.value.error == code
+        assert failure.value.status_code == answer.status_code
+        assert len(calls) == 1
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("error", [httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout])
+def test_pre_send_connection_failures_remain_eligible_for_a_later_attempt(error):
+    async def run():
+        def provider(request):
+            raise error("request not sent", request=request)
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(provider)) as http:
+            slack = SlackClient("xoxb-test", "xapp-test", http_client=http)
+            with pytest.raises(error) as failure:
+                await slack.post_message(channel="C1", text="text")
+        assert not mutation_may_have_applied(failure.value)
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("status,code,retry_after", [
+    (429, "ratelimited", 3.0),
+    (200, "ratelimited", 3.0),
+    (200, "invalid_arguments", 0.0),
+])
+def test_explicit_provider_refusal_keeps_its_known_no_effect_result(status, code, retry_after):
+    async def run():
+        def provider(request):
+            return httpx.Response(status, json={"ok": False, "error": code},
+                                  headers={"Retry-After": str(retry_after)})
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(provider)) as http:
+            slack = SlackClient("xoxb-test", "xapp-test", http_client=http)
+            with pytest.raises(SlackApiError) as failure:
+                await slack.post_message(channel="C1", text="text")
+        assert type(failure.value) is SlackApiError
+        assert failure.value.error == code and failure.value.retry_after == retry_after
+        assert not mutation_may_have_applied(failure.value)
+
+    asyncio.run(run())
+
+
+def test_read_errors_do_not_claim_an_uncertain_mutation():
+    async def run():
+        def provider(request):
+            raise httpx.ReadTimeout("reply lost", request=request)
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(provider)) as http:
+            slack = SlackClient("xoxb-test", "xapp-test", http_client=http)
+            with pytest.raises(httpx.ReadTimeout):
+                await slack.generic_request(method="GET", path="conversations.info", params={"channel": "C1"})
+
+    asyncio.run(run())
 
 
 def test_generic_web_api_reads_keep_method_path_and_reject_url_escape():

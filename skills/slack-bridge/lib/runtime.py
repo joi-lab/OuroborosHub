@@ -3,14 +3,17 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import hashlib
+import json
 import logging
 import pathlib
 import re
-from typing import Any
 
-from .host_adapter import HostBindingTerminalError, PresenceHostAdapter
+import httpx
+from typing import Any, Sequence
+
+from .host_adapter import HostBindingTerminalError, HostOutput, HostTurnStatus, PresenceHostAdapter
 from .provider_context import capture_context
-from .slack_api import SlackApiError, SlackClient, SlackMutationUncertain, chunk_message
+from .slack_api import SlackApiError, SlackClient, SlackMutationUncertain, chunk_message, mutation_may_have_applied
 from .socket_mode import SocketModeClient
 from .store import BridgeStore, InboxItem, OutboxItem
 
@@ -33,6 +36,7 @@ async def _discover_reporting(host: Any, store: BridgeStore) -> int:
     mode = await discover() if discover is not None else 0
     store.set_runtime(
         presence_delivery_version=mode,
+        presence_continuation_version=getattr(host, "continuation_version", 0),
         history_reporting_state=getattr(host, "delivery_reporting_status", "unsupported"),
         history_reporting_limitation="" if mode else "Host delivery reporting unavailable; provider sending remains enabled.",
     )
@@ -46,23 +50,16 @@ def _automatic_origin(item: InboxItem, turn_ref: str) -> dict[str, str]:
     return origin
 
 
+def _output_request_id(item: InboxItem, output: HostOutput) -> str:
+    """One outbox identity per Host output and destination, never per text or turn index."""
+    key = json.dumps([output.identity, item.team_id, item.channel_id, item.reply_thread_ts],
+                     ensure_ascii=False, separators=(",", ":"))
+    return f"presence-output:{hashlib.sha256(key.encode('utf-8')).hexdigest()}"
+
+
 def _delivery_report(item: Any, state: str, *, result: dict[str, Any] | None = None,
                      error: str = "") -> dict[str, Any] | None:
-    if item.delivery_reporting_version != 1:
-        return None
-    result = result or {}
-    message = {"provider_message_id": str(result.get("ts") or ""),
-               "requested_target": item.target, "target_resolved": bool(item.resolved_channel),
-               "chunk_count": item.chunk_count}
-    if error:
-        message["error"] = error
-    return {
-        "schema_version": 1, "delivery_id": item.request_id, "part_id": str(item.chunk_index),
-        "state": state, "provider": "slack", "account_id": item.provider_account_id,
-        "conversation_id": str(result.get("channel") or item.resolved_channel or item.target),
-        "thread_id": item.thread_ts, "text": item.text, "format": item.text_format,
-        "message": message, "origin": item.origin,
-    }
+    return item.delivery_report(state, result=result, error=error)
 
 
 class InboundWorker:
@@ -78,6 +75,34 @@ class InboundWorker:
         self.slack = slack
         self.host = host
         self.staged_root = staged_root
+
+    def _enqueue_outputs(self, item: InboxItem, outputs: Sequence[HostOutput], mode: int) -> None:
+        for output in outputs:
+            chunks = chunk_message(output.text)
+            if not chunks:
+                continue
+            self.store.enqueue_outbox(
+                request_id=_output_request_id(item, output),
+                target=item.channel_id,
+                thread_ts=item.reply_thread_ts,
+                chunks=chunks,
+                origin=_automatic_origin(item, output.turn_ref),
+                delivery_reporting_version=mode,
+                output_ref=output.output_ref,
+            )
+
+    def _enqueue_status(self, item: InboxItem, reference: str, status: HostTurnStatus) -> None:
+        delivery_key = hashlib.sha256(reference.encode("utf-8")).hexdigest()
+        for index, text in enumerate(status.texts):
+            chunks = chunk_message(text)
+            if chunks:
+                self.store.enqueue_outbox(
+                    request_id=f"presence:{delivery_key}:ack:{index}",
+                    target=item.channel_id, thread_ts=item.reply_thread_ts, chunks=chunks,
+                    origin=_automatic_origin(item, status.turn_ref),
+                    delivery_reporting_version=status.delivery_reporting_version,
+                )
+        self._enqueue_outputs(item, status.outputs, status.delivery_reporting_version)
 
     async def process_once(self) -> bool:
         item = self.store.claim_inbox(lease_seconds=_INBOUND_LEASE_SECONDS)
@@ -102,6 +127,12 @@ class InboundWorker:
             reference = item.host_reference
             if not reference:
                 await _discover_reporting(self.host, self.store)
+                if item.transport_queue is None:
+                    # What this conversation still had queued at the first attempt; a
+                    # retry resubmits the same observation, never a silently newer one.
+                    queue = self.store.conversation_queue(item)
+                    self.store.set_transport_queue(item.row_id, item.lease_token, queue)
+                    item = dataclasses.replace(item, transport_queue=queue)
                 reference = str(await self.host.submit(item)).strip()
                 if not reference:
                     raise RuntimeError(
@@ -109,20 +140,30 @@ class InboundWorker:
                     )
                 self.store.set_host_reference(item.row_id, item.lease_token, reference)
 
-            status = await self.host.status(reference)
+            updates_factory = getattr(self.host, "status_updates", None)
+            if updates_factory is None:
+                status = await self.host.status(reference)
+                self._enqueue_status(item, reference, status)
+            else:
+                snapshot = None
+                if reference.startswith("continuing:") and hasattr(self.host, "refresh_transport_queue"):
+                    snapshot = item.transport_queue_report
+                    if snapshot is None:
+                        snapshot = self.store.conversation_queue(item)
+                        self.store.set_transport_queue_report(item.row_id, item.lease_token, snapshot)
+                updates = (updates_factory(reference, transport_queue=snapshot) if snapshot is not None
+                           else updates_factory(reference))
+                try:
+                    async for status in updates:
+                        # Commit each available selection before advancing either
+                        # network poll; outbound workers may send it immediately.
+                        self._enqueue_status(item, reference, status)
+                        if snapshot is not None and status.transport_queue_recorded:
+                            self.store.set_transport_queue_report(item.row_id, item.lease_token, None)
+                            snapshot = None
+                finally:
+                    await updates.aclose()
             delivery_key = hashlib.sha256(reference.encode("utf-8")).hexdigest()
-            for index, text in enumerate(status.texts):
-                chunks = chunk_message(text)
-                if not chunks:
-                    continue
-                self.store.enqueue_outbox(
-                    request_id=f"presence:{delivery_key}:ack:{index}",
-                    target=item.channel_id,
-                    thread_ts=item.reply_thread_ts,
-                    chunks=chunks,
-                    origin=_automatic_origin(item, status.turn_ref),
-                    delivery_reporting_version=status.delivery_reporting_version,
-                )
             if status.state == "failed":
                 self.store.fail_inbox(
                     item.row_id,
@@ -131,15 +172,17 @@ class InboundWorker:
                 )
                 return True
             if status.state != "ready":
+                # A poll that could not be read backs off; an ordinary pending one keeps polling.
                 self.store.retry_inbox(
                     item.row_id,
                     item.lease_token,
-                    f"Host turn state: {status.state}",
-                    delay_seconds=5.0,
+                    status.error or f"Host turn state: {status.state}",
+                    delay_seconds=min(60.0, 2.0 ** min(item.attempts, 5)) if status.error else 5.0,
                 )
                 return True
 
             delivery = await self.host.deliver(reference)
+            self._enqueue_outputs(item, getattr(delivery, "outputs", ()), delivery.delivery_reporting_version)
             for index, text in enumerate(delivery.texts):
                 chunks = chunk_message(text)
                 if not chunks:
@@ -219,6 +262,19 @@ class OutboundWorker:
                 task.cancel()
             await asyncio.gather(task, return_exceptions=True)
 
+    def _cancel_started_send(self, item: OutboxItem) -> None:
+        try:
+            self.store.fail_outbox(
+                item.row_id, item.lease_token, "send_cancelled_after_dispatch", state="uncertain",
+                result={"uncertain": True},
+                report_payload=_delivery_report(item, "uncertain", error="send_cancelled_after_dispatch")
+                if item.kind == "text" else None,
+            )
+        except Exception:
+            # The durable attempt marker still prevents a resend if checkpointing
+            # fails, or another worker has already recovered this expired lease.
+            log.exception("Slack cancelled send %s could not checkpoint uncertainty", item.row_id)
+
     async def process_once(self) -> bool:
         # A slow callback keeps its own task while this worker continues sending.
         reported = self._advance_reporting()
@@ -230,10 +286,13 @@ class OutboundWorker:
         ))
         if item.kind == "mutation":
             return await self._process_mutation(item) or reported
+        send_started = False
         try:
             channel = item.resolved_channel or await self.slack.resolve_target(item.target)
             self.store.set_resolved_target(item, channel, item.provider_account_id)
             item = dataclasses.replace(item, resolved_channel=channel)
+            self.store.begin_send(item)
+            send_started = True
             result = await self.slack.post_message(
                 channel=channel,
                 text=item.text,
@@ -253,21 +312,17 @@ class OutboundWorker:
             return True
 
         except asyncio.CancelledError:
+            if send_started:
+                self._cancel_started_send(item)
             raise
         except SlackApiError as exc:
-            if item.attempts >= _MAX_OUTBOX_ATTEMPTS:
-                uncertain = exc.status_code >= 500 or exc.status_code == 408 or exc.error in {
-                    "invalid_json", "invalid_response", "internal_error", "fatal_error",
-                }
+            uncertain = send_started and mutation_may_have_applied(exc)
+            if uncertain or item.attempts >= _MAX_OUTBOX_ATTEMPTS:
                 state = "uncertain" if uncertain else "failed"
                 self.store.fail_outbox(item.row_id, item.lease_token, exc.error, state=state,
                                        report_payload=_delivery_report(item, state, error=exc.error))
-                log.warning(
-                    "Slack outbox item %s failed after %s attempts: %s",
-                    item.row_id,
-                    item.attempts,
-                    exc,
-                )
+                log.warning("Slack outbox item %s ended %s after %s attempts: %s",
+                            item.row_id, state, item.attempts, exc)
                 return True
             delay = exc.retry_after or min(60.0, 2.0 ** min(item.attempts, 5))
             self.store.retry_outbox(
@@ -279,15 +334,14 @@ class OutboundWorker:
             log.warning("Slack outbox item %s will retry: %s", item.row_id, exc)
             return True
         except Exception as exc:
-            if item.attempts >= _MAX_OUTBOX_ATTEMPTS:
-                self.store.fail_outbox(item.row_id, item.lease_token, str(exc), state="uncertain",
-                                       report_payload=_delivery_report(item, "uncertain", error=type(exc).__name__))
-                log.warning(
-                    "Slack outbox item %s failed after %s attempts: %s",
-                    item.row_id,
-                    item.attempts,
-                    exc,
-                )
+            before_request = isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout))
+            uncertain = send_started and not before_request
+            if uncertain or item.attempts >= _MAX_OUTBOX_ATTEMPTS:
+                state = "uncertain" if uncertain else "failed"
+                self.store.fail_outbox(item.row_id, item.lease_token, str(exc), state=state,
+                                       report_payload=_delivery_report(item, state, error=type(exc).__name__))
+                log.warning("Slack outbox item %s ended %s after %s attempts: %s",
+                            item.row_id, state, item.attempts, exc)
                 return True
             delay = min(60.0, 2.0 ** min(item.attempts, 5))
             self.store.retry_outbox(
@@ -308,8 +362,14 @@ class OutboundWorker:
                     artifact.unlink(missing_ok=True)
                 except OSError:
                     log.warning("Slack staged mutation artifact cleanup failed: %s", artifact)
+        send_started = False
         try:
             operation = item.operation
+            # Whole-upload custody is intentionally conservative: a crash may
+            # leave unshared staged bytes, but never permits an automatic resend.
+            # This is effect based, including a generic write made with GET.
+            self.store.begin_send(item)
+            send_started = True
             if operation == "upload_file":
                 result = await self.slack.upload_file(
                     path=pathlib.Path(str(payload.get("path") or "")),
@@ -374,6 +434,9 @@ class OutboundWorker:
             cleanup_artifact()
             return True
         except asyncio.CancelledError:
+            if send_started:
+                self._cancel_started_send(item)
+                cleanup_artifact()
             raise
         except SlackMutationUncertain as exc:
             self.store.fail_outbox(item.row_id, item.lease_token, exc.error, state="uncertain", result={"uncertain": True})
@@ -390,10 +453,7 @@ class OutboundWorker:
                     self.store.retry_outbox(item.row_id, item.lease_token, exc.error,
                                             delay_seconds=exc.retry_after or min(60.0, 2.0 ** min(item.attempts, 5)))
                 return True
-            provider_may_have_applied = exc.status_code >= 500 or exc.status_code in {0, 408} or exc.error in {
-                "fatal_error", "internal_error", "request_timeout", "service_unavailable",
-                "invalid_json", "invalid_response",
-            }
+            provider_may_have_applied = send_started and mutation_may_have_applied(exc)
             if provider_may_have_applied:
                 self.store.fail_outbox(item.row_id, item.lease_token, exc.error, state="uncertain",
                                        result={"uncertain": True})
@@ -418,12 +478,14 @@ class OutboundWorker:
             self.store.retry_outbox(item.row_id, item.lease_token, exc.error, delay_seconds=exc.retry_after or min(60.0, 2.0 ** min(item.attempts, 5)))
             return True
         except Exception as exc:
-            if item.operation == "generic_api":
+            before_request = isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout))
+            if send_started and not before_request:
                 self.store.fail_outbox(item.row_id, item.lease_token, str(exc), state="uncertain",
                                        result={"uncertain": True})
+                cleanup_artifact()
                 return True
             if item.attempts >= _MAX_OUTBOX_ATTEMPTS:
-                self.store.fail_outbox(item.row_id, item.lease_token, str(exc), state="uncertain", result={"uncertain": True})
+                self.store.fail_outbox(item.row_id, item.lease_token, str(exc), state="failed", result={"uncertain": False})
                 cleanup_artifact()
                 return True
             self.store.retry_outbox(item.row_id, item.lease_token, str(exc), delay_seconds=min(60.0, 2.0 ** min(item.attempts, 5)))

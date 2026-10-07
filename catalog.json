@@ -1324,8 +1324,8 @@
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "64835b7ad2b97970c58dbc46add985c925dd022f6ee30c4c1157e2b416651410",
-          "size": 24626
+          "sha256": "31c097afa443f158ec8f8b7ab4c37a2755cc908c2bfddcbd21455d0cf397f89a",
+          "size": 31777
         },
         {
           "path": "lib/__init__.py",
@@ -1339,13 +1339,13 @@
         },
         {
           "path": "lib/events.py",
-          "sha256": "a7ced552b638010e9ebeac577a0dfdf5ca872fd0e13764039913917731ed78e6",
-          "size": 12214
+          "sha256": "2c75afac3592d2b5de14752465ce1fd11ea4eb0dc62e21afd22c3752b9718dd6",
+          "size": 12751
         },
         {
           "path": "lib/host_adapter.py",
-          "sha256": "5079ae490d2a718908cca36a71f7db24e9c02037eb8dcc77827b13cd36dcfef2",
-          "size": 21722
+          "sha256": "36291bd5e4335e1f1dbfad92247f6968e164d0b95c26545920f70bef80f04910",
+          "size": 35368
         },
         {
           "path": "lib/local_settings.py",
@@ -1364,13 +1364,13 @@
         },
         {
           "path": "lib/runtime.py",
-          "sha256": "2ced737e7c8f6cde01e5228506029700699bfae7260d491ec0ab0013e5e8ab22",
-          "size": 24197
+          "sha256": "ebd144139ca17b71faa7b6495ffc9949d552b6b14f8a5a4e162855ab133fcbcc",
+          "size": 28268
         },
         {
           "path": "lib/slack_api.py",
-          "sha256": "d6892d37eedccf38b5e06886fecdaf946374cc0654992e360f1b8d8dd789ae63",
-          "size": 34918
+          "sha256": "141cfc16945c12f7f1791594caa224a4a8adbdf7fc9138c2af76bd916d72233d",
+          "size": 35855
         },
         {
           "path": "lib/socket_mode.py",
@@ -1379,8 +1379,8 @@
         },
         {
           "path": "lib/store.py",
-          "sha256": "e0c581f767c59c2276e031510862fcc06f44790e2f2ea4684363f69873536922",
-          "size": 36535
+          "sha256": "6a531ae21fb55fa14cc65416d6c108a392b15a37dd554869b19ea557affbcb9a",
+          "size": 47474
         },
         {
           "path": "lib/tool_results.py",
@@ -1403,9 +1403,24 @@
           "size": 4153
         },
         {
+          "path": "tests/PRESENCE_PROCESS_CONSUMER.md",
+          "sha256": "b49cf2bfc45b9eddb2ba28ceb7f2c64ff40da4542b85461c833a06106aab7c43",
+          "size": 4704
+        },
+        {
+          "path": "tests/README.md",
+          "sha256": "7355fbf9d1cdb0deb5841c5c07f6f7a41a75baf043af92d4dbea7a267274dab5",
+          "size": 2144
+        },
+        {
           "path": "tests/conftest.py",
-          "sha256": "c2c543979de4d2e2e3dff54b4a7e240a6a6217c86ccba3367d54d307abc67d85",
-          "size": 850
+          "sha256": "1a80faab163899d6cfe2075ce93473de44cb18db17ba8d481f30965d0140e274",
+          "size": 987
+        },
+        {
+          "path": "tests/presence_process_host.py",
+          "sha256": "b736aa77cf4eefc7f3f684c0723a985f1f45e4c56516ee8b1d0ddf200d4fd74c",
+          "size": 10453
         },
         {
           "path": "tests/test_conversation_facts.py",
@@ -1414,8 +1429,8 @@
         },
         {
           "path": "tests/test_delivery_reporting.py",
-          "sha256": "cffc925d944bae584e7caa45529c89734a342ef34df8a8c37c9255feb448a2f2",
-          "size": 22201
+          "sha256": "6d7b2c6fdc620cfabde50b75850e06c171dabde9ca5f11c58402c8f28465dbd3",
+          "size": 22245
         },
         {
           "path": "tests/test_directory.py",
@@ -1444,13 +1459,23 @@
         },
         {
           "path": "tests/test_message_format.py",
-          "sha256": "d2febd8ef33de8dbc40b47b555b378ebef9940bb114768c78154699da006f4ae",
-          "size": 5110
+          "sha256": "575c05a77ecbde6facaaf7310eb66b3037e8ac45f5f4ef1a205110478c1914d7",
+          "size": 5118
         },
         {
           "path": "tests/test_message_revisions.py",
           "sha256": "5a320cb1bb2bec8f3b114befa92b1c3f2fd0665151f0014f21513a98bc6dbdce",
           "size": 6942
+        },
+        {
+          "path": "tests/test_presence_continuation.py",
+          "sha256": "e7a860b761e2a7a29c655bc18e849c1e6c8aa183308009aa58ea09dbf6ca9940",
+          "size": 47438
+        },
+        {
+          "path": "tests/test_presence_process_consumer.py",
+          "sha256": "26f103df8ae61c57d98369097436d0a57655295a7f8b6ea58d483d4eb5d74ef7",
+          "size": 30967
         },
         {
           "path": "tests/test_provider_context.py",
@@ -1463,9 +1488,14 @@
           "size": 7978
         },
         {
+          "path": "tests/test_send_custody.py",
+          "sha256": "368ba1e1a80eb24aad60a5e4748abdca118a60a93a49213569c5b019bf2e9f09",
+          "size": 12745
+        },
+        {
           "path": "tests/test_slack_api.py",
-          "sha256": "bf1336fa0ab4e23c6b535b2b78bac5e2e733eb3960880386d36e74199b98d166",
-          "size": 14287
+          "sha256": "ff362a8ca0ad6444030ac0c22d292115f969f2720a41ecffbe7365839ba9a280",
+          "size": 20163
         },
         {
           "path": "tests/test_socket_mode.py",
@@ -1491,7 +1521,7 @@
       "name": "slack-bridge",
       "slug": "slack-bridge",
       "type": "extension",
-      "version": "1.4.4"
+      "version": "1.5.0"
     },
     {
       "description": "Inspect, filter, sort, group, and aggregate CSV and XLSX tables while reporting truncation and non-numeric values honestly.",
