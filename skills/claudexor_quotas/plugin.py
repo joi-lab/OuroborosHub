@@ -76,7 +76,9 @@ UI_ICON = "\u25d4"
 
 # Display choices, and only those. Anything the reader picks that is not in
 # these tables is not stored: the file is written by a route, and a route takes
-# whatever it is given.
+# whatever it is given. Legacy since 0.8.0: the widget no longer reads or saves
+# them (its timeline's span and scenario are choices for one visit); the file,
+# the route and its save ordering stay for an older widget.
 PREFS_FILE = "prefs.json"
 DENSITIES = ("compact", "normal", "detailed")
 MODEL_VIEWS = ("all", "models", "shared")
@@ -1644,9 +1646,10 @@ def register(api: Any) -> None:
         effective, cached = latest.effective(payload)
         reads = facet_states(payload)
         view = build_view(effective, transport_error, moment, reads=reads, cached=cached)
-        # Sent with the reading rather than behind a second request: the widget
-        # would otherwise draw one frame with the wrong choice and correct
-        # itself, which reads as a flicker nobody asked for.
+        # Legacy since 0.8.0: the display choices (row detail, model filter,
+        # folding) belonged to the account list the 0.7 widget drew. This
+        # widget draws nothing from them and saves none; they are still sent,
+        # and the prefs route still keeps them, for an older widget.
         view["prefs"] = read_prefs(api)
         horizon = _query(request, "horizon")
         try:

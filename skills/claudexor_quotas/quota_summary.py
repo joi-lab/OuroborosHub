@@ -37,7 +37,7 @@ import math
 import re
 from collections import Counter
 from dataclasses import dataclass, field, replace
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple, Union
 
 SUMMARY_SCHEMA = 1
 
@@ -145,6 +145,14 @@ def iso(stamp: Optional[float]) -> Optional[str]:
         return None
     moment = _dt.datetime.fromtimestamp(stamp, _dt.timezone.utc).replace(microsecond=0)
     return moment.isoformat().replace("+00:00", "Z")
+
+
+def iso_exact(stamp: float) -> str:
+    """UTC ISO-8601 with a trailing Z and the fraction of a second kept, to
+    the microsecond; a whole second is written exactly as iso() writes it.
+    For a moment that must not be moved to its second (a reported reset in
+    the chart's table), never in place of iso()."""
+    return _dt.datetime.fromtimestamp(stamp, _dt.timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def ratio_of(value: Any) -> Tuple[Optional[float], str]:
@@ -1518,12 +1526,19 @@ def _group_output(calc: GroupCalc, now: float, named: bool = False) -> Dict[str,
     fixed = [(m.reading.resets_at, m) for m in measured
              if m.reading and m.reading.resets_at is not None and m.reading.resets_at > now]
     next_reset = None
+    next_returns = None
     if fixed:
         soonest = min(at for at, _m in fixed)
         next_reset = {
             "at": iso(soonest),
             "accounts": sum(1 for at, _m in fixed if at - soonest <= RESET_TOLERANCE_SEC),
         }
+        # What a full refill of those accounts would give back if nothing more
+        # were used before it: their share used now. The chart's "no new use"
+        # schedule says the same of its first event (reset_events) when that
+        # event ends inside the chart's span (horizon_events).
+        next_returns = round(sum(1.0 - m.remaining for at, m in fixed
+                                 if at - soonest <= RESET_TOLERANCE_SEC), 4)
     pace_to_reset = None
     if fixed:
         pace_to_reset = {
@@ -1645,6 +1660,10 @@ def _group_output(calc: GroupCalc, now: float, named: bool = False) -> Dict[str,
             "stale_newest_at": iso(max(stale_seen)) if stale_seen else None,
         },
         "next_reset": next_reset,
+        # Additive since 0.8.0 (widget only; the tool's next_reset is
+        # unchanged): the share those accounts use now, which a full refill at
+        # that reset gives back if nothing more is used before it.
+        "next_reset_returns": next_returns,
         "reset_unknown": sum(1 for m in measured if m.reading and m.reading.resets_at is None),
         "pace_to_reset": pace_to_reset,
         "recent_pace": recent,
@@ -2178,19 +2197,198 @@ def _vertices(members: List[Member], now: float, end: float, fn, breaks: Iterabl
     return [[round(t), round(v, 4)] for t, v in out]
 
 
+# Where a scenario is read off in words: about an hour, a working day, half a
+# day and the whole horizon; a day, three days and the week.
+CHECKPOINTS: Dict[str, Tuple[float, ...]] = {
+    "24h": (3600.0, 6 * 3600.0, 12 * 3600.0, 86400.0),
+    "7d": (86400.0, 3 * 86400.0, 604800.0),
+}
+
+
+def reset_events(members: Sequence[Member], now: float) -> List[Tuple[float, List[Member]]]:
+    """Each current account's next reported reset, in time order, grouped as
+    the summary's ``next_reset`` groups them: a reset within
+    RESET_TOLERANCE_SEC of the first one of a group belongs to that group.
+    An account with no reported reset is in none — no refill is assumed."""
+    fixed = sorted(((m.reading.resets_at, m) for m in members
+                    if m.reading is not None and m.reading.resets_at is not None
+                    and m.reading.resets_at > now), key=lambda pair: pair[0])
+    events: List[Tuple[float, List[Member]]] = []
+    for at, member in fixed:
+        if events and at - events[-1][0] <= RESET_TOLERANCE_SEC:
+            events[-1][1].append(member)
+        else:
+            events.append((at, [member]))
+    return events
+
+
+def horizon_events(members: Sequence[Member], now: float, end: float
+                   ) -> Tuple[List[Tuple[float, List[Member]]], List[Tuple[float, List[Member]]]]:
+    """The reset events up to ``end`` (inclusive) and those after it. The
+    accounts are split at ``end`` before they are grouped (reset_events), so
+    resets within RESET_TOLERANCE_SEC on either side of the horizon are never
+    one event: what refills past it is never in a total inside it."""
+    inside = [m for m in members if m.reading is not None
+              and m.reading.resets_at is not None and m.reading.resets_at <= end]
+    after = [m for m in members if m.reading is not None
+             and m.reading.resets_at is not None and m.reading.resets_at > end]
+    return reset_events(inside, now), reset_events(after, now)
+
+
+def _instant(stamp: float) -> Union[int, float]:
+    """A moment inside a scenario as published: a whole second as round()
+    gives it, a fraction of a second kept — never moved to the nearest
+    second, which could put a refill before its reported reset."""
+    whole = round(stamp)
+    return whole if whole == stamp else stamp
+
+
+def _scenario_line(total, now: float, end: float, breaks: Iterable[float]) -> List[List[float]]:
+    """A scenario's vertices from ``now`` to ``end``, both ends included: at
+    every break a left and (where it differs) a right value, so a reset
+    exactly at the horizon is drawn with its refill rather than left out.
+    The ends are the whole seconds the chart publishes (``now`` rounded, the
+    horizon); every break between them keeps its own time (_instant), so the
+    line says what the checkpoints and the table read off the same functions
+    at a whole second either side of a reset with a fraction. A break inside
+    the half second ``now`` was rounded up by is drawn at ``now``."""
+    times = sorted({t for t in breaks if now < t <= end})
+    first = round(now)
+    out = [[first, total(now, True)]]
+    for t in times:
+        left, right = total(t, False), total(t, True)
+        at = max(_instant(t), first)
+        out.append([at, left])
+        if abs(right - left) > 1e-9:
+            out.append([at, right])
+    if not times or times[-1] < end:
+        out.append([round(end), total(end, False)])
+    return [[t, round(v, 4)] for t, v in out]
+
+
+def _scenario_functions(members: List[Member], paced: List[Member], now: float):
+    """(value, total) of one scenario: one account's share left at ``t``, and
+    the sum over ``members`` — ``right`` asks for the value just after
+    anything that happens exactly at ``t`` (a refill), else just before."""
+    paced_ids = {id(m) for m in paced}
+
+    def value(member: Member, t: float, right: bool) -> float:
+        if id(member) in paced_ids:
+            return _pace_value(member, now, t, right)
+        return _hold_value(member, t, right)
+
+    def total(t: float, right: bool) -> float:
+        return sum(value(member, t, right) for member in members)
+
+    return value, total
+
+
+def _scenario(members: List[Member], paced: List[Member], now: float, end: float,
+              horizon: str) -> Dict[str, Any]:
+    """One conditional future of the accounts read now — the same accounts
+    and the same figure as the row's headline, restricted ones included
+    (measured quota is not a dispatch verdict) — drawn to the horizon.
+
+    Every account keeps its share now and refills to one full window once,
+    at its own next reported reset; an account with no reported reset is
+    never refilled. The accounts in ``paced`` instead continue their own
+    observed net change from now, staying at zero once they reach it, and
+    after their refill continue it again from full. Nothing else is
+    assumed: no additional reset, however short the window, and no pace for
+    an account whose pace did not qualify. That is the stated condition, to
+    the horizon; no accuracy is claimed for it. With ``paced`` empty this is
+    "no new use". The schedule, the checkpoints and the moments an account
+    runs out are read from the same functions the line is drawn from."""
+    paced_ids = {id(m) for m in paced}
+    value, total = _scenario_functions(members, paced, now)
+
+    breaks: List[float] = []
+    runs_out: List[Dict[str, Any]] = []
+    for member in members:
+        reset = member.reading.resets_at
+        if reset is not None:
+            breaks.append(reset)
+        if id(member) not in paced_ids:
+            continue
+        rate = member.rate["windows_per_hour"] / 3600.0
+        if rate <= 0:
+            continue
+        if member.remaining > RATIO_EPS:
+            out_at = now + member.remaining / rate
+            if reset is None or out_at < reset:
+                breaks.append(out_at)
+                if out_at <= end:
+                    runs_out.append({"at": round(out_at), "reset_reported": reset is not None,
+                                     "after_refill": False})
+        if reset is not None:
+            again = reset + 1.0 / rate
+            breaks.append(again)
+            if again <= end:
+                runs_out.append({"at": round(again), "reset_reported": True, "after_refill": True})
+    runs_out.sort(key=lambda row: row["at"])
+
+    schedule: List[Dict[str, Any]] = []
+    # Split at the horizon first (horizon_events): an event ends by ``end``,
+    # and an account resetting just past it is only in ``later``.
+    inside, later = horizon_events(members, now, end)
+    for at, group in inside:
+        # Resets reported within RESET_TOLERANCE_SEC are one event: it spans
+        # from the first (``at``) to the last (``last``), and the total is the
+        # one just after the last of them.
+        last = max(member.reading.resets_at for member in group)
+        schedule.append({
+            # Their own times, as the line has them (_instant).
+            "at": _instant(at), "last": _instant(last), "accounts": len(group),
+            # What each refill gives back is what the account has used by
+            # then in this scenario: never the "no new use" amount reused.
+            "adds": round(sum(value(member, member.reading.resets_at, True)
+                              - value(member, member.reading.resets_at, False) for member in group), 4),
+            "total_after": round(total(last, True), 4),
+        })
+    checkpoints = []
+    for offset in CHECKPOINTS.get(horizon, CHECKPOINTS["24h"]):
+        # Read off at the whole second it is published at, as the table's
+        # span rows are: the horizon's own checkpoint is the horizon's instant.
+        # A reset later in that same second is not in it yet (_scenario_line).
+        moment = round(now + offset)
+        if moment <= end:
+            checkpoints.append({"after_seconds": round(offset), "at": moment,
+                                "value": round(total(moment, True), 4)})
+    return {
+        "line": _scenario_line(total, now, end, breaks),
+        "accounts": len(members),
+        "at_pace": len(paced),
+        "held": len(members) - len(paced),
+        "zero_growth": sum(1 for m in paced if (m.rate.get("windows_per_hour") or 0.0) <= RATIO_EPS),
+        "no_reset": sum(1 for m in members if m.reading.resets_at is None),
+        "schedule": schedule,
+        # The first reported reset past the horizon, and how many more: when,
+        # never how much — the scenario is not drawn that far.
+        "later": ({"at": round(later[0][0]), "accounts": len(later[0][1]),
+                   "more_events": len(later) - 1,
+                   "more_accounts": sum(len(group) for _at, group in later[1:])} if later else None),
+        "checkpoints": checkpoints,
+        "runs_out": runs_out,
+    }
+
+
 def build_chart(state: SummaryState, key: str = "", harness: str = "",
                 horizon: str = "24h") -> Optional[Dict[str, Any]]:
-    """One group's chart: the observed total behind ``now``, the reserve with
-    no new use and only reported resets ahead of it, and — for the accounts
-    whose recent pace qualified, named by count in ``recent_pace_scope`` —
-    their summed reserve if each keeps that pace, up to their first reported
-    reset; with the observed total of the same accounts behind ``now`` when
-    they are not exactly the accounts the observed line sums.
+    """One group's chart: the recorded total behind ``now`` (``past``: every
+    account of the limit with a record in the range, whatever is fresh now)
+    and, ahead of it, the ``scenarios`` of the accounts read now — the row's
+    figure — with their reset schedules (see _scenario). The two bases can
+    differ; the line behind ``now`` never pretends to end at the figure.
+
+    Kept for compatibility: ``no_new_use`` (the same line as the "no new use"
+    scenario before the horizon's own instant, its times rounded to the
+    second as they always were), the qualified cohort's own
+    ``recent_pace`` up to its first reported reset with ``cohort_past``, and
+    ``recent_pace_refill_scenario``.
 
     No later reset is assumed, however short the limit, and none is inferred
-    from a window's length; a refill at a reported reset is a scenario of its
-    own (``recent_pace_refill_scenario``). That is a condition, said in
-    ``assumptions``, not a forecast."""
+    from a window's length. That is a condition, said in ``assumptions``, not
+    a forecast."""
     if horizon not in HORIZONS:
         horizon = "24h"
     calc = pick_chart_group(state.groups, key, harness)
@@ -2198,7 +2396,12 @@ def build_chart(state: SummaryState, key: str = "", harness: str = "",
         return None
     now = state.now
     span = HORIZONS[horizon]
-    start, end = now - span, now + span
+    # The horizon is the whole second the chart publishes as ``end``: what
+    # falls inside it (the reset events, both scenarios, their checkpoints,
+    # the older lines and the table) is decided against that one instant,
+    # never against a fraction of a second either side of it. ``now`` and
+    # the figure at it stay as read.
+    start, end = now - span, float(round(now + span))
     members = calc.measured
     current = sum(m.remaining for m in members)
     basis = past_members(calc, state.view, start)
@@ -2215,12 +2418,13 @@ def build_chart(state: SummaryState, key: str = "", harness: str = "",
         "current" if len(current_basis) == len(basis)
         else "last_known" if not current_basis else "recorded")
 
-    resets: Dict[float, int] = {}
-    for member in members:
-        reset = member.reading.resets_at
-        if reset is not None and now < reset <= end:
-            slot = next((t for t in resets if abs(t - reset) <= RESET_TOLERANCE_SEC), reset)
-            resets[slot] = resets.get(slot, 0) + 1
+    # The reported resets inside the horizon, grouped one way for the marks,
+    # the table and both scenarios' schedules (horizon_events: split at the
+    # horizon, then grouped): first -> (the last reset of the event, how many
+    # accounts).
+    events = {at: (max(m.reading.resets_at for m in group), len(group))
+              for at, group in horizon_events(members, now, end)[0]}
+    resets: Dict[float, int] = {at: count for at, (_last, count) in events.items()}
 
     hold_breaks = [m.reading.resets_at for m in members if m.reading.resets_at is not None]
     hold = _vertices(members, now, end, lambda m, t, r: _hold_value(m, t, r), hold_breaks) if members else []
@@ -2275,6 +2479,15 @@ def build_chart(state: SummaryState, key: str = "", harness: str = "",
             "no estimate line is drawn."
         )
 
+    # 0.8.0: the two futures the widget draws, both of the accounts read now
+    # — the row's figure, from its own value at now — and both to the
+    # horizon: no new use, and the qualified accounts at their recent pace
+    # with the others held. With no current reading there is no future.
+    scenarios = None
+    if members:
+        scenarios = {"no_new_use": _scenario(members, [], now, end, horizon),
+                     "recent_pace": _scenario(members, known, now, end, horizon)}
+
     def at_time(line: Optional[List[List[float]]], moment: float) -> Optional[float]:
         if not line:
             return None
@@ -2290,13 +2503,15 @@ def build_chart(state: SummaryState, key: str = "", harness: str = "",
         return None if value is None else round(value, 2)
 
     # The table is a sample of the observed line (the chart and its cursor
-    # use every vertex): a stride of it, plus every gap's beginning, plus
-    # the newest single-sweep points — each marked as a sighting, since a
-    # point holds for no stretch of time.
+    # use every vertex): a stride of it, plus the beginnings of at most
+    # TABLE_PAST_ROWS gaps the stride missed (the oldest; never every gap),
+    # plus the newest single-sweep points — each marked as a sighting, since
+    # a point holds for no stretch of time.
     table: List[Dict[str, Any]] = []
     stride = max(1, len(past) // TABLE_PAST_ROWS)
     rows = past[:-1][::stride]
-    # Where a gap begins is always said, not only when the stride lands on it.
+    # A gap's beginning is said even where the stride does not land on it —
+    # up to TABLE_PAST_ROWS of them, so the table stays a bounded sample.
     rows += [point for point in past[:-1] if point[1] is None and point not in rows][:TABLE_PAST_ROWS]
     for point in sorted(rows, key=lambda point: (point[0], point[1] is None)):
         table.append({"at": iso(point[0]), "observed": None if point[1] is None else round(point[1], 2)})
@@ -2305,25 +2520,46 @@ def build_chart(state: SummaryState, key: str = "", harness: str = "",
                       "sighting": True,
                       "event": ("seen at this sweep only" if point[1] is not None
                                 else "sources disagree at this sweep")})
-    table.append({"at": iso(now), "observed": round(current, 2) if members else None,
-                  "no_new_use": round(current, 2) if members else None,
-                  "recent_pace": round(sum(m.remaining for m in known), 2) if pace else None,
-                  "event": "now"})
+    # The scenarios the widget draws (``scenario_no_new_use``,
+    # ``scenario_recent_pace``) are read off their own functions just after
+    # anything at that moment — after the last reset of an event, so a row
+    # says the same as the schedule. ``no_new_use`` and ``recent_pace`` stay
+    # the older lines, kept for compatibility.
+    totals = ({"scenario_no_new_use": _scenario_functions(members, [], now)[1],
+               "scenario_recent_pace": _scenario_functions(members, known, now)[1]} if members else {})
+
+    def scenario_cells(moment: float) -> Dict[str, Optional[float]]:
+        return {name: round(total(moment, True), 2) for name, total in totals.items()}
+
+    table.append(dict({"at": iso(now), "observed": round(current, 2) if members else None,
+                       "no_new_use": round(current, 2) if members else None,
+                       "recent_pace": round(sum(m.remaining for m in known), 2) if pace else None,
+                       "event": "now"}, **scenario_cells(now)))
     for moment in sorted(resets):
         count = resets[moment]
-        table.append({
-            "at": iso(moment),
+        last = events[moment][0]
+        row = {
+            # The reset's own time, its fraction of a second kept (iso_exact):
+            # a row at the same whole second before it reads the total before it.
+            "at": iso_exact(moment),
             "no_new_use": at_time(hold, moment + 1),
             "recent_pace": at_time(pace, moment + 1),
             "event": f"reported reset · {count} account{'s' if count != 1 else ''}",
-        })
+        }
+        if last != moment:
+            row["until"] = iso_exact(last)
+        row.update(scenario_cells(last))
+        table.append(row)
     for fraction in (0.25, 0.5, 1.0):
-        # Whole seconds, as the lines' vertices are: the horizon's own row
-        # must land on the last vertex, not a fraction of a second past it.
+        # Whole seconds, as the checkpoints are: the horizon's own row is the
+        # horizon's instant, the last vertex.
         moment = round(now + span * fraction)
-        table.append({"at": iso(moment), "no_new_use": at_time(hold, moment),
-                      "recent_pace": at_time(pace, moment)})
-    table.sort(key=lambda row: row["at"])
+        table.append(dict({"at": iso(moment), "no_new_use": at_time(hold, moment),
+                           "recent_pace": at_time(pace, moment)}, **scenario_cells(moment)))
+    # In time order by the instant each row says, so a reset a fraction of a
+    # second into a second follows the row at that whole second (rows of one
+    # instant keep the order they were added in).
+    table.sort(key=lambda row: parse_instant(row["at"]))
 
     return {
         "group_key": calc.key,
@@ -2336,6 +2572,12 @@ def build_chart(state: SummaryState, key: str = "", harness: str = "",
         # GroupCalc.slots), so it does not move when a reading goes stale.
         "y_max": max(len(calc.slots), len(members)),
         "accounts": len(members),
+        # The row's figure, unrounded: where both scenarios start at now.
+        "current_windows": round(current, 4) if members else None,
+        # 0.8.0: the futures the widget draws, of the accounts read now (see
+        # _scenario). None with no current reading: nothing is projected
+        # from last-known values.
+        "scenarios": scenarios,
         "past": past,
         # How many recorded values the observed line has before ``now``,
         # and — only when the vertex ceiling cut the oldest part away — the
@@ -2375,7 +2617,14 @@ def build_chart(state: SummaryState, key: str = "", harness: str = "",
         # window at its next reported reset: a scenario, drawn only on request.
         "recent_pace_refill_scenario": pace_refill,
         "resets": [{"at": round(t), "accounts": n} for t, n in sorted(resets.items())],
+        # The same events with when each ends (resets reported within
+        # RESET_TOLERANCE_SEC of the first are one event).
+        "reset_events": [{"at": round(t), "last": round(events[t][0]), "accounts": n}
+                         for t, n in sorted(resets.items())],
         "table": table,
+        # What the record and the two drawn ``scenarios`` assume — the notes
+        # the widget shows. The older lines' own wording is apart, in
+        # ``legacy_assumptions``: it describes fields that are not drawn.
         "assumptions": [
             "Observed: every account of this limit with a record in this range, "
             "whatever its reading now, while this skill's collector was "
@@ -2386,19 +2635,30 @@ def build_chart(state: SummaryState, key: str = "", harness: str = "",
             "over time or across a gap.",
             "No new use: each account keeps its current reading and refills to "
             "a full window only at its own next reported reset.",
-            "Recent pace: only the accounts whose own pace over the last hour "
-            "qualified, each continuing its observed net change; one that runs "
-            "out stays at zero. The line stops at the first reported reset among "
-            "them. If the trend continues — not a promise, and an unchanged "
-            "reading is not proof of zero use.",
-            "Refill scenario: the same pace, with each account refilled to a full "
-            "window at its next reported reset. A reported reset time is not "
-            "evidence of a full refill.",
-            "Both scenarios assume no additional unreported resets: only each "
+            "Recent pace: every account read now, the ones whose pace "
+            "qualified continuing it (refilled once at their next reported reset, "
+            "then at the same pace), the others held at their share and refilled "
+            "at their reset. A condition, not an estimate of use nobody observed.",
+            "The scenarios assume no additional unreported resets: only each "
             "account's next reported reset is applied, so a limit shorter than "
-            "the horizon is not refilled again in them. The horizon is how far "
-            "the scenario is drawn, not how far it is reliable.",
+            "the horizon is not refilled again in them, and an account with no "
+            "reported reset is never refilled. Reset times are as reported now "
+            "and may move. The horizon is how far the scenario is drawn, not how "
+            "far it is reliable.",
         ],
+        # The fields kept for compatibility, said by field: never drawn.
+        "legacy_assumptions": {
+            "recent_pace": (
+                "Only the accounts whose own pace over the last hour qualified, "
+                "each continuing its observed net change; one that runs out stays "
+                "at zero. The line stops at the first reported reset among them. "
+                "If the trend continues — not a promise, and an unchanged reading "
+                "is not proof of zero use."),
+            "recent_pace_refill_scenario": (
+                "The same pace, with each account refilled to a full window at its "
+                "next reported reset. A reported reset time is not evidence of a "
+                "full refill."),
+        },
     }
 
 

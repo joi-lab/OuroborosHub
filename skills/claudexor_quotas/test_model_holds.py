@@ -277,80 +277,81 @@ function click(env, key) {
     v.groups.forEach((g) => { g.accounts = g.accounts.filter((a) => a.subject_id === sid); });
     return v;
   };
-  const plane = (root) => classes(root, 'account-plane')[0];
-  const holdLines = (root) => classes(plane(root), 'quota-exhaustion');
-  const dotOf = (root) => classes(byFocus(root, 'account-btn'), 'state-dot')[0].className;
+  // 0.8.0: the selected account's card (the inspector) — its brief, then its
+  // diagnostics with every window as a line — and the account list's state.
+  const card = (root) => classes(root, 'inspector')[0];
+  const holdLines = (root) => classes(card(root), 'quota-exhaustion');
+  const dotOf = (root) => classes(card(root), 'state-dot')[0].className;
   const meterOf = (node) => classes(node, 'meter')[0];
-  const tileOf = (root, label) => classes(root, 'quota-tile').find((t) => t.title === label);
-  const holdChips = (opt) => classes(opt, 'acct-cap')
-    .filter((c) => !/\bacct-pool\b/.test(c.className) && c.textContent !== 'cooldown');
+  const lineOf = (root, pool) => classes(card(root), 'win-line').find((l) =>
+    pool ? classes(l, 'acct-pool').some((c) => c.textContent === pool) : !classes(l, 'acct-pool').length);
+  const stateOf = (root, sid) => classes(byFocus(root, 'acct:claude:' + sid), 'acc-state')[0];
   const keyOf = (part) => route.reserve.summary.groups.find((g) => g.key.includes(part)).key;
   const tickers = (node) => classes(node, 'ticker').map((t) => t.className);
+  async function opened(view, sid, diagnostics) {
+    const env = await boot(view);
+    click(env, 'accounts');
+    click(env, 'acct:claude:' + sid);
+    if (diagnostics) click(env, 'inspector-diag');
+    return env;
+  }
 
   // A live exhaustion reported by a stale reading, the Fable share below the
   // limit: an amber model hold with its reset, never a cooldown, never the account.
-  let env = await boot(only('split'));
+  let env = await opened(only('split'), 'split');
   let lines = holdLines(env.root);
   assert.equal(lines.length, 1);
   assert.match(lines[0].textContent, /^Model limit reached · Fable · until /);
   assert.match(lines[0].textContent, /reported by a stale reading/);
   assert.doesNotMatch(lines[0].className, /\bpast\b/);
   assert.ok(tickers(lines[0]).length && tickers(lines[0]).every((c) => /\bwarn\b/.test(c) && !/\bbad\b/.test(c)));
-  assert.equal(classes(plane(env.root), 'quota-cooldown').length, 0);
-  assert.doesNotMatch(allSpoken(plane(env.root)), /Limit reached|Cooling/);
+  assert.equal(classes(card(env.root), 'quota-cooldown').length, 0);
+  assert.doesNotMatch(allSpoken(card(env.root)), /Limit reached|Cooling/);
   assert.match(dotOf(env.root), /\bwarn\b/);
-  const fableRow = byFocus(env.root, 'reserve:' + keyOf('|weekly_scoped:Fable|'));
+  const fableRow = byFocus(env.root, 'limit:' + keyOf('|weekly_scoped:Fable|'));
   assert.match(fableRow.getAttribute('aria-label'), /2 with this model limit reported reached \(1\.30\)/);
-  // 0.7.0: the row's details button carries the spoken summary; the tail
-  // is beside it in the row (accounts unnamed here: no account keys).
-  assert.match(classes(fableRow.parentNode, 'l-tail')[0].textContent,
-    /^1 at the limit · 3 restricted/);
-  click(env, 'account-details');
-  assert.match(meterOf(tileOf(env.root, '7 day (Fable)')).className, /\brestricted\b/);
-  assert.match(classes(tileOf(env.root, '7 day (Fable)'), 'tile-model')[0].className, /\bheld\b/);
-  assert.doesNotMatch(meterOf(tileOf(env.root, '7 day')).className, /\brestricted\b/);
-  click(env, 'account-btn');
-  let opt = byFocus(env.root, 'opt:claude:split');
-  assert.deepEqual(holdChips(opt).map((c) => c.textContent), ['model limit reached: Fable']);
-  assert.ok(holdChips(opt).every((c) => /\bheld\b/.test(c.className) && !/\bexhausted\b/.test(c.className)));
-  assert.match(opt.getAttribute('aria-label'), /model limit reached: Fable until .*reported by a stale reading/);
-  assert.doesNotMatch(opt.textContent, /model cooldown|account cooldown/);
-  assert.ok(classes(opt, 'acct-pool').every((c) => /\bheld\b/.test(c.className)));
+  assert.match(classes(fableRow.parentNode, 'l-tail')[0].textContent, /^1 at the limit · 3 restricted/);
+  // The account list names the hold by its model and kind.
+  assert.equal(stateOf(env.root, 'split').textContent, 'model limit reached: Fable');
+  assert.match(stateOf(env.root, 'split').title, /model limit reached: Fable until .*reported by a stale reading/);
+  assert.match(byFocus(env.root, 'acct:claude:split').getAttribute('aria-label'), /model limit reached: Fable until /);
+  click(env, 'inspector-diag');
+  assert.match(meterOf(lineOf(env.root, 'Fable')).className, /\brestricted\b/);
+  assert.match(classes(lineOf(env.root, 'Fable'), 'acct-pool')[0].className, /\bheld\b/);
+  assert.match(lineOf(env.root, 'Fable').textContent, /limit reported/);
+  assert.doesNotMatch(meterOf(lineOf(env.root, '')).className, /\brestricted\b/);
 
-  // Measured at the limit and reported out: red, said once in the brief, the
-  // reported reset in the details.
-  env = await boot(only('measured'));
+  // Measured at the limit and reported out: red on the window, said once —
+  // the brief names no second hold; the reported reset is in the diagnostics.
+  env = await opened(only('measured'), 'measured');
   assert.equal(holdLines(env.root).length, 0);
-  assert.match(plane(env.root).textContent, /Fable: limit reached · in the details/);
-  click(env, 'account-details');
+  const fableLim = classes(card(env.root), 'acct-lim').find((l) => /Fable/.test(l.textContent));
+  assert.match(classes(fableLim, 'p')[0].className, /\bbad\b/);
+  assert.equal(stateOf(env.root, 'measured').textContent, 'a model at its limit');
+  click(env, 'inspector-diag');
   lines = holdLines(env.root);
   assert.equal(lines.length, 1);
   assert.match(lines[0].textContent, /^Model limit reached · Fable · until /);
-  assert.match(classes(tileOf(env.root, '7 day (Fable)'), 'tile-model')[0].className, /\bspent\b/);
-  assert.match(meterOf(tileOf(env.root, '7 day (Fable)')).className, /\bspent\b/);
-  click(env, 'account-btn');
-  opt = byFocus(env.root, 'opt:claude:measured');
-  assert.deepEqual(holdChips(opt).map((c) => c.textContent), []);
-  assert.ok(classes(opt, 'acct-pool').some((c) => /\bexhausted\b/.test(c.className)));
+  assert.match(classes(lineOf(env.root, 'Fable'), 'acct-pool')[0].className, /\bexhausted\b/);
+  assert.match(classes(lineOf(env.root, 'Fable'), 'win-tag')[0].className, /\bbad\b/);
+  assert.match(meterOf(lineOf(env.root, 'Fable')).className, /\bspent\b/);
 
   // No reset, an unreadable one: disclosed in the muted voice, no hold.
   for (const [sid, words] of [['unreported', 'no reset time reported'], ['unreadable', 'reset time unreadable']]) {
-    env = await boot(only(sid));
+    env = await opened(only(sid), sid, true);
     lines = holdLines(env.root);
-    assert.equal(lines.length, 1, sid);
+    assert.equal(lines.length, 2, sid + ': once in the brief, once in the diagnostics');
     assert.equal(lines[0].textContent, 'Reported model limit reached · Fable · ' + words, sid);
     assert.match(lines[0].className, /\bpast\b/, sid);
     assert.match(dotOf(env.root), /\bok\b/, sid);
-    click(env, 'account-details');
-    assert.doesNotMatch(meterOf(tileOf(env.root, '7 day (Fable)')).className, /\brestricted\b/, sid);
-    assert.doesNotMatch(classes(tileOf(env.root, '7 day (Fable)'), 'tile-model')[0].className, /\bheld\b|\bspent\b/, sid);
-    click(env, 'account-btn');
-    assert.deepEqual(holdChips(byFocus(env.root, 'opt:claude:' + sid)).map((c) => c.textContent), [], sid);
+    assert.doesNotMatch(meterOf(lineOf(env.root, 'Fable')).className, /\brestricted\b/, sid);
+    assert.doesNotMatch(classes(lineOf(env.root, 'Fable'), 'acct-pool')[0].className, /\bheld\b|\bexhausted\b/, sid);
+    assert.equal(stateOf(env.root, sid).textContent, 'ready', sid);
   }
-  // A passed reset is history: only in the details.
-  env = await boot(only('passed'));
+  // A passed reset is history: only in the diagnostics.
+  env = await opened(only('passed'), 'passed');
   assert.equal(holdLines(env.root).length, 0);
-  click(env, 'account-details');
+  click(env, 'inspector-diag');
   lines = holdLines(env.root);
   assert.equal(lines.length, 1);
   assert.match(lines[0].textContent, /^Reported model limit reached · Fable · its reported reset has passed/);
@@ -358,86 +359,75 @@ function click(env, key) {
   assert.match(dotOf(env.root), /\bok\b/);
 
   // Live, but naming no model (scope '-'): the reserve counts it against no
-  // window, so it holds nothing here either — no amber dot, no brief line,
-  // no hold chip, no held tile or pool. It is disclosed in the details, in
-  // the muted voice, with its reset as reported.
-  env = await boot(only('unnamed'));
+  // window, so it holds nothing here either — no amber dot, no brief line, no
+  // held window or pool, no hold in the list. It is disclosed in the
+  // diagnostics, in the muted voice, with its reset as reported.
+  env = await opened(only('unnamed'), 'unnamed');
   assert.match(dotOf(env.root), /\bok\b/);
   assert.equal(holdLines(env.root).length, 0);
-  assert.doesNotMatch(plane(env.root).textContent, /limit reached/i);
-  click(env, 'account-details');
+  assert.doesNotMatch(card(env.root).textContent, /limit reached/i);
+  assert.equal(stateOf(env.root, 'unnamed').textContent, 'ready');
+  assert.doesNotMatch(byFocus(env.root, 'acct:claude:unnamed').getAttribute('aria-label'), /limit reached|cooldown|needs a look/);
+  click(env, 'inspector-diag');
   lines = holdLines(env.root);
   assert.equal(lines.length, 1);
-  assert.match(lines[0].textContent,
-    /^Reported model limit reached · models not named · reported until .* · holds no window$/);
+  assert.match(lines[0].textContent, /^Reported model limit reached · models not named · reported until .* · holds no window$/);
   assert.match(lines[0].className, /\bpast\b/);
   assert.ok(tickers(lines[0]).length && tickers(lines[0]).every((c) => !/\bwarn\b|\bbad\b/.test(c)));
   assert.match(lines[0].getAttribute('aria-label'), /holds no window/);
-  assert.doesNotMatch(meterOf(tileOf(env.root, '7 day (Fable)')).className, /\brestricted\b/);
-  assert.doesNotMatch(classes(tileOf(env.root, '7 day (Fable)'), 'tile-model')[0].className, /\bheld\b|\bspent\b/);
-  for (const label of ['5 hour', '7 day']) {
-    assert.doesNotMatch(meterOf(tileOf(env.root, label)).className, /\brestricted\b/, label);
-  }
-  click(env, 'account-btn');
-  opt = byFocus(env.root, 'opt:claude:unnamed');
-  assert.deepEqual(holdChips(opt).map((c) => c.textContent), []);
-  assert.match(classes(opt, 'state-dot')[0].className, /\bok\b/);
-  assert.ok(classes(opt, 'acct-pool').every((c) => !/\bheld\b|\bexhausted\b/.test(c.className)));
-  assert.ok(classes(opt, 'meter').every((c) => !/\brestricted\b|\bspent\b/.test(c.className)));
-  assert.doesNotMatch(opt.getAttribute('aria-label'), /limit reached|cooldown|needs a look/);
-  // Its family mark and the selector's alarm are not raised by it either.
-  env = await boot(only('unnamed'));
-  assert.equal(classes(env.root, 'acct-alarm').length, 0);
+  classes(card(env.root), 'win-line').forEach((l) => {
+    assert.ok(classes(l, 'meter').every((m) => !/\brestricted\b|\bspent\b/.test(m.className)), l.textContent);
+    assert.ok(classes(l, 'acct-pool').every((c) => !/\bheld\b|\bexhausted\b/.test(c.className)), l.textContent);
+  });
 
   // Two holds on two scopes are two named facts, never one "model cooldown".
   env = await boot(route);
-  click(env, 'account-btn');
-  opt = byFocus(env.root, 'opt:claude:two');
-  assert.deepEqual(holdChips(opt).map((c) => c.textContent), ['2 model holds']);
-  const both = holdChips(opt)[0].title;
-  assert.match(both, /model limit reached: Fable until /);
-  assert.match(both, /model cooldown: Opus until /);
-  assert.match(opt.getAttribute('aria-label'), /2 model holds: model cooldown: Opus until [^;]*; model limit reached: Fable until /);
-  const cool2 = byFocus(env.root, 'opt:claude:twocool');
-  assert.deepEqual(holdChips(cool2).map((c) => c.textContent), ['2 model cooldowns']);
-  assert.match(holdChips(cool2)[0].title, /model cooldown: Opus until .*; model cooldown: Sonnet until /);
-  assert.match(classes(byFocus(env.root, 'opt:claude:two'), 'state-dot')[0].className, /\bwarn\b/);
-  const drawn = byFocus(env.root, 'opt:claude:drawncool');
-  assert.deepEqual(holdChips(drawn).map((c) => c.textContent), []);
-  const opusWin = classes(drawn, 'acct-grp').find((g) => /^Opus/.test(g.textContent));
-  assert.ok(opusWin, classes(drawn, 'acct-grp').map((g) => g.textContent).join(' | '));
-  assert.match(opusWin.textContent, /cooldown/);
-  assert.ok(classes(opusWin, 'acct-cap').every((c) => !/\bexhausted\b/.test(c.className)));
-  assert.ok(classes(opusWin, 'acct-pool').every((c) => /\bheld\b/.test(c.className)));
+  click(env, 'accounts');
+  assert.equal(stateOf(env.root, 'two').textContent, '2 model holds');
+  assert.match(stateOf(env.root, 'two').title, /model limit reached: Fable until /);
+  assert.match(stateOf(env.root, 'two').title, /model cooldown: Opus until /);
+  assert.match(byFocus(env.root, 'acct:claude:two').getAttribute('aria-label'),
+    /2 model holds: model cooldown: Opus until [^;]*; model limit reached: Fable until /);
+  assert.equal(stateOf(env.root, 'twocool').textContent, '2 model cooldowns');
+  assert.match(stateOf(env.root, 'twocool').title, /model cooldown: Opus until .*; model cooldown: Sonnet until /);
+  assert.match(classes(byFocus(env.root, 'acct:claude:two'), 'state-dot')[0].className, /\bwarn\b/);
+  // A window's own cooldown: the window says it, amber, on its own model only.
+  click(env, 'acct:claude:drawncool');
+  click(env, 'inspector-diag');
+  const opus = lineOf(env.root, 'Opus');
+  assert.ok(opus, classes(card(env.root), 'win-line').map((l) => l.textContent).join(' | '));
+  assert.match(opus.textContent, /cooling down/);
+  assert.ok(classes(opus, 'acct-cap').every((c) => !/\bexhausted\b/.test(c.className)));
+  assert.ok(classes(opus, 'acct-pool').every((c) => /\bheld\b/.test(c.className)));
 
   // Past 24 names the count of the rest is said: on the cooldown line, in its
   // title, and in the reserve row's name.
-  env = await boot(only('wide'));
-  const wideLine = classes(plane(env.root), 'quota-cooldown')[0];
+  env = await opened(only('wide'), 'wide');
+  const wideLine = classes(card(env.root), 'quota-cooldown')[0];
   assert.match(wideLine.textContent, /^Cooling down · M00 \+24 · until /);
   assert.match(wideLine.title, /m23 \+1 more not listed$/);
   assert.match(wideLine.getAttribute('aria-label'), /\+1 more not listed/);
-  const wideRow = byFocus(env.root, 'reserve:' + keyOf('|weekly_scoped:Wide|'));
-  assert.equal(classes(wideRow.parentNode, 'l-name-text')[0].textContent, 'Weekly · M00 +24');
+  const wideRow = byFocus(env.root, 'limit:' + keyOf('|weekly_scoped:Wide|'));
+  assert.equal(classes(wideRow, 'l-name-text')[0].textContent, 'Weekly · M00 +24');
   assert.match(wideRow.getAttribute('aria-label'), /models: m00, m01, .*m23 \+1 more/);
 
   // A spent shared window and an account cooldown: the reset red, the
   // cooldown's end amber — each on its own line.
-  env = await boot(only('fullcool'));
-  const verdict = classes(plane(env.root), 'quota-primary-row')[0];
+  env = await opened(only('fullcool'), 'fullcool');
+  const verdict = classes(card(env.root), 'quota-primary-row')[0];
   assert.match(verdict.textContent, /^Limit reached/);
   assert.ok(tickers(verdict).length && tickers(verdict).every((c) => /\bbad\b/.test(c)));
-  const coolLine = classes(plane(env.root), 'quota-cooldown')[0];
+  const coolLine = classes(card(env.root), 'quota-cooldown')[0];
   assert.ok(tickers(coolLine).length && tickers(coolLine).every((c) => /\bwarn\b/.test(c) && !/\bbad\b/.test(c)));
   // An older answer without the cooldown list: the verdict itself, amber.
   const older = only('fullcool');
   const q = older.groups[0].accounts[0].quota;
   q.cooldowns = []; q.state = 'cooling'; q.label = 'Cooling down';
   q.cooling_until = new Date(Number(process.env.FIXED_NOW) + 7200000).toISOString();
-  env = await boot(older);
-  const coolVerdict = classes(plane(env.root), 'quota-primary-text')[0];
+  env = await opened(older, 'fullcool');
+  const coolVerdict = classes(card(env.root), 'quota-primary-text')[0];
   assert.match(coolVerdict.className, /\bcooling\b/);
-  assert.ok(tickers(classes(plane(env.root), 'quota-primary-row')[0]).every((c) => /\bwarn\b/.test(c)));
+  assert.ok(tickers(classes(card(env.root), 'quota-primary-row')[0]).every((c) => /\bwarn\b/.test(c)));
   assert.match(widgetSource, /\.quota-primary-text\.cooling\{color:var\(--warn-text\)\}/);
   assert.doesNotMatch(widgetSource, /\.quota-primary-text\.cooling[^{]*\{color:var\(--status-bad\)/);
 })().catch((error) => { console.error(error.stack || error); process.exitCode = 1; });
@@ -453,6 +443,61 @@ def test_real_widget_model_holds_and_the_two_colours(tmp_path, monkeypatch):
     widget = Path(__file__).with_name("widget.js").resolve()
     result = subprocess.run(
         [str(node), "-e", harness + NODE_MODEL_HOLDS], cwd=widget.parent,
+        env={**os.environ, "WIDGET_PATH": str(widget), "ROUTE": json.dumps(route),
+             "FIXED_NOW": str(int(NOW * 1000))},
+        text=True, capture_output=True, timeout=60, check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def _no_window_status():
+    """An account reporting two model exhaustions — a passed one and a live
+    one naming no model — and no quota window at all: the reserve has no
+    limit to count, so the widget has no overview for this family."""
+    bare = oauth("bare", fable=0.5, exhaustions=[exhaustion(real_iso(-60)),
+                                                 exhaustion(real_iso(DAY), models=[])])
+    bare["constraints"] = []
+    account = profile("claude", "bare")
+    account["profile"]["credential_kind"] = "oauth"
+    return payload([bare], [account], harnesses=("claude",))
+
+
+NODE_NO_OVERVIEW = r"""
+(async () => {
+  Date.now = () => Number(process.env.FIXED_NOW);
+  const route = JSON.parse(process.env.ROUTE);
+  const env = await boot(route);
+  // No limit to count: no rows, and the account list stands open on its own.
+  assert.equal(classes(env.root, 'lrow').length, 0);
+  byFocus(env.root, 'acct:claude:bare').listeners.click[0]({ stopPropagation() {} });
+  const card = classes(env.root, 'inspector')[0];
+  // No Diagnostics to wait under: every reported exhaustion — the passed one
+  // and the one naming no model too — and the credential are on the card.
+  assert.equal(byFocus(env.root, 'inspector-diag'), undefined);
+  const lines = classes(card, 'quota-exhaustion').map((n) => n.textContent);
+  assert.equal(lines.length, 2, lines.join(' | '));
+  assert.ok(lines.some((t) => /^Reported model limit reached · Fable · its reported reset has passed/.test(t)),
+    lines.join(' | '));
+  assert.ok(lines.some((t) => /^Reported model limit reached · models not named · reported until .* · holds no window$/.test(t)),
+    lines.join(' | '));
+  assert.match(card.textContent, /Credential: oauth/);
+})().catch((error) => { console.error(error.stack || error); process.exitCode = 1; });
+"""
+
+
+def test_real_widget_without_an_overview_shows_every_reported_exhaustion(tmp_path, monkeypatch):
+    route, _tool = _route_and_tool(tmp_path, monkeypatch, _no_window_status())
+    # The skill's own projection: two reports, no window, no limit to count.
+    assert sorted(e["reset_note"] or "live" for e in _accounts(route)["bare"]["model_exhaustions"]) \
+        == ["live", "passed"]
+    assert not [g for g in route["reserve"]["summary"]["groups"] if g["harness"] == "claude"]
+    monkeypatch.undo()
+    node = _node()
+    assert node is not None, "a Node runtime is required for widget tests"
+    harness = test_quotas.NODE_WIDGET_MATRIX.split("(async () => {")[0]
+    widget = Path(__file__).with_name("widget.js").resolve()
+    result = subprocess.run(
+        [str(node), "-e", harness + NODE_NO_OVERVIEW], cwd=widget.parent,
         env={**os.environ, "WIDGET_PATH": str(widget), "ROUTE": json.dumps(route),
              "FIXED_NOW": str(int(NOW * 1000))},
         text=True, capture_output=True, timeout=60, check=False,
@@ -483,76 +528,65 @@ NODE_SECOND_FLOOR = r"""
 (async () => {
   Date.now = () => Number(process.env.FIXED_NOW);
   const route = JSON.parse(process.env.ROUTE);
-  const opened = async (density) => {
-    const v = JSON.parse(JSON.stringify(route));
-    v.prefs = { density, models: {}, fold: {} };
-    const env = await boot(v);
-    byFocus(env.root, 'account-btn').listeners.click[0]({ stopPropagation() {} });
+  // 0.8.0: the selected account's diagnostics list every window as a line —
+  // the place the old account list's second floor said the same.
+  const opened = async (sid) => {
+    const env = await boot(route);
+    for (const key of ['accounts', 'acct:claude:' + sid, 'inspector-diag']) {
+      byFocus(env.root, key).listeners.click[0]({ stopPropagation() {} });
+    }
     return env;
   };
-  const rowOf = (env, sid) => byFocus(env.root, 'opt:claude:' + sid);
-  const linesOf = (opt) => classes(opt, 'acct-rl');
-  const tagTone = (line) => classes(line, 'acct-rl-tag')[0].className;
-  const fableLines = (opt) => linesOf(opt).filter((l) => classes(l, 'acct-pool').length);
-  const sharedLines = (opt) => linesOf(opt).filter((l) => !classes(l, 'acct-pool').length);
-  const sharedGroup = (opt) => classes(opt, 'acct-grp').find((g) => !classes(g, 'acct-pool').length);
+  const card = (env) => classes(env.root, 'inspector')[0];
+  // The current windows (the diagnostics list last-known readings apart).
+  const current = (env) => classes(card(env), 'diag-block').find((b) => /^Current windows/.test(b.textContent));
+  const linesOf = (env) => classes(current(env), 'win-line');
+  const tagTone = (line) => classes(line, 'win-tag')[0].className;
+  const fableLines = (env) => linesOf(env).filter((l) => classes(l, 'acct-pool').length);
+  const sharedLines = (env) => linesOf(env).filter((l) => !classes(l, 'acct-pool').length);
 
-  let env = await opened('detailed');
   for (const sid of ['fablecool', 'fablelimit', 'fableown', 'fablespent']) {
-    const opt = rowOf(env, sid);
-    // A model's hold is the model's: the shared windows stay neutral and
-    // available, and nothing on the row speaks for the whole account.
-    assert.equal(sharedLines(opt).length, 2, sid);
-    sharedLines(opt).forEach((l) => {
-      assert.match(l.textContent, /available$/, sid);
-      assert.match(tagTone(l), /\bok\b/, sid);
+    const env = await opened(sid);
+    // A model's hold is the model's: the shared windows stay neutral, and
+    // nothing on the card speaks for the whole account.
+    assert.equal(sharedLines(env).length, 2, sid);
+    sharedLines(env).forEach((l) => {
+      assert.doesNotMatch(l.textContent, /cooling|spent|limit reported/, sid);
+      assert.doesNotMatch(tagTone(l), /\bwarn\b|\bbad\b/, sid);
+      assert.ok(classes(l, 'meter').every((m) => !/\brestricted\b|\bspent\b/.test(m.className)), sid);
     });
-    assert.ok(classes(sharedGroup(opt), 'meter').every((m) => !/\brestricted\b|\bspent\b/.test(m.className)), sid);
-    assert.match(classes(opt, 'state-dot')[0].className, /\bwarn\b/, sid);
-    assert.doesNotMatch(opt.getAttribute('aria-label'), /account cooldown|alert/, sid);
-    assert.doesNotMatch(opt.textContent, /account cooldown/, sid);
-  }
-  // Cooling (a cooldown on exactly the Fable scope, from an older reading):
-  // amber, until the cooldown's end, and never "available".
-  let fable = fableLines(rowOf(env, 'fablecool'));
-  assert.ok(fable.length >= 1);
-  fable.forEach((l) => {
-    assert.match(l.textContent, /^[^]*Fablecooling down/);
-    assert.match(tagTone(l), /\bwarn\b/);
-    assert.match(classes(l, 'acct-pool')[0].className, /\bheld\b/);
-  });
-  assert.match(rowOf(env, 'fablecool').getAttribute('aria-label'),
-    /Fable cooling down until [^·]*reported by a stale reading/);
-  // A Fable limit reported out while the share read here is below it:
-  // amber, "limit reported", until that limit's reset — not spent, not red.
-  fable = fableLines(rowOf(env, 'fablelimit'));
-  assert.equal(fable.length, 1);
-  assert.match(fable[0].textContent, /^weekFablelimit reported/);
-  assert.match(tagTone(fable[0]), /\bwarn\b/);
-  assert.doesNotMatch(fable[0].textContent, /spent|available/);
-  assert.match(classes(fable[0], 'acct-pool')[0].className, /\bheld\b/);
-  assert.match(rowOf(env, 'fablelimit').getAttribute('aria-label'),
-    /week Fable model limit reported reached until [^·]*reported by a stale reading/);
-  // The window's own cooldown: amber, cooling down.
-  fable = fableLines(rowOf(env, 'fableown'));
-  assert.equal(fable.length, 1);
-  assert.match(fable[0].textContent, /^weekFablecooling down/);
-  // Measured at the limit: red, spent, back at its reset — never amber.
-  fable = fableLines(rowOf(env, 'fablespent'));
-  assert.equal(fable.length, 1);
-  assert.match(fable[0].textContent, /^weekFablespent/);
-  assert.match(tagTone(fable[0]), /\bbad\b/);
-  assert.match(classes(fable[0], 'acct-pool')[0].className, /\bexhausted\b/);
-
-  // Normal density keeps one line for the rest, named "others", neutral.
-  env = await opened('normal');
-  for (const sid of ['fablecool', 'fablelimit']) {
-    const lines = linesOf(rowOf(env, sid));
-    assert.ok(lines.length >= 2, sid);
-    assert.match(lines[0].textContent, /^weekFable(cooling down|limit reported)/, sid);
-    const last = lines[lines.length - 1];
-    assert.match(last.textContent, /^others70% usedavailable$/, sid);
-    assert.match(tagTone(last), /\bok\b/, sid);
+    assert.match(classes(card(env), 'state-dot')[0].className, /\bwarn\b/, sid);
+    assert.doesNotMatch(allSpoken(card(env)), /account cooldown|whole account|\balert\b/, sid);
+    const fable = fableLines(env);
+    assert.ok(fable.length >= 1, sid);
+    if (sid === 'fablecool') {
+      // A cooldown on exactly the Fable scope, from an older reading: amber,
+      // until the cooldown's end.
+      fable.forEach((l) => {
+        assert.match(l.textContent, /^weekFable.*cooling down/);
+        assert.match(tagTone(l), /\bwarn\b/);
+        assert.match(classes(l, 'acct-pool')[0].className, /\bheld\b/);
+        assert.match(l.getAttribute('aria-label'), /Fable week.*cooling down until .*reported by a stale reading/);
+      });
+    } else if (sid === 'fablelimit') {
+      // A Fable limit reported out while the share read here is below it:
+      // amber, "limit reported", until that limit's reset — not spent, not red.
+      assert.equal(fable.length, 1);
+      assert.match(fable[0].textContent, /^weekFable.*limit reported/);
+      assert.match(tagTone(fable[0]), /\bwarn\b/);
+      assert.doesNotMatch(fable[0].textContent, /spent/);
+      assert.match(classes(fable[0], 'acct-pool')[0].className, /\bheld\b/);
+      assert.match(fable[0].getAttribute('aria-label'), /limit reported until .*reported by a stale reading/);
+    } else if (sid === 'fableown') {
+      assert.equal(fable.length, 1);
+      assert.match(fable[0].textContent, /^weekFable.*cooling down/);
+    } else {
+      // Measured at the limit: red, spent, back at its reset — never amber.
+      assert.equal(fable.length, 1);
+      assert.match(fable[0].textContent, /^weekFable.*spent/);
+      assert.match(tagTone(fable[0]), /\bbad\b/);
+      assert.match(classes(fable[0], 'acct-pool')[0].className, /\bexhausted\b/);
+    }
   }
 })().catch((error) => { console.error(error.stack || error); process.exitCode = 1; });
 """

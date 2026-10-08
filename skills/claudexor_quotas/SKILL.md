@@ -1,7 +1,7 @@
 ---
 name: claudexor_quotas
-description: "Claudexor quota widget and read-only quota_summary tool: one bar per account and limit (current, dated last-known, or unknown — never zero), reserve in account-windows with coverage, restrictions and reported resets, and a conditional recent-pace estimate for the accounts whose pace qualifies, from a bounded local history of passive readings."
-version: 0.7.0
+description: "Claudexor quota widget and read-only quota_summary tool: one bar per account and limit (current, dated last-known, or unknown — never zero), reserve in account-windows with coverage, restrictions and reported resets, and under the chosen limit a timeline — its recorded past and one conditional future (no new use, or the recent pace) of the accounts read now, with its reset schedule — from a bounded local history of passive readings."
+version: 0.8.0
 type: extension
 runtime: python3
 entry: plugin.py
@@ -25,7 +25,7 @@ ui_tab:
     start: auto
 ---
 
-# Claudexor Quotas (v0.7.0)
+# Claudexor Quotas (v0.8.0)
 
 A projection of the host's own account surface, plus a small planner on top of
 it: how much measured quota is left per agent family and limit, when it is
@@ -37,9 +37,13 @@ and owns no quota freshness, routing, retry, pacing, or vendor policy.
 The skill keeps these local files inside the state directory the host hands
 it (`api.get_state_dir()`):
 
-- `prefs.json` — the reader's display choices (how much of a row to unfold,
-  which windows a row shows per agent family, which kinds of account fold
-  away). The widget cannot keep them itself: module widgets run in an
+- `prefs.json` — legacy since 0.8.0: the display choices of the 0.7 account
+  list (how much of a row to unfold, which windows a row shows per agent
+  family, which kinds of account fold away). The 0.8.0 widget neither reads
+  nor saves them — its timeline's span and future are choices for one visit,
+  and each mount opens on its defaults — but the file, the route and the save
+  ordering below are kept for an older widget. The widget cannot keep choices
+  itself: module widgets run in an
   opaque-origin sandbox where every browser store throws, so a preference kept
   there is silently forgotten. The route stores those three values and
   nothing else. It reads and writes the file off the event loop, one save at
@@ -55,45 +59,59 @@ it (`api.get_state_dir()`):
   runs. Its OS lock serializes collector cycles across unload/reload; it holds
   no account or quota data. SQLite may also keep its standard WAL/SHM files.
 
-## What changed in 0.7.0
+## What changed in 0.8.0
 
-- **Nothing vanishes, nothing becomes 0.** An account whose reading is not
-  current keeps its last value, dated, as a hatched bar (from a stale reading
-  in the answer, from the last answer that read the quota facet, or from the
-  local history) — while its reported reset is ahead, or, with none reported,
-  for at most its window's length. Anything else is an outlined "?" that is
-  not counted. `measured`, the tool's `remaining_windows` and the widget's
-  row figure stay current readings only — with none, the figure is "—",
-  never 0; the last-known part stands under it as its own labelled, dated
-  line ("Last known 0.40 · 21 min"), never added in.
-- **A limit an answer does not name keeps its record.** For each account of
-  the roster (read now or kept), every recorded limit of exactly that
-  pseudonymous subject that no reading of the answer names — the quota facet
-  unanswered, or answered without it — is shown as its dated `history`
-  last-known value; a scoped one stays scoped (`model_scope:
-  names_unknown`), and its chart reads that limit's own record.
-- **A facet that did not answer is answered from the last read that did**,
-  per facet and dated, never as current: a failed status read keeps the last
-  roster and readings on screen with one banner and a Retry instead of an
-  empty card. A roster read now always wins, so a deleted account is never
-  brought back, and a confirmed empty roster is not replaced.
-- **Rows as approved in the v4 design**: the family's marks with their active
-  account counts, one row per limit with one proportional bar per account,
-  fullest first, a bar selects its account; a compact line per limit for the
-  selected account; the chart on request.
-- **The estimate covers the accounts whose pace qualifies**, named by count,
-  not only when every account has one; it stops at the first reported reset
-  among them, and a refill at reported resets is a separate scenario drawn
-  only on request.
-- **Every request ends**: the widget bounds its reads (60 s) and Refresh
-  (210 s) above the skill's own route bounds, never re-sends a Refresh on its
-  own, and keeps the screen it had when an answer cannot be drawn. A read that
-  fails keeps the newest screen drawn — a degraded one with its dated
-  last-known values included, never an older whole one that would look
-  fresher — re-read at that moment: nothing on it is current any more (see
-  "Every request ends"). An answer with nothing to draw and no reason is not
-  a screen. A Refresh whose answer the skill could not read is reported as
-  `outcome_unknown`, never as failed, and never sent again on its own.
+One screen, one story per limit, instead of four panels side by side:
+
+- **The limits.** One row per limit of the chosen family: one bar per account
+  (as in 0.7.0), the current figure ("10.35 of 19", "—" with no current
+  reading, never 0) with the average or the dated "Last known" line under it,
+  and its tail — who is at the limit or held back, unknown accounts, and the
+  **next reported reset with what it gives back if nothing more is used**
+  ("next reset Thu 8 Oct 22:59 · 3 accounts · +1.80 if unused";
+  `next_reset_returns`). A limit's name selects it: it is underlined and
+  carries the timeline's chart mark with "Show chart" (on the limit in the
+  timeline, "Hide chart", which folds it) — one button, its spoken label
+  unchanged.
+- **The timeline**, open on every mount, stands directly under the selected
+  limit's row (by default the family's "lowest left"): the recorded past and
+  **one** future, chosen beside the chart — *No new use* (the default) or
+  *Recent pace* — both of the accounts read now, starting from the row's own
+  figure. Under the chart, in this order: where that future stands a few
+  moments ahead, one line saying what it assumes, the **reported resets**
+  (when, how many accounts, what each gives back in that scenario, the total
+  after it — the first two, the rest on request), and the limit's details,
+  notes and data table folded. The span is the limit's own by default (a
+  week for a limit longer than a day) and can be switched to 24 hours or 7
+  days. The 0.7.0 cohort overlay, the refill toggle, the single-sweep marks,
+  the "≠" rail, the gap hatching and the large legend are gone from the
+  chart; gaps stay breaks in the line, and every sighting stays listed in
+  the data table.
+- **One selected account.** Nothing is selected until the reader clicks a
+  bar or a row of the account list; that account's bars are then marked in
+  every limit, and its card shows its share, reset and pace in each limit,
+  its holds, absences and readings refused, with every window and last-known
+  reading under Diagnostics; Clear (or Escape) drops it and gives the
+  keyboard back to the bar or row that selected it (gone since: to the
+  account's row, the account list or the family button).
+- **The account list** is one folded table of the family's accounts — their
+  share left in each limit and their state — with the accounts that cannot
+  run anything (switched off, signed out, failing their check) at the bottom
+  under their reasons, never counted as alarms. Who stands in no row is said
+  there by name; under the rows a short link counts them and opens it.
+- **About** replaces the settings panel: the system state (daemon, facets,
+  rotation) and how to read the screen, opened in place. The family buttons
+  carry no colour for their worst account; a harness that is down says so.
+- **Refresh reads the whole projection after it**: one POST, and once the
+  host says it ran, one ordinary read — so the rows, the timeline and the
+  accounts all come from a reading made after it. Nothing from the POST's
+  answer is merged into an older screen.
+
+Carried from 0.7.0 unchanged: nothing vanishes and nothing becomes 0 (a
+reading not current is a dated last-known bar or a "?"); a limit an answer
+does not name keeps its record; a facet that did not answer is answered from
+the last read that did, dated; and every request ends, bounded (60 s reads,
+210 s Refresh), never re-sending a Refresh on its own.
 
 ## Host appearance
 
@@ -265,7 +283,7 @@ finer reading to one decimal, and never "100" for a window that is not at its
 limit nor "0" for one that has been used ("<100", ">0"). Whether a window is
 at its limit (`at_limit`) is decided on the unrounded share, exactly as the
 overview's `at_limit` is — 99.6% used is not the limit — and every label, bar
-colour, dot, chip, tile, list row and verdict takes it from there.
+colour, dot, chip, window line, list row and verdict takes it from there.
 
 **A cooldown is not the limit.** Cooldowns are read apart from the numbers,
 by the one rule the overview's "cooling" restriction uses (`cooldowns_of`):
@@ -470,7 +488,7 @@ than reuse a read from before the Refresh. No Refresh is ever issued for it.
   observations exist within the trailing hour; an hour of history is not
   required. No history is generated.
 
-## Recent pace and the chart
+## Recent pace and the timeline
 
 **Recent pace** is, per account, the endpoint slope over the trailing
 comparable stretch of one source inside the last hour: (last ratio − first
@@ -501,115 +519,121 @@ error bound and not evidence of how a vendor rounds; nothing shows it as "±".
 The group pace is the sum over accounts whose pace is known; with
 some unknown it is "at least" that and marked partial.
 
-**The chart** is folded until the owner opens it (the widget then asks the
-route for it; while folded it sends `chart=0` and the chart and its longer
-history read are not computed). It shows one group (chosen in the chart; by
-default the family's "lowest left" limit, which is then kept as a pick is: an
-answer during an outage that names another limit "lowest left" does not move
-it — only a click, or the limit's absence from a whole answer, chooses again)
-over 24 hours or 7 days back and ahead,
-one y-axis in account-windows, on local clock times. The time axis is the
-chosen range in whole hours (it moves once an hour, not with every reading),
-never where the record happens to begin; the chart says where its history
-begins, and the future side is tinted as scenario:
+**The timeline** stands under the selected limit's row and is open on every
+mount (the widget then asks the route for it; folded with Hide, it sends
+`chart=0` and the chart and its longer history read are not computed). It
+shows one group (by default the family's "lowest left" limit, which is then
+kept as a pick is: an answer during an outage that names another limit
+"lowest left" does not move it — only a click, or the limit's absence from a
+whole answer, chooses again) over 24 hours or 7 days back and ahead — the
+limit's own span by default — one y-axis in account-windows whose scale is
+`slots`, every account the limit applies to, on local clock times. The time
+axis is the chosen range in whole hours (it moves once an hour, not with
+every reading), never where the record happens to begin, and is never
+fitted to the lines.
 
-- *observed* — every account of that limit with a record in the range
-  (`past_accounts` of the `y_max` slots; `past_basis` `current`, `recorded` or
-  `last_known` by how many of them have a current reading now), the same
-  accounts whatever is fresh now, so a reading going stale never changes the
-  past — where one of them has no value vouched for, the line has a gap, never
-  a smaller total, and it ends where their record does unless every one of
-  them has a current reading. An account with no record in the range at all is
-  left out and counted apart, rather than blanking the range. The estimate's
-  cohort is separate (below). A reading counts from its first sighting until
-  the next one, never before it was seen, never across a break in that
-  source's watch (including a sweep that did not see it) and never past its
-  own reported reset. The line is **lossless**: every moment at which any
-  account's value can change — each edge of what a source vouches for and each
-  run's last sighting — is a vertex, and only a vertex equal to the one
-  before it is dropped. Every such moment but a reported reset is a collector
-  sighting, so a week holds at most about one vertex per sweep; above 12 000
-  vertices the oldest part is left out and the chart says from when it is
-  drawn (`past_clipped_before`). Wherever any account is not vouched for, the
-  line stops; a gap is never a zero. Historical and current values use the
-  same reset and same-moment value conflict policy. A compressed unchanged run
-  retains endpoint observation times; if omitted intermediate times could
-  change the choice between disagreeing sources, that historical interval is
-  unknown. A reading the collector saw at **one sweep only** — a source seen
-  once, or a change seen at the last sighting before a gap — is evidence of
-  that moment and of no stretch of time: it is never held across a gap, and
-  never erased either. At every such sighting the group's total is resolved
-  by the same source policy and, where the line does not already show that
-  total on one side of the moment, kept as a separate `points` entry
-  `[t, v]` — or `[t, null]` where the sources seen then disagree, also where
-  the line has no value there (the last sighting before a gap, or one inside
-  it), provided every other account is spoken for at that sweep. The chart
-  draws each as a dot of its own (hollow where the sources disagree), joined
-  to nothing; a disagreeing one where no line runs sits on a separate rail
-  marked ≠ above the value scale, never at a value;
-- *no new use* — each account holds its current reading and refills to one
-  full window only at its own next reported reset; kept in the data and the
-  table, no longer drawn (0.7.0);
-- *estimate* (`recent_pace`) — the accounts whose own pace qualified (the
-  cohort, `recent_pace_scope.accounts` of `.of`), each continuing its observed
-  net change and staying at zero once it runs out, **summed over the cohort
-  alone**: an account left out is not held at its value inside the line. Where
-  the cohort is not exactly the accounts the observed line sums (some measured
-  accounts did not qualify, or the record holds accounts with no current
-  reading now), the same accounts' observed total (`cohort_past`) is the line
-  the estimate continues, over the pale area of the record. The cursor and its
-  spoken read-out give the observed total "of N accounts" of the record
-  (`past_accounts`), never of the current count — except where there is no
-  record in the range at all: the line is then the current figure alone, at
-  now, and that point is "of" the accounts read now (`accounts`), never "of
-  0". The line stops at the first reported reset among the
-  cohort (`stops_at_reset`, `until`): what a window does after its reset is not
-  observed, and a reported reset time is not evidence of a full refill;
-- *refill scenario* (`recent_pace_refill_scenario`) — the same pace with each
-  account refilled to a full window at its next reported reset, drawn only
-  when the reader switches it on in the legend;
-- **no additional unreported resets** are assumed: only each account's next
-  reported reset is applied, and no later reset is inferred from a window's
-  length. The horizon is how far a line is drawn, not how far it is reliable;
-  the lines are conditions, not a forecast, and no accuracy is claimed for
-  them. Whole-percent readings do not establish how a vendor rounds: a small
-  observed change is said as the change it is
-  (`exhaust_before_reset_small_change` counts those resting on one percentage
-  point or less), never turned into a confidence band.
+- *recorded* (`past`) — every account of that limit with a record in the
+  range (`past_accounts` of the `y_max` slots; `past_basis` `current`,
+  `recorded` or `last_known` by how many of them have a current reading now),
+  the same accounts whatever is fresh now, so a reading going stale never
+  changes the past — where one of them has no value vouched for, the line has
+  a gap, never a smaller total, and it ends where their record does unless
+  every one of them has a current reading. A reading counts from its first
+  sighting until the next one, never before it was seen, never across a break
+  in that source's watch and never past its own reported reset. The line is
+  **lossless** (every moment at which any account's value can change is a
+  vertex; above 12 000 the oldest part is left out and `past_clipped_before`
+  says from when). A reading the collector saw at one sweep only, and a sweep
+  whose sources disagree, hold for no stretch of time: they are kept as
+  `points` (`[t, v]`, or `[t, null]` where the sources disagree) and listed
+  in the data table, never drawn as marks. With no record in the range — or
+  none drawn: no value held over any stretch of time, only one alone at its
+  instant — the legend says so rather than name a line.
+- *the future* (`scenarios`) — of the accounts read now, the row's own
+  figure (`current_windows`), restricted ones included (measured quota is not
+  a dispatch verdict), drawn from now to the horizon:
+  - *no new use* (`no_new_use`, the default) — each account keeps its
+    current share and refills to one full window once, at its own next
+    reported reset;
+  - *recent pace* (`recent_pace`) — the accounts whose own pace qualified
+    continue their observed net change (staying at zero once they reach it),
+    refill once at their next reported reset and then continue it from full;
+    the other accounts are held as with no new use (`at_pace` of `accounts`,
+    `held`). A condition, not an estimate of use nobody observed.
 
-The chart's scale is `slots`, every account the limit applies to, so it does
-not move when a reading goes stale. With no current account (the quota facet
-or the whole status not read now), the past line is the record of the accounts
-shown as last known (`past_basis: last_known`), ending where the record ends,
-never at a value now.
+  An account with no reported reset is never refilled (`no_reset`), and **no
+  additional unreported resets** are assumed: only each account's next
+  reported reset is applied, as reported now — it may move — and no later
+  reset is inferred from a window's length. The horizon is how far a line is
+  drawn, not how far it is reliable; no accuracy is claimed. Each scenario
+  carries its `schedule` — one event per reported reset inside the span
+  (resets reported within 120 s of the first of an event are one event, from
+  `at` to `last`; the accounts are split at the horizon before they are
+  grouped, so resets a minute either side of it are never one event — the
+  one past it is only in `later`), with how many accounts reset then, what
+  the refills give back **in that scenario** (`adds`: with no new use the
+  share used now, at
+  the recent pace what has been used by then) and the total just after the
+  last of them (`total_after`) — `later` (the first reported reset past the
+  span: when and for how many, never how much), `checkpoints` (the total an
+  hour, 6 and 12 hours and a day ahead; a day, 3 days and a week on the
+  7-day span) and, at the recent pace, `runs_out` (when accounts reach zero
+  inside the span: before their reported reset, with none reported, or again
+  after their refill). Every one of them is read off the same functions the
+  line is drawn from; a reset exactly at the horizon is drawn with its
+  refill. The horizon is one instant: the whole second published as `end`
+  (now plus the span, rounded to the second). Which resets fall inside it,
+  both lines and the older ones, `later`, `runs_out`, the checkpoints (each
+  read off at the whole second it is published at) and the table's rows are
+  all decided against that instant, never a fraction of a second either side
+  of it: a reset at that second is inside and refilled there, one even a
+  fraction later is only in `later`. `now` and the figure at it stay as read.
+  A reset inside the span keeps its own time, fraction of a second included,
+  on both drawn lines, in the schedule (`at`, `last`) and in the table's
+  reset rows (`at`, `until`, then written to the microsecond) — never moved
+  to a whole second, so it is never applied before it happens: a checkpoint
+  or a table row at the whole second just before it reads the total before
+  it, and the table lists its rows in time order by the instant each says.
+  With no current reading there is no future (`scenarios` is null).
 
-Reported resets are marked; gaps in the record are pale bands, never zeros;
-the two sides of "now" are labelled observed and scenario. A cursor carries
-the numbers: a hairline, a dot on each line and one tooltip naming the
-limit's series at that moment, driven by the pointer or by arrow keys on the
-focused plot, with a spoken read-out. Within six pixels of a single-sweep
-point the cursor sits on it and says "observed at this sweep only" (or
-"sources disagree at this sweep", and on the rail "no value here"), and an arrow step stops at every point it
-would pass, so each can be reached and heard by keyboard. Under the chart stand at most three
-lines — the estimate in one conditional sentence ("At the pace observed over
-the last N min, if it continued and nothing refilled first, X would reach the
-limit about T"; an account with no reported reset that would reach it is said
-apart, "With no reset reported, X would reach it about T", never as "before
-its reset"), who is not in it and why, and the conditions; the other notes
-and a data table fold under "Notes and data table". The table
-is a sample of the observed line (a stride of it and up to eight gaps'
-beginnings; it says how many of how many recorded changes and gaps it lists)
-and the newest eight single-sweep points, marked as such ("seen at this sweep
-only", or "not settled" where the sources disagree), plus the scenario at
-reported resets and a quarter, half and all of the horizon. The chart, its limit and
-horizon, the table, an unfolded row, the keyboard focus and the cursor all
-survive the automatic 30-second redraw. Refresh is disabled while a read is in the air, and a disabled
-button cannot keep focus; a keyboard reader on it gets it back when the read ends, unless they have moved
-elsewhere or left the frame. Times are shown in the frame's local time zone, named on screen, and
-the reading observation time is shown apart from the moment the status was
-read. The overview is not recomputed by a live Refresh; the widget says so
-until the next reading, and a chart or family switch after a Refresh brings
-that reading (see the collector above), never a read from before it.
+The record and the future need not share their accounts: where they do not,
+or where their totals differ at now, the two lines are not joined — the
+legend names whose total each is ("recorded · 13 accounts", "no new use · 11
+current"). Kept for compatibility, unchanged and not drawn: `no_new_use` (the
+same line, its times rounded to the second, without a refill exactly at the
+horizon), the qualified cohort's own `recent_pace` up to its first reported
+reset with `cohort_past`, and `recent_pace_refill_scenario`; the data table
+keeps their columns beside `scenario_no_new_use` and `scenario_recent_pace`.
+The chart's `assumptions` — the notes the widget shows — describe the record
+and the two futures drawn; the older lines' own wording is kept apart, by
+field, in `legacy_assumptions` and never shown.
+
+A cursor carries the numbers: a hairline, a dot on each line and one tooltip,
+driven by the pointer or by arrow keys on the focused plot, with a spoken
+read-out ("recorded 2.10 of 3 accounts", "no new use 3.50 of 11 current
+accounts"; with no record, the figure "of" the accounts read now, never "of
+0"). Under the chart: the checkpoints, one line of what the future assumes
+(and at the recent pace, who runs out and when), the first two reported
+resets with the rest on request, and "Details, notes and data" — the limit's
+details (scope, restrictions with the unrestricted windows, what is not
+counted, plans, shared sign-ins, resets, even use and recent pace), every
+caveat, the record and watch, the time zone, the data table (a bounded
+sample of the recorded line — a stride of it, plus the beginnings of at most
+8 gaps the stride missed, not every gap — and the scenarios at reported
+resets and a quarter, half and all of the span) and, under it, every
+single-sweep point of the chart's `points` — the disagreeing ones as "not
+settled" — 20 to a page in time order, the newest page first, with Older and
+Newer (the chart's `table` still carries only the newest few, marked
+`sighting`; the widget lists them once, there). The timeline, its span, its
+future, the open details, the sightings page, the keyboard focus and the
+cursor survive the automatic 30-second redraw; another limit or span starts
+the sightings at their newest page, even one that has no sightings yet. When
+a redraw leaves a single page or none, the keyboard on Older or Newer moves
+to the Details summary.
+Refresh is disabled while a read is in the air, and a disabled button cannot
+keep focus; a keyboard reader on it gets it back when the read ends, unless
+they have moved elsewhere or left the frame. Times are shown in the frame's
+local time zone, with their day and month.
 
 ## Model tool: quota_summary
 
@@ -688,8 +712,12 @@ One explicit owner action is separate from cached reads:
 
 The extension calls that host action only from the Refresh button. The host
 retains the Claudexor bearer token and returns the exact foreground quota
-envelope. The widget merges only the quota facet by exact
-`(harness, subject_id)`; it does not perform a second status GET.
+envelope (its route still projects it by exact `(harness, subject_id)` as
+`quota_updates`). When it says the refresh ran, the widget reads the whole
+projection once — the ordinary status read, never reused from before the
+Refresh — and draws that; nothing from the envelope is merged into an older
+screen. If that read fails, the screen stays the one it was, kept and dated,
+with a note that the refresh ran but its result could not be read.
 
 `subject_id` is `null` for the native login and the profile id for a named
 account; matching is EXACT on `(harness, subject_id)` so a named profile's
@@ -699,9 +727,9 @@ exhausted window is never reported as the default login's.
 
 1. **Per-facet provenance, never a global verdict.** Each facet is labeled from
    its own `reads` value. A refused or unread facet is rendered as
-   "not checked" / "unavailable". The status button carries a red pip whenever
-   one of them did not answer, the status strip behind it names which, and a
-   banner above the list names it again in the open — so a failure is never
+   "not checked" / "unavailable". The About button carries a red pip whenever
+   one of them did not answer, the system state inside it names which, and a
+   banner above everything names it again in the open — so a failure is never
    only one click away from being invisible. It is never rendered as
    "no quota", `0`, or an empty list.
 2. **No invented number.** A missing `used_ratio` is "no usage numbers
@@ -715,8 +743,8 @@ exhausted window is never reported as the default login's.
    0.40 · 21 min"), never in the current number (the row figure, `measured`, `remaining_windows`);
    with no current reading the row figure is "—", never 0, while a measured 0 stays 0. A last-known
    value at the limit stays hatched and dated ("at the limit when last read (20m ago)"): never the
-   red base, "at the limit until …" or any other current-exhaustion wording. In the account brief
-   and Details it stays a last-known reading: an amber "Last known" panel (only when the reading has windows — an empty one is not drawn) with a muted
+   red base, "at the limit until …" or any other current-exhaustion wording. In the selected account's
+   card it stays a last-known reading: an amber "Last known" block (only when the reading has windows — an empty one is not drawn) with a muted
    (translucent neutral) share, observation age and an explicit
    statement that stale percentages are not used to grant routing. They never
    look like fresh red exhaustion, nor like an amber share held back now. A still-live cooldown carried by stale
@@ -728,20 +756,22 @@ exhausted window is never reported as the default login's.
    parsed) is a cooldown — the window or model is out for now, "cooling down"
    in amber, never "Limit reached", never the red of a spent share and never a
    reset. Red is only a measured share at its limit; a cooldown, a reported
-   model exhaustion and any other hold are amber — on tiles, chips, pool
-   chips, reset lines and their times alike. A hold reported apart from the
+   model exhaustion and any other hold are amber — on window lines, chips,
+   pool chips and their times alike. A hold reported apart from the
    windows (a cooldown on some models, a model limit reported out) is tied to
    a window only by the skill's `scope_key` of the whole scope, never by the
-   printed names; a model's pool in the account row is grouped by the same
+   printed names; a model's pool on the account's card is grouped by the same
    key, so two scopes that print one name ("Fable", "M00 +24") stay two pools,
    each coloured only by its own hold (the chip's hover lists its scope). On
-   the account row's lines under the bars, a model window its scope's hold
-   covers reads "cooling down" or "limit reported" in amber, with that hold's
-   end or reset, never "available"; the account's shared windows stay neutral.
+   the account's window lines, a model window its scope's hold covers reads
+   "cooling down" or "limit reported" in amber, with that hold's end or
+   reset; the account's shared windows stay neutral. In the account list a
+   model hold is named with its model and kind ("model cooldown: Opus"),
+   several are counted ("2 model holds") with each scope named in the title.
    A live exhaustion that names no model holds nothing, as in the reserve: it
-   is disclosed in Details only ("Reported model limit reached · models not
-   named · reported until … · holds no window", muted) and colours no dot,
-   chip, tile or pool.
+   is disclosed under Diagnostics only ("Reported model limit reached · models
+   not named · reported until … · holds no window", muted) and colours no dot,
+   chip, line or pool.
 5. **`local_store` verification is honest both ways.** It reads
    "Signed in — local session, not verified live"; only `verification_source:
    vendor` earns "Verified live". Neither is treated as an absent account.
@@ -752,21 +782,82 @@ exhausted window is never reported as the default login's.
 
 ## Interactive Features
 
-- **Reserve overview first, as approved in v4**: above the account, one card for the chosen family: a status line beside the title ("All 19 read · observed 1 min ago", "15 current · 4 last known (21 min)", or "Claudexor not read now · all as read 3 min ago"; exact times, the status read and the time zone on hover), the unit ("Account-windows left · a full account counts 1 · limits are never added"), then one row per limit — its name ("5-hour", "Weekly · Fable"; a pool named after the family itself is not repeated), one bar per account the limit applies to, as tall as its share left on the same 0–100% scale in every row, fullest first, one fixed strip width per slot count (wide enough to point at; never gathered into "?×N" or an average): solid for a current reading, hatched for a dated last-known value, amber when a restriction holds it back, a red base at the limit, an outlined "?" (never an empty bar or a zero) after the rest for an account with no usable value. Each bar names its account, share, reset and age on hover and aloud, and selects that account. On the right the figure — account-windows left now of the accounts the limit applies to, current readings only ("10.35 of 19"; "— of 19", never 0, when none is current; a measured 0 stays "0.00") — and under it the average, or, when last-known values stand in the row, their own dated line ("Last known 2.12 · 21 min"), never added to the figure. A tail names one account at the limit or held back by name, else counts them, then unknown accounts and the next reset; the limit of lowest average share is marked "lowest left". Clicking a limit's name shows it in the chart; the chevron unfolds its details (scope, restrictions with the unrestricted windows, what is not counted, plans, shared sign-ins, resets, even use and recent pace). Below the rows one line names the family's accounts that stand in no row (switched off in Claudexor, or with no reading of these limits here or in the history) and whether the account list is kept from an earlier read. "How to read" and "Show chart" stay; both start folded on every mount (the chart is then neither computed nor read) and keep their state through the 30-second redraw. Rows keep the skill's fixed order; bars reorder only when a value really changes.
-- **The account below, folded to a brief**: its labelled selector and Details button sit below the family overview. The selector retains the worst shared-window percentage and other accounts needing attention. The brief keeps observation age, failed verification, disabled/signed-out state, typed quota absence, cooldown scope/end/provenance, model restrictions, reported model exhaustions that may hold now ("Model limit reached · Fable · until …", or, with no or an unreadable reset, "Reported model limit reached · … · no reset time reported" in the muted voice) and excluded-reading notices visible; one whose reset has passed, one naming no model, and one whose model window the brief already names at its limit, stay in Details. A cooling account has one cooldown sentence rather than a repeated verdict. A spent quota window keeps its independent verdict and reset even when the account is also cooling. Ordinary window tiles, identity details and normal verification unfold through Details. With no overview available, account details remain fully visible. The account list expands in the document flow, with its own bounded scroll area, so it cannot be clipped outside a short frame.
-- **Labelled family controls and explicit actions**: visible family names select the overview; Settings and Refresh use the same quiet controls as disclosures. Settings contains row detail, model filters, account folding and system state. The state indicator and visible banners retain daemon/facet failures. Settings tabs support arrow keys and Home/End; Escape returns focus to Settings.
-- **One account at a time**: the selector names the account on screen, says how much of its hottest shared window is used and counts other accounts with problems. Its list retains every account’s state, live windows, typed generic state, or plan and observation age. Holds reported apart from a row's windows are named, not merged: "account cooldown"; one model hold by its model and kind ("model cooldown: Opus", "model limit reached: Fable"); several as a count ("2 model holds") whose title and spoken label name each scope, its end and its provenance. A hold a window of the row already shows is not repeated. Raw status detail and local paths stay out of visible text, ARIA and titles. Family state indicators and banners continue to speak for families beyond the current selection.
-- **Accounts that do not work fold away**: an account with no login, one switched off in Claudexor, or one whose check failed cannot run anything, and in a family of several it buries the account that can. Those gather by reason at the bottom of the account list — under one row carrying a dot per reason and the number of them that need attention, so nothing hidden goes quiet; a family where nothing works has no such row and shows the reasons themselves. The Accounts tab in settings switches each reason on or off, all three start folded, and nothing folds at all while the accounts facet is unread.
-- **One bar language**: every bar — the reserve's per-account bars, its "avg" bar, a window tile in Details, and the short bars on the account selector and in the account list — is as long (or tall) as the share LEFT on one 0–100% scale, in one neutral ink, over a hairline base that marks the whole scale; there is no coloured track and no usage threshold. Amber is a share held back now (a cooldown that covers the window — on the whole account, or on exactly the window's models, from whichever reading reported it, as the reserve's "cooling" restriction reads it; a model's cooldown does not hold the account's other windows —, a live reported exhaustion of exactly the window's models, a spent shared limit elsewhere on the account, an account that is signed out, switched off or failed its check); a share at its limit has no fill but a red base; a last-known reading is muted and claims neither; a window with no usable ratio has no bar at all, and its words say why. The number beside a bar — on a tile, the account selector and an account-list row — is the skill's own share used and always says so ("N% used", never a bare "N%"); it turns red only at the limit, and the exact share left is on the bar's hover.
-- **Reset Times**: the moment a window resets and a cooldown ends, printed as a date and hour in tabular numerals — no per-second ticking and no layout shift.
-- **Model Scoped Indicators & Last-known Bars**: Clean chips for per-model caps — red only when that model's measured share is at its limit, amber when a cooldown or a reported model limit holds it — and muted bars for cached historical readings. A model name shortened to "Fable +3" counts every name the chip leaves out, including names past the 24 sent.
-- **The selected account, per limit**: under the account selector one compact line per limit of its family — its share left, its reported reset, "last known, read 21 min ago" or why it is unknown, a hold, and, only when its own observed pace continued would reach the limit before that reset (or, with no reset reported, at all; no reset is then named), "at its recent pace would reach the limit ~Fri 08:53". The full card stays behind Details.
-- **Honest live Refresh**: the explicit button performs one host POST, uses the
-  existing in-flight/disabled action lifecycle, and merges only returned quota
-  evidence. Automatic polling remains passive GET. An older host reports that a
-  newer Ouroboros is required instead of silently substituting a cached reload.
-  Cached reads use a 25-second network bound; the foreground refresh may wait up
-  to 180 seconds for the host's bounded handshake and sequential vendor work.
+- **Families, About, Refresh**: visible family names with their vendor marks
+  (or an initial) and the number of accounts switched on select the family;
+  About opens the system state and how to read the screen in place; Refresh
+  is explicitly labelled. A family's button carries no colour for its worst
+  account; a harness that is down or switched off says so.
+- **The limits**: beside the title a status line ("All 19 read · observed 1
+  min ago", "15 current · 4 last known (21 min)", or "Claudexor not read now ·
+  all as read 3 min ago"; exact times, the status read and the time zone on
+  hover) and the unit ("Account-windows left · a full account counts 1 ·
+  limits are never added"); then one row per limit — its name ("5-hour",
+  "Weekly · Fable"), one bar per account the limit applies to, as tall as its
+  share left on the same 0–100% scale in every row, fullest first, one fixed
+  strip width per slot count: solid for a current reading, hatched for a dated
+  last-known value, amber when a restriction holds it back, a red base at the
+  limit, an outlined "?" (never an empty bar or a zero) after the rest for an
+  account with no usable value. Each bar names its account, share, reset and
+  age on hover and aloud, and selects that account. On the right the figure —
+  current readings only ("10.35 of 19"; "— of 19" when none is current; a
+  measured 0 stays "0.00") — and under it the average, or the dated "Last
+  known 2.12 · 21 min" line, never added to the figure. The tail names one
+  account at the limit or held back by name, else counts them, then unknown
+  accounts, then the next reported reset with how many accounts and what it
+  gives back if unused; the limit of lowest average share is marked "lowest
+  left". The selected limit's row stands taller; the others keep their bars,
+  lower. Who stands in no row (switched off, or with no reading of these
+  limits here or in the history) is counted in one short link that opens the
+  account list, where they are named.
+- **The timeline** under the selected row: its span (24 h, 7 days), its
+  future (No new use, Recent pace) and Hide on one line; the chart; then the
+  checkpoints, one line of what the future assumes, the first two reported
+  resets (the rest on request), and "Details, notes and data" folded. See
+  "The timeline" above.
+- **One selected account**: a bar or a row of the account list selects it;
+  its bars are outlined in every row. Its card: state dot, name, plan, "next
+  up", its e-mail, login kind, check and the age of its quota reading; its own
+  verdict where the lines do not already say it ("Limit reached · Resets …",
+  "Cooling down until …"); a line per limit (share left, reported reset, "last
+  known, read 21 min ago" or why it is unknown, a hold, and — only when its
+  own observed pace continued would reach the limit before that reset —
+  "would reach the limit ~Fri 9 Oct 08:53"); typed quota absences, cooldowns
+  (one sentence each: scope, end, provenance), model exhaustions that may
+  hold now, and fresh readings not counted with their reason. Diagnostics
+  unfolds every window as a line (its pool's chip, share left, share used in
+  words, why it is out and until when, or its reset), each last-known or
+  not-current reading, and every reported model exhaustion. Clear or Escape
+  drops the selection, the keyboard back on the bar or row that made it.
+  With no overview there is no Diagnostics: the card shows everything it
+  would hold — the windows whole, every reported model exhaustion (a passed
+  one and one naming no model too) and the credential.
+- **The account list**, folded under "Accounts · 19 accounts · 2 not running":
+  one row per account in the engine's order — its share left in each limit
+  (from the same bars; underlined when last known, "?" when unknown, "—" when
+  it has no reading of that limit) and its state ("ready", "nearly used",
+  "limit reached", "cooling down", "model cooldown: Opus", "quota unavailable ·
+  Sign-in required", "no current reading"); then, under "Not running", the
+  accounts switched off, signed out or failing their check, with that reason
+  — never counted as alarms. The engine answers a failed check with
+  `signed_in: false`: such an account stands under its first reason and its
+  row still says the failure, red ("not signed in · verification failed"),
+  before anyone selects it. While the account list is not read now nothing
+  is said not to run.
+- **One bar language**: every bar is as long (or tall) as the share LEFT on
+  one 0–100% scale, in one neutral ink, over a hairline base; amber is a share
+  held back now, a share at its limit has no fill but a red base, a last-known
+  reading is muted and claims neither, a window with no usable ratio has no
+  bar at all. The number beside a window's bar is the share used and says so
+  ("N% used"); the exact share left is on the bar's hover.
+- **Reset Times**: the moment a window resets and a cooldown ends, printed as
+  a date and hour in tabular numerals — no per-second ticking.
+- **Honest live Refresh**: the explicit button performs one host POST and,
+  once the host says it ran, one read of the whole projection, inside the
+  same in-flight lifecycle. Automatic polling remains passive GET. An older
+  host reports that a newer Ouroboros is required instead of silently
+  substituting a cached reload. Cached reads use a 25-second network bound;
+  the foreground refresh may wait up to 180 seconds for the host's bounded
+  handshake and sequential vendor work.
 - **Every request ends**: the widget asks the bridge to bound each read at 60 s
   and the Refresh at 210 s (`init.timeoutMs`, above the route's own bounds) and
   stops waiting itself 5 s later on a host that does not. Headers or a body that
@@ -781,25 +872,24 @@ exhausted window is never reported as the default login's.
   `{}`: the route answers `outcome_unknown: true`, never "failed"; so does the
   widget for a success status whose body breaks off or is not the route's
   answer, and for a transport rejection before any status is available (which
-  does not prove the POST was never delivered); only an answer that says it failed, or a request that never reached the
-  host, is a failure). Passive retries are the ordinary poll, and a Retry button
-  reads now. A read that fails keeps the newest screen re-read at that moment:
-  every current bar becomes the dated last-known value it now is, or — past
-  its reported reset, or with none past its window — a "?" with its last
-  reading kept; the current figure, the next reset, pace, the estimate and
-  the no-new-use line are withdrawn, no account is shown held back now, and
-  each account's windows become last-known readings. The rest of the screen is
-  read the same way, as the skill words a status it could not read: no facet
-  is shown as read now (the settings pip says so), the daemon's state is "when
-  last read", each account's check is "— last known" and none is "next up", a
-  cooldown alone whose end has passed no longer reads "Cooling down", a
-  switched-off account is "switched off when last read", plan splits and the
-  answer's own stale/unreadable counts are withdrawn, and the chart's moment
-  is labelled by the clock time it was read ("read 14:05"), not "now", on its
-  own time axis. The banner says when the
-  last answer was received, and that each value is dated by its own
-  observation. When an answer cannot be drawn the screen before it stays,
-  re-read the same way (the clock has moved since it was read),
+  does not prove the POST was never delivered); only an answer that says it
+  failed, or a request that never reached the host, is a failure). Passive
+  retries are the ordinary poll, and a Retry button reads now. A read that
+  fails keeps the newest screen re-read at that moment: every current bar
+  becomes the dated last-known value it now is, or — past its reported reset,
+  or with none past its window — a "?" with its last reading kept; the current
+  figure, the next reset, pace and every future are withdrawn, no account is
+  shown held back now, and each account's windows become last-known readings.
+  The rest of the screen is read the same way, as the skill words a status it
+  could not read: no facet is shown as read now (the About pip says so), the
+  daemon's state is "when last read", each account's check is "— last known"
+  and none is "next up", a cooldown alone whose end has passed no longer reads
+  "Cooling down", a switched-off account is "switched off when last read",
+  plan splits and the answer's own stale/unreadable counts are withdrawn, and
+  the chart's moment is labelled by the clock time it was read ("read 14:05"),
+  not "now", with no future drawn. The banner says when the last answer was
+  received, and that each value is dated by its own observation. When an
+  answer cannot be drawn the screen before it stays, re-read the same way,
   with the error and a Retry (which never wraps in a narrow frame); the error
   is logged, not swallowed. Raw transport text stays off the screen.
 
@@ -812,7 +902,8 @@ The skill declares no secrets (`env_from_settings: []`). Its permissions are
   over loopback with `urllib` (no external host and no proxy handler): passive
   status GET with a 25-second bound (20 seconds for the tool), and the explicit
   foreground quota POST with 180 seconds, only from the Refresh button;
-- `route` + `widget` — the widget, its three routes and its tab;
+- `route` + `widget` — the widget, its three routes (the prefs route kept
+  for an older widget) and its tab;
 - `tool` — the read-only `quota_summary` tool;
 - `supervised_task` — the one history collector described above.
 

@@ -187,7 +187,7 @@ def _r4_fixture(tmp_path):
     # Reset in 2 h: a screen kept 3 h later is past it.
     soon = payload([_row(now, "a", 0.7, reset=7200), _row(now, "b", 0.6, reset=7200)],
                    [profile("codex", "a"), profile("codex", "b")], harnesses=("codex",))
-    good = _view(empty, soon, now, False)
+    good = _view(empty, soon, now, True)
     broken = json.loads(json.dumps(good))
     broken["groups"][0]["accounts"] = [None]
     # Verified live and next up; mixed plans; one stale; one switched off.
@@ -197,7 +197,7 @@ def _r4_fixture(tmp_path):
                   profile("codex", "d", enabled=False, display_name="lumen")], harnesses=("codex",))
     k1["profiles"]["profiles"][0]["status"]["verification_source"] = "vendor"
     k1["profiles"]["accountPools"] = [{"harness_id": "codex", "next_up": {"kind": "profile", "profileId": "a"}}]
-    k1_view, k1_chart = _view(empty, k1, now, False), _view(empty, k1, now, True)
+    k1_view, k1_chart = _view(empty, k1, now, True), _view(empty, k1, now, True)
     g = k1_view["reserve"]["summary"]["groups"][0]
     assert g["plans"]["mixed"] and g["coverage"]["stale_only"] == 1
     chart = k1_chart["reserve"]["chart"]
@@ -220,7 +220,8 @@ NODE_R4 = r"""
   const section = process.env.R4_SECTION;
   const nowLabels = (env) => walk(env.root).filter((n) => n.getAttribute('class') === 'axis-text now')
     .map((n) => n.textContent);
-  const problem = (env) => /\bhas-problem\b/.test(String(byFocus(env.root, 'settings').className));
+  // 0.8.0: the About button carries the pip that says a facet did not answer.
+  const problem = (env) => /\bhas-problem\b/.test(String(byFocus(env.root, 'about').className));
   const text = (env) => env.root.textContent;
   let env;
 
@@ -248,9 +249,9 @@ NODE_R4 = r"""
     assert.doesNotMatch(text(env), /Reading could not be refreshed/, 'one banner at a time');
     assert.ok(barStates(env).every((s) => s === 'unknown'));
     // The next redraw still says what the screen is.
-    click(env, 'settings');
+    click(env, 'about');
     await settle();
-    click(env, 'settings');
+    click(env, 'about');
     await settle();
     assert.doesNotMatch(text(env), /could not be drawn \(TypeError/);
     assert.match(text(env), /Reading could not be refreshed \(the latest answer could not be drawn\)/);
@@ -265,14 +266,14 @@ NODE_R4 = r"""
     // 2. With no record in the range the line is the current figure alone,
     // of the accounts read now — never "of 0".
     env = bootClock();
-    await respond(env, fx.k1);
-    click(env, 'chart-toggle');
     await respond(env, fx.k1_chart);
     byFocus(env.root, 'chart-plot').listeners.focus[0]();
     const readout = classes(env.root, 'chart-readout')[0].textContent;
-    assert.match(readout, /observed 1\.20 of 2 accounts/, readout);
+    assert.match(readout, /recorded 1\.20 of 2 accounts/, readout);
     assert.doesNotMatch(readout, /of 0 accounts/);
-    assert.match(text(env), /with none, it is only the current figure of 2 accounts at now/);
+    // The legend says there is no record rather than imply a line.
+    assert.match(classes(env.root, 'chart-legend')[0].textContent, /no record in this span yet/);
+    assert.match(text(env), /No record in this span yet: the future starts from the row’s figure at now/);
   }
 
   if (section === 'kept') {
@@ -281,34 +282,29 @@ NODE_R4 = r"""
     // chart's moment.
     env = bootClock();
     await respond(env, fx.k1);
-    click(env, 'account-details');
-    await settle();
-    click(env, 'reserve:' + fx.k1_key);
+    click(env, 'accounts');
+    click(env, 'acct:codex:a');
     await settle();
     assert.match(text(env), /Verified live/);
     assert.match(text(env), /next up/);
     assert.match(text(env), /lumen is switched off in Claudexor — not counted/);
     assert.match(text(env), /mixed plans/);
     assert.match(text(env), /1 stale · /);
-    assert.ok(!problem(env), 'the settings pip says nothing is wrong');
-    click(env, 'chart-toggle');
-    await respond(env, fx.k1_chart);
+    assert.ok(!problem(env), 'the About pip says nothing is wrong');
     assert.deepEqual(nowLabels(env), ['now']);
-    click(env, 'settings');
-    await settle();
-    click(env, 'settings-tab:state');
+    click(env, 'about');
     await settle();
     assert.match(text(env), /What the daemon answered on this read/);
     assert.match(text(env), /daemon running/);
     assert.doesNotMatch(text(env), /when last read/);
-    click(env, 'settings');
+    click(env, 'about');
     await settle();
 
     env.clock.shift = 2 * 3600 * 1000;
     env.poll();
     await respond(env, 'bad gateway', 502);
     assert.match(text(env), /Reading could not be refreshed \(HTTP 502\)/);
-    assert.ok(problem(env), 'the settings pip says nothing was read');
+    assert.ok(problem(env), 'the About pip says nothing was read');
     assert.match(text(env), /Verified live — last known/);
     assert.doesNotMatch(text(env), /Verified live(?! — last known)/);
     assert.doesNotMatch(text(env), /next up/);
@@ -319,21 +315,21 @@ NODE_R4 = r"""
     assert.match(text(env), /3 shown as last known, not current/);
     assert.equal(nowLabels(env).length, 1);
     assert.match(nowLabels(env)[0], /^read \d\d:\d\d$/);
-    assert.match(text(env), /not read since →/);
-    click(env, 'settings');
+    assert.match(text(env), /Nothing read since \d\d:\d\d: no future is drawn/);
+    click(env, 'about');
     await settle();
     assert.match(text(env), /Nothing was read on the latest attempt: nothing below is current/);
     assert.match(text(env), /daemon running when last read \(2h ago\)/);
     assert.doesNotMatch(text(env), /What the daemon answered on this read/);
     assert.match(text(env), /catalog indeterminate/);
     assert.match(text(env), /rotation not reported for Codex/);
-    click(env, 'settings');
+    click(env, 'about');
     await settle();
     // The next whole answer is drawn as it is.
     env.poll();
     await respond(env, fx.k1);
     assert.match(text(env), /Verified live(?! — last known)/);
-    assert.ok(!problem(env), 'the settings pip says nothing is wrong');
+    assert.ok(!problem(env), 'the About pip says nothing is wrong');
   }
 
   if (section === 'cooldown') {
@@ -342,6 +338,7 @@ NODE_R4 = r"""
     // that reported it.
     env = bootClock();
     await respond(env, fx.k2);
+    click(env, 'acct:codex:c');
     assert.match(text(env), /Cooling down/);
     env.clock.shift = 2 * 3600 * 1000;
     env.poll();
@@ -350,6 +347,7 @@ NODE_R4 = r"""
     assert.match(text(env), /No fresh reading — the cooldown last reported has ended/);
     env = bootClock();
     await respond(env, fx.k2);
+    click(env, 'acct:codex:c');
     env.clock.shift = 30 * 60 * 1000;
     env.poll();
     await respond(env, 'bad gateway', 502);

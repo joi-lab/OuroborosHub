@@ -23,7 +23,7 @@ import quota_history
 import quota_summary as qs
 import test_quotas
 from test_last_known import codex, named_summary, only_group
-from test_reserve import NOW, WEEK, _node, constraint, host_at, payload, profile, snap, sweep
+from test_reserve import NOW, WEEK, _node, constraint, host_at, payload, profile, snap, sweep, widget_reserve
 
 NOT_READ = {"catalog": "ok", "accounts": "ok", "quota": "not_read"}
 NO_ANSWER = getattr(plugin, "NO_ANSWER_STATUS", -1)
@@ -358,8 +358,9 @@ async function respond(env, value, status) {
 const barStates = (env) => walk(env.root).filter((n) => n.getAttribute('data-state') !== null)
   .map((n) => n.getAttribute('data-state'));
 const spoken = (env) => allSpoken(env.root);
+// 0.8.0: the future drawn is one scenario line, from the row's own figure.
 const paceLines = (env) => walk(env.root).filter((n) => n.tagName === 'PATH'
-  && /\bline-pace\b/.test(n.getAttribute('class') || '')).length;
+  && /\bline-scenario\b/.test(n.getAttribute('class') || '')).length;
 
 (async () => {
   const fx = JSON.parse(process.env.R3_FIXTURE);
@@ -370,9 +371,9 @@ const paceLines = (env) => walk(env.root).filter((n) => n.tagName === 'PATH'
   await respond(env, fx.good);
   assert.ok(barStates(env).every((s) => s === 'current'), barStates(env).join());
   assert.match(env.root.textContent, /0\.70 of 2/);
-  click(env, 'chart-toggle');
+  // The timeline is open on every mount: its chart is asked for and drawn.
   await respond(env, fx.good_chart);
-  assert.ok(paceLines(env) > 0, 'the estimate is drawn while current');
+  assert.ok(paceLines(env) > 0, 'the future is drawn while current');
   env.clock.shift = 3 * 3600 * 1000;                   // 1 h past the reported reset
   env.poll();
   await respond(env, 'bad gateway', 502);
@@ -407,25 +408,26 @@ const paceLines = (env) => walk(env.root).filter((n) => n.tagName === 'PATH'
   // 7. The chart narrates the record by its own accounts, not the current count.
   env = bootClock();
   await respond(env, fx.hist);
-  click(env, 'chart-toggle');
+  click(env, 'horizon:24h');
   await respond(env, fx.hist_chart);
   const plot = byFocus(env.root, 'chart-plot');
   plot.listeners.focus[0]();
   plot.listeners.keydown[0]({ key: 'ArrowLeft', preventDefault() {} });
   const readout = classes(env.root, 'chart-readout')[0].textContent;
-  assert.match(readout, /observed 1\.80 of 3 accounts/, readout);
+  assert.match(readout, /recorded 1\.80 of 3 accounts/, readout);
   assert.doesNotMatch(readout, /of 0 measured/);
 
   // 8 and the advisory: pace details claim no whole-percent bound, and say
   // the accounts with no reported reset apart.
   env = bootClock();
   await respond(env, fx.paced);
-  click(env, 'reserve:' + fx.paced_key);
-  await settle();
-  assert.match(env.root.textContent, /Recent pace/);
+  // The limit's details sit under the timeline's "Details, notes and data".
+  const details = classes(env.root, 'chart-table')[0];
+  assert.ok(details, 'the timeline carries its details');
+  assert.match(details.textContent, /Recent pace/);
   assert.doesNotMatch(env.root.textContent, /±/);
   assert.doesNotMatch(env.root.textContent, /whole-percent/);
-  assert.match(env.root.textContent, /with no reported reset would reach the limit/);
+  assert.match(details.textContent, /with no reported reset would reach the limit/);
 
   // 9. A last-known zero is dated and muted, never current exhaustion.
   env = bootClock();
@@ -441,6 +443,7 @@ const paceLines = (env) => walk(env.root).filter((n) => n.tagName === 'PATH'
   // and the POST is not sent again.
   env = bootClock();
   await respond(env, fx.good);
+  await respond(env, fx.good_chart);      // the chart the open timeline asks for
   byFocus(env.root, 'refresh').listeners.click[0]();
   await settle();
   const post = env.requests.at(-1);
@@ -491,8 +494,12 @@ def _status(base, timelines, t, stale=(), reset=7200.0):
 
 def _view(store, data, now, chart):
     out = plugin.build_view(data, "", now)
-    out["reserve"] = plugin.reserve_view(store, data, now, now, harness="codex", chart=chart,
-                                         name_accounts=True)
+    if chart:
+        # As the widget's first read gets it: the default limit's own span.
+        out["reserve"] = widget_reserve(store, data, now, now, harness="codex", name_accounts=True)
+    else:
+        out["reserve"] = plugin.reserve_view(store, data, now, now, harness="codex", chart=False,
+                                             name_accounts=True)
     return out
 
 
@@ -504,7 +511,7 @@ def _r3_fixture(tmp_path):
     good = _view(live, _status(now, grow, now), now, False)
     good_chart = _view(live, _status(now, grow, now), now, True)
     assert good_chart["reserve"]["chart"]["recent_pace"], "the fixture needs a drawn estimate"
-    paced = json.loads(json.dumps(good))
+    paced = json.loads(json.dumps(good_chart))
     g = paced["reserve"]["summary"]["groups"][0]
     g["recent_pace"].update({"resolution_windows_per_hour": 0.012, "reach_limit_no_reported_reset": 1,
                              "earliest_no_reset_reach_at": qs.iso(now + 5 * 3600)})
@@ -512,7 +519,11 @@ def _r3_fixture(tmp_path):
     three = {"a": [(-6000, 0.10)], "b": [(-6000, 0.40)], "c": [(-6000, 0.70)]}
     _live(hist_store, now, three, -6000, -600)
     stale = _status(now, three, now, stale=("a", "b", "c"))
-    hist, hist_chart = _view(hist_store, stale, now, False), _view(hist_store, stale, now, True)
+    hist = _view(hist_store, stale, now, False)
+    # The reader picks the 24-hour span: the record lies in the last two hours.
+    hist_chart = plugin.build_view(stale, "", now)
+    hist_chart["reserve"] = plugin.reserve_view(hist_store, stale, now, now, harness="codex", horizon="24h",
+                                                name_accounts=True)
     assert hist_chart["reserve"]["chart"]["past_accounts"] == 3
     zero = _status(now, {"a": [(-60, 0.3)], "b": [(-1200, 1.0)]}, now, stale=("b",))
     lastzero = _view(quota_history.HistoryStore(tmp_path / "zero"), zero, now, False)

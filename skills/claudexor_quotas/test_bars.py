@@ -19,9 +19,10 @@ from test_reserve import WEEK, _node, payload, profile, snap
 
 
 NODE_BARS = r"""
-// 0.7.0 (approved v4 rows): one .lrow per limit; its details button carries
-// the data-focus "reserve:<key>"; the bars are .bar buttons in .bars.
-const row = (env, g) => byFocus(env.root, 'reserve:' + g.key).parentNode;
+// 0.8.0: one .lrow per limit; its name button carries the data-focus
+// "limit:<key>" and the row's whole spoken summary; the bars are .bar
+// buttons in .bars.
+const row = (env, g) => byFocus(env.root, 'limit:' + g.key).parentNode;
 const bars = (r) => classes(r, 'bar');
 const fillOf = (c) => c.childNodes.find((n) => String(n.className).split(/\s+/).includes('fill')) || null;
 const heightOf = (c) => (fillOf(c) ? parseFloat(fillOf(c).style.height) : null);
@@ -62,13 +63,13 @@ const has = (c, name) => String(c.className).split(/\s+/).includes(name);
   assert.match(classes(r, 'l-sub')[0].title, /not in the figure: 1\.40 account-windows of 2 accounts/);
   assert.match(classes(r, 'l-sub')[0].title, /The figure: 2\.06 of 7 current accounts/);
   assert.doesNotMatch(r.textContent, /incl\./);
-  assert.match(byFocus(env.root, 'reserve:' + g.key).getAttribute('aria-label'),
+  assert.match(byFocus(env.root, 'limit:' + g.key).getAttribute('aria-label'),
     /2\.06 of 9 account-windows left now — last known 1\.40 account-windows, read .*, not counted — 7 current of 9 accounts/);
   // One strip width for the slot count; the bars share it equally.
   assert.equal(classes(r, 'bars')[0].style.width, (9 * 28 + 8 * 3) + 'px');
-  // "How to read" says the same with its own samples.
-  byFocus(env.root, 'reserve-about').listeners.click[0]({ stopPropagation() {} });
-  const about = classes(env.root, 'reserve-about')[0];
+  // About says the same with its own samples.
+  byFocus(env.root, 'about').listeners.click[0]({ stopPropagation() {} });
+  const about = classes(env.root, 'about-panel')[0];
   assert.match(about.textContent, /full height is 100% left, the base 0%/);
   assert.match(about.textContent, /hatched bar is a last-known value/);
   const legend = classes(about, 'strip-legend')[0];
@@ -121,7 +122,7 @@ const has = (c, name) => String(c.className).split(/\s+/).includes(name);
   assert.match(classes(r, 'l-sub')[0].textContent, /^Last known 20\.50 · /);
   assert.match(classes(r, 'l-sub')[0].title, /The figure: no current reading\./);
   assert.doesNotMatch(r.textContent, /incl\.|20\.50 of 41|0\.00 of 41/);
-  assert.match(byFocus(env.root, 'reserve:' + g.key).getAttribute('aria-label'),
+  assert.match(byFocus(env.root, 'limit:' + g.key).getAttribute('aria-label'),
     /no current reading — last known 20\.50 account-windows, read .*, not counted — 0 current of 41 accounts/);
 
   // 6. A measured zero is a real 0, not a "—": every current account is at
@@ -133,7 +134,7 @@ const has = (c, name) => String(c.className).split(/\s+/).includes(name);
   assert.match(classes(r, 'l-fig')[0].textContent, /^0\.00 of 3$/);
   assert.doesNotMatch(classes(r, 'l-fig')[0].title, /No current reading/);
   assert.match(classes(r, 'l-sub')[0].textContent, /^Last known 0\.50 · /);
-  assert.match(byFocus(env.root, 'reserve:' + g.key).getAttribute('aria-label'),
+  assert.match(byFocus(env.root, 'limit:' + g.key).getAttribute('aria-label'),
     /0\.00 of 3 account-windows left now — last known 0\.50 account-windows, read .*, not counted — 2 current of 3 accounts/);
   // With no last-known value the line under a measured zero is its average.
   env = await boot(fx.zeroOnly);

@@ -1033,36 +1033,41 @@ const calls = [];
   const chartReady = () => !/Loading the chart for this limit/.test(text())
     && walk(root).some((n) => n.getAttribute('class') === 'chart-svg');
 
-  await waitFor(() => /30% used/.test(text()) && /0\.70 of 1/.test(text()), 'first reading');
-  // The chart is folded: the first read does not ask the skill to draw it.
-  assert.ok(!chartReady());
-  assert.match(calls[0].url, /chart=0/);
-  // Opened, it is read once, with reuse, from the same status read.
-  byFocus(root, 'chart-toggle').listeners.click[0]({ stopPropagation() {} });
-  await waitFor(() => calls.length === 2 && chartReady(), 'chart opened');
+  await waitFor(() => /0\.70 of 1/.test(text()) && chartReady(), 'first reading with its timeline');
+  assert.doesNotMatch(calls[0].url, /reuse=1|chart=0/);
+  // 0.8.0: the timeline is open on every mount; its limit's own span (a week)
+  // is asked for once, with reuse, from the same status read.
+  assert.equal(calls.length, 2);
   assert.match(calls[1].url, /reuse=1/);
-  assert.doesNotMatch(calls[1].url, /chart=0/);
+  assert.match(calls[1].url, /horizon=7d/);
+  byFocus(root, 'accounts').listeners.click[0]({ stopPropagation() {} });
+  byFocus(root, 'acct:codex:c1').listeners.click[0]({ stopPropagation() {} });
+  byFocus(root, 'inspector-diag').listeners.click[0]({ stopPropagation() {} });
+  assert.match(text(), /30% used/);
 
+  // Refresh: one POST, then one read of the whole projection — the rows, the
+  // timeline and the selected account all from a reading made after it.
   byFocus(root, 'refresh').listeners.click[0]();
-  await waitFor(() => /91% used/.test(text()), 'refreshed quota');
-  assert.match(text(), /refreshed after this overview was computed/);
-  assert.doesNotMatch(text(), /30% used/);
-
-  // Immediately switch the chart to 7 days: a reuse request.
-  byFocus(root, 'horizon:7d').listeners.click[0]({ stopPropagation() {} });
-  await waitFor(() => calls.length === 4 && chartReady(), '7d chart');
+  await waitFor(() => /0\.09 of 1/.test(text()) && /91% used/.test(text()) && chartReady(), 'refreshed projection');
+  assert.equal(calls[2].method, 'POST');
+  assert.equal(calls[3].method, 'GET');
+  assert.doesNotMatch(calls[3].url, /reuse=1/);
   assert.match(calls[3].url, /horizon=7d/);
-  assert.match(calls[3].url, /reuse=1/);
-  // The refreshed quota survives the switch, and the overview now comes from
-  // a reading made after the Refresh, so it no longer says it predates it.
-  assert.match(text(), /91% used/);
   assert.doesNotMatch(text(), /30% used/);
-  assert.match(text(), /0\.09 of 1/);
-  assert.doesNotMatch(text(), /refreshed after this overview was computed/);
+  assert.doesNotMatch(text(), /refreshed after this overview/);
 
-  // And back to 24 hours: answered from that post-Refresh read.
+  // Immediately switch the timeline to 24 hours: a reuse request answered
+  // from that post-Refresh read.
   byFocus(root, 'horizon:24h').listeners.click[0]({ stopPropagation() {} });
   await waitFor(() => calls.length === 5 && chartReady(), '24h chart');
+  assert.match(calls[4].url, /horizon=24h/);
+  assert.match(calls[4].url, /reuse=1/);
+  assert.match(text(), /91% used/);
+  assert.match(text(), /0\.09 of 1/);
+
+  // And back to 7 days.
+  byFocus(root, 'horizon:7d').listeners.click[0]({ stopPropagation() {} });
+  await waitFor(() => calls.length === 6 && chartReady(), '7d chart');
   assert.match(text(), /91% used/);
   console.log(JSON.stringify(calls));
 })().catch((error) => {
@@ -1127,9 +1132,10 @@ def test_real_widget_refresh_then_chart_switch_over_registered_handlers(tmp_path
         server.server_close()
     assert result.returncode == 0, result.stdout + result.stderr
     asked = json.loads(result.stdout.strip().splitlines()[-1])
-    assert [c['method'] for c in asked] == ['GET', 'GET', 'POST', 'GET', 'GET']
-    assert 'reuse=1' not in asked[0]['url'] and all('reuse=1' in c['url'] for c in asked[3:])
-    assert 'reuse=1' in asked[1]['url']
+    assert [c['method'] for c in asked] == ['GET', 'GET', 'POST', 'GET', 'GET', 'GET']
+    assert 'reuse=1' not in asked[0]['url'] and 'reuse=1' in asked[1]['url']
+    # The read after the Refresh is a new status read; the switches reuse it.
+    assert 'reuse=1' not in asked[3]['url'] and all('reuse=1' in c['url'] for c in asked[4:])
     # Upstream: the first read, the one explicit Refresh, one read after it.
     assert upstream == [('GET', plugin.STATUS_PATH), ('POST', plugin.REFRESH_PATH),
                         ('GET', plugin.STATUS_PATH)]
@@ -1231,19 +1237,21 @@ NODE_ADVISORY_MATRIX = r"""
   // are; the scope words say how many are not listed. Two scopes whose
   // listed names are the same still get two names on screen.
   assert.match(text, /m00 \+24/);
-  // 0.7.0: one .lrow per limit; its whole spoken summary is on its details
-  // button (.l-more), which also opens the details.
+  // 0.8.0: one .lrow per limit; its whole spoken summary is on its name
+  // button (.l-name), which shows the limit in the timeline.
   const rows = classes(env.root, 'lrow');
   const names = rows.map((r) => classes(r, 'l-name-text')[0].textContent);
   assert.equal(new Set(names).size, names.length, names.join(' | '));
-  const heard = rows.map((r) => classes(r, 'l-more')[0].getAttribute('aria-label')).join(' ');
+  const heard = rows.map((r) => classes(r, 'l-name')[0].getAttribute('aria-label')).join(' ');
   assert.match(heard, /models: m00, m01, .*m23 \+1 more/);
   // With a restriction present, the unrestricted account-windows stand beside it.
   assert.match(heard, /1 cooldown reported \(0\.70\)/);
   assert.match(heard, /0\.50 unrestricted/);
-  byFocus(env.root, classes(rows[0], 'l-more')[0].getAttribute('data-focus')).listeners.click[0]({ stopPropagation() {} });
-  assert.match(env.root.textContent, /1 cooldown reported \(0\.70\)/);
-  assert.match(env.root.textContent, /0\.50 unrestricted/);
+  // The limit in the timeline says the same in its details.
+  const details = classes(env.root, 'chart-table')[0];
+  assert.ok(details, 'the timeline carries the limit details');
+  assert.match(details.textContent, /1 cooldown reported \(0\.70\)/);
+  assert.match(details.textContent, /0\.50 unrestricted/);
 })().catch((error) => {
   console.error(error && error.stack ? error.stack : error);
   process.exitCode = 1;
@@ -1255,7 +1263,7 @@ def test_real_widget_names_oversized_scopes_and_shows_unrestricted(tmp_path):
     from pathlib import Path
 
     import test_quotas
-    from test_reserve import _node
+    from test_reserve import _node, widget_reserve
 
     node = _node()
     assert node is not None, 'a Node runtime is required for widget tests'
@@ -1279,7 +1287,7 @@ def test_real_widget_names_oversized_scopes_and_shows_unrestricted(tmp_path):
     data = payload([row('a', .3, 'm99-x', True), row('b', .5, 'm99-y', False)],
                    [profile('codex', 'a'), profile('codex', 'b')], harnesses=('codex',))
     view = plugin.build_view(data, '')
-    view['reserve'] = plugin.reserve_view(qh.HistoryStore(tmp_path), data, now, now, harness='codex')
+    view['reserve'] = widget_reserve(qh.HistoryStore(tmp_path), data, now, now, harness='codex', name_accounts=True)
     widget_path = Path(__file__).with_name('widget.js').resolve()
     harness = test_quotas.NODE_WIDGET_MATRIX.split('(async () => {')[0]
     result = subprocess.run(
