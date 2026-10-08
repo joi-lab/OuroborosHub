@@ -351,17 +351,17 @@
       "when_to_use": "When the user wants to play an authentic Classic Doom (1993) 2.5D FPS raycaster game directly in an Ouroboros extension widget with monsters, weapons, sound effects, and heavy metal synth."
     },
     {
-      "description": "Claudexor quota widget and read-only quota_summary tool: one bar per account and limit (current, dated last-known, or unknown — never zero), reserve in account-windows with coverage, restrictions and reported resets, and a conditional recent-pace estimate for the accounts whose pace qualifies, from a bounded local history of passive readings.",
+      "description": "Claudexor quota widget and read-only quota_summary tool: one bar per account and limit (current, dated last-known, or unknown — never zero), reserve in account-windows with coverage, restrictions and reported resets, and under the chosen limit a timeline — its recorded past and one conditional future (no new use, or the recent pace) of the accounts read now, with its reset schedule — from a bounded local history of passive readings.",
       "files": [
         {
           "path": "SKILL.md",
-          "size": 62658,
-          "sha256": "6c1b089341f124851b9d6ddfd03a64e4639908c075224cd52bfb80dc7718f580"
+          "size": 62029,
+          "sha256": "5875abe9d67f831d0deaf635d6b22f4d2791bfba8dfa7515b74bc18032f7ba80"
         },
         {
           "path": "plugin.py",
-          "size": 78004,
-          "sha256": "761965b28eee0fee6f5e8ec27cfb45336ac96834c65d4b07bd80489b176b30ef"
+          "size": 78281,
+          "sha256": "375008d09232bd4ff08cf9851d1958ec9fb105bc1a8a85da61dcbd200a87b6d7"
         },
         {
           "path": "quota_history.py",
@@ -370,18 +370,18 @@
         },
         {
           "path": "quota_summary.py",
-          "size": 120484,
-          "sha256": "6853600321299f69f7162cfbe0d14d9208349d82f2db74b8263135dd9da78365"
+          "size": 134572,
+          "sha256": "67b9f4aabac271831db261e2496ae7a99e2b83272ba7f91e9835bc93dd052284"
         },
         {
           "path": "test_bars.py",
-          "size": 10930,
-          "sha256": "04bee85cf8de2eb735878ef78b2f2d17323071cb493db2b29d3897dccc00bfd0"
+          "size": 10918,
+          "sha256": "858a511456e32cfe2cbdbb5e3dfae68debf0c86221aa6034fba8ae55a74efd5b"
         },
         {
           "path": "test_clarity.py",
-          "size": 8019,
-          "sha256": "c5e7f606dcd82644cc6f2d8c0e8f8a8db0955018ad76efa74c5074f7bfa904a1"
+          "size": 9288,
+          "sha256": "862779db2ff2cd524cb42c28ec9a4db26c0a5a1aa0ea613ebd1c38140ffd6839"
         },
         {
           "path": "test_last_known.py",
@@ -390,64 +390,64 @@
         },
         {
           "path": "test_model_holds.py",
-          "size": 33526,
-          "sha256": "84021556fe5063b5083c0bb58a2fb9c145b7fa141e36b7bb295d18aaef85ad04"
+          "size": 35560,
+          "sha256": "51238b820d83fc6c4d771d9a2de05f52beb989e8c83f6794c8407ace2855607e"
         },
         {
           "path": "test_order_focus.py",
-          "size": 22552,
-          "sha256": "51dd074bcfd0a63b1d419f3d3320d55c95e09f3e5db6c44c702d98e1602c8aaa"
+          "size": 29138,
+          "sha256": "1e6e5c5d615909433713a09d1a99a16426ead83a77668db618b3f3d04ce47406"
         },
         {
           "path": "test_quotas.py",
-          "size": 87795,
-          "sha256": "6cfa6bd5800f8615137f69dda5233cd6d9a41b4f0295b76438a4213df145eba7"
+          "size": 79320,
+          "sha256": "537f4a089cb83c8b4b94bf6ccb9242e5821ebd9f16273f60bfb679e1ec9d3859"
         },
         {
           "path": "test_r3.py",
-          "size": 66568,
-          "sha256": "f59b91800f0c7e5f638722486fb5aacafbaac6938e82a0a7fe276d3db24fb32f"
+          "size": 67021,
+          "sha256": "2916d1a6a2ed82d88395220943be7ad481bd684213c31fb0d54693f88b073311"
         },
         {
           "path": "test_repair_r2.py",
-          "size": 17602,
-          "sha256": "7648bcba5b1913538d4ef50fe82ba46393fe07eef6c6414c65168a54a21af1c8"
+          "size": 17996,
+          "sha256": "17527df511e6fc603cb52c5ebfe2bc184cdf4fb2c99d08f098dd924eab6c452b"
         },
         {
           "path": "test_repair_r3.py",
-          "size": 24534,
-          "sha256": "2051d074d380402dcafe9d0d91c6a0802cdffcc031cbb422760a04f3801d4a98"
+          "size": 25357,
+          "sha256": "0d74640f493fdd7e250a8bdfc9f3dded3338b7f4587de498213885a19d052d58"
         },
         {
           "path": "test_repair_r4.py",
-          "size": 19804,
-          "sha256": "4c5ef5c12bbc4d9b3e4a1b6843d2af12a97f0d28ac9903d0867ac2008815608c"
+          "size": 19901,
+          "sha256": "be6083136e6d754b548c8ad14408c404266c28176d6ad2d99083a13130b15b42"
         },
         {
           "path": "test_reserve.py",
-          "size": 174847,
-          "sha256": "43e430d1a78b41d5cf644f9bff9a3eec3d9f9883b9fc1252ab546ff383848f17"
+          "size": 216847,
+          "sha256": "f2a91c26c6018c9f440a3c5b75ea7aeb6b40a7dad616cceae8a0aa0893c05704"
         },
         {
           "path": "test_robust_widget.py",
-          "size": 11059,
-          "sha256": "8553d531c07ac2ea368232a141969676fe01ba856a16bdac7fa87cb1f45e526a"
+          "size": 13449,
+          "sha256": "fd7d7d755463be75283ed92648ea00bbebc956a7056c9be987e02c5d8fd34487"
         },
         {
           "path": "test_scope_identity.py",
-          "size": 10048,
-          "sha256": "294fca5e9055a53fbb0266e65c3d04ed5019586fb80e7765be01dc1c908338d5"
+          "size": 10297,
+          "sha256": "f84d33ccee5d45533ede85a17afe6c77f3c57b5e7e2797472aead402b2f52a42"
         },
         {
           "path": "widget.js",
-          "size": 327796,
-          "sha256": "0f40bcd6b36d807b7742545a50d3675a7f103b62f98ee8febe0c0bdeac5bde60"
+          "size": 231865,
+          "sha256": "52088399d8a3b3e5a778c225d53d1d31c0b660f93f1745aa3ca33ad52362a7c2"
         }
       ],
       "name": "claudexor_quotas",
       "slug": "claudexor_quotas",
       "type": "extension",
-      "version": "0.7.0",
+      "version": "0.8.0",
       "when_to_use": "The owner wants quota windows, resets and remaining reserve of the authorized Claudexor accounts; or, before choosing executors, the model wants measured reserve by family and limit. Advisory only: never a dispatch guarantee or a pin change."
     },
     {

@@ -245,8 +245,8 @@ NODE_REPAIR = r"""
     }
     await settle();
   }
-  await drain(env, fx.weekly_tightest);
-  click(env, 'chart-toggle');
+  // 0.8.0: the timeline is open on every mount, so the first answer (which
+  // carries no chart here) is followed by one request for the chart.
   await drain(env, fx.weekly_tightest);
   const opened = asked.at(-1);
   assert.match(opened, /\|secondary\|/, 'opens on the lowest-left limit');
@@ -275,10 +275,16 @@ NODE_REPAIR = r"""
 
   // D6: fresh -> degraded -> failed read keeps the degraded (newer) screen;
   // a semantic-empty answer is not drawn; the next whole answer recovers.
-  // (The chart stays folded here: one read per poll.)
+  // (The timeline is folded here: one read per poll, never a chart.)
   env = bootControlled();
+  await drain(env, fx.weekly_tightest);
+  click(env, 'chart-toggle');
+  assert.equal(byFocus(env.root, 'chart-toggle').getAttribute('aria-expanded'), 'false');
+  env.poll();
   await settle();
-  env.requests[0].resolve(answer(fx.weekly_tightest));
+  assert.match(env.requests.at(-1).url, /chart=0/, 'a folded timeline is not asked for');
+  env.requests.at(-1).done = true;
+  env.requests.at(-1).resolve(answer(fx.weekly_tightest));
   await settle();
   const lastBars = () => classes(env.root, 'bar').filter((b) => /\blast\b/.test(String(b.className))).length;
   assert.equal(lastBars(), 0);

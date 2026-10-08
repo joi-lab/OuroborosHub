@@ -1,5 +1,6 @@
 """0.6.3 repairs: an availability cooldown whose end has passed, keyboard focus
-across Refresh, and the reader's latest display choice.
+across Refresh, and the order of the prefs route's saves (0.8.0: the widget
+no longer saves display choices; its inline choices survive every reading).
 
 Each runs through the real code: the projector and routes for the cooldown,
 the prefs route for the order of saves, and widget.js itself — in the fake DOM
@@ -221,86 +222,54 @@ function deferredFetch(env) {
   };
   return pending;
 }
-const saves = (pending) => pending.filter((p) => /\/prefs$/.test(p.call.url));
-const sent = (p) => JSON.parse(p.call.body);
-const kept = (p) => { const b = sent(p); return { density: b.density, models: b.models, fold: b.fold }; };
-const chosen = (env) => classes(env.root, 'density-opt')
-  .filter((n) => /\bactive\b/.test(n.className)).map((n) => n.getAttribute('data-focus'));
-const warned = (env) => /Display choice was not saved/.test(env.root.textContent);
+const pressed = (env, prefix) => walk(env.root).filter((n) => String(n.getAttribute('data-focus') || '').startsWith(prefix)
+  && n.getAttribute('aria-pressed') === 'true').map((n) => n.getAttribute('data-focus'));
 const active = (env) => env.document.activeElement;
 
 (async () => {
   const fx = JSON.parse(process.env.ORDER_FOCUS_FIXTURE);
   const mode = process.env.ORDER_FOCUS_CASE;
-  const withPrefs = (density) => Object.assign(JSON.parse(JSON.stringify(fx.view)),
-    { prefs: { density, models: {}, fold: {} } });
 
-  async function twoSaves() {
-    const env = await boot(withPrefs('normal'));
-    const pending = deferredFetch(env);
-    click(env, 'settings'); click(env, 'density:compact'); click(env, 'density:detailed');
-    await settle();
-    const [older, newer] = saves(pending);
-    assert.ok(older && newer && saves(pending).length === 2);
-    assert.deepEqual([sent(older).density, sent(newer).density], ['compact', 'detailed']);
-    assert.deepEqual([sent(older).seq, sent(newer).seq], [1, 2]);
-    assert.equal(sent(older).frame, sent(newer).frame);
-    assert.ok(sent(older).frame.length > 0 && sent(older).frame.length <= 64);
-    return { env, pending, older, newer };
-  }
-
-  if (mode === 'prefs_reversed') {
-    const { env, older, newer } = await twoSaves();
-    newer.resolve(response({ prefs: kept(newer), error: '' })); await settle();
-    assert.deepEqual(chosen(env), ['density:detailed']);
-    older.resolve(response({ prefs: kept(older), error: '' })); await settle();
-    assert.deepEqual(chosen(env), ['density:detailed'], 'the older answer came last and won');
-    assert.ok(!warned(env));
-    // With nothing in the air, a reading's choice is drawn again.
-    env.window.fetch = () => Promise.resolve(response(withPrefs('compact')));
-    env.interval()(); await settle();
-    assert.deepEqual(chosen(env), ['density:compact']);
-  } else if (mode === 'prefs_older_fails_late') {
-    const { env, older, newer } = await twoSaves();
-    newer.resolve(response({ prefs: kept(newer), error: '' })); await settle();
-    older.reject(new Error('bridge closed')); await settle();
-    // The newest, a full copy of every choice, is kept: nothing reverts.
-    assert.deepEqual(chosen(env), ['density:detailed']);
-    assert.ok(!warned(env));
-  } else if (mode === 'prefs_older_fails_first') {
-    const { env, older, newer } = await twoSaves();
-    older.reject(new Error('bridge closed')); await settle();
-    assert.ok(warned(env), 'a failure is said while nothing newer has answered');
-    assert.match(env.root.textContent, /bridge closed/);
-    assert.deepEqual(chosen(env), ['density:detailed']);
-    newer.resolve(response({ prefs: kept(newer), error: '' })); await settle();
-    assert.ok(!warned(env));
-    assert.deepEqual(chosen(env), ['density:detailed']);
-  } else if (mode === 'prefs_newest_fails') {
-    const { env, older, newer } = await twoSaves();
-    newer.resolve(response({ prefs: kept(newer), error: 'OSError: disk full' })); await settle();
-    assert.ok(warned(env)); assert.match(env.root.textContent, /disk full/);
-    older.resolve(response({ prefs: kept(older), error: '' })); await settle();
-    // The older success neither hides the newest failure nor brings its choice back.
-    assert.ok(warned(env)); assert.match(env.root.textContent, /disk full/);
-    assert.deepEqual(chosen(env), ['density:detailed']);
-  } else if (mode === 'prefs_reading_asked_before') {
-    const env = await boot(withPrefs('normal'));
+  if (mode === 'choices_survive_readings') {
+    // 0.8.0: the timeline's limit, span and scenario are the reader's choices
+    // for this visit. A reading — one asked before the choice included — never
+    // takes them back, and none of them is posted anywhere: the skill's prefs
+    // route keeps its legacy display choices for older widgets only.
+    const env = await boot(fx.view);
     const pending = deferredFetch(env);
     env.interval()(); await settle();
-    const reading = pending.find((p) => p.call.method === 'GET');
-    assert.ok(reading, 'the timed reading is in the air');
-    click(env, 'settings'); click(env, 'density:compact'); await settle();
-    const [save] = saves(pending);
-    save.resolve(response({ prefs: kept(save), error: '' })); await settle();
-    // Read before the choice was made, answered after it was saved.
-    reading.resolve(response(withPrefs('normal'))); await settle();
-    assert.deepEqual(chosen(env), ['density:compact'], 'a reading from before the choice reverted it');
-    // A reading asked after it is drawn, whatever it says.
-    env.interval()(); await settle();
-    pending.filter((p) => p.call.method === 'GET').at(-1).resolve(response(withPrefs('detailed')));
+    const before = pending.find((p) => p.call.method === 'GET');
+    assert.ok(before, 'the timed reading is in the air');
+    const groups = fx.view.reserve.summary.groups;
+    const other = groups.find((g) => !g.tightest);
+    click(env, 'scenario:recent_pace');
+    click(env, 'horizon:24h');
+    click(env, 'limit:' + other.key);
+    before.resolve(response(fx.view)); await settle();
+    assert.deepEqual(pressed(env, 'scenario:'), ['scenario:recent_pace']);
+    assert.deepEqual(pressed(env, 'horizon:'), ['horizon:24h']);
+    assert.deepEqual(pressed(env, 'limit:'), ['limit:' + other.key]);
+    // The widget asks for the chart it now shows, once, from the same read.
+    const asked = pending.filter((p) => p.call.method === 'GET' && p !== before);
+    assert.ok(asked.length >= 1);
+    assert.match(asked.at(-1).call.url, /reuse=1/);
+    assert.match(asked.at(-1).call.url, /horizon=24h/);
+    assert.match(asked.at(-1).call.url, new RegExp('group=' + encodeURIComponent(other.key).replace(/[|]/g, '\\|')));
+    asked.forEach((p) => p.resolve(response(fx.view)));
     await settle();
-    assert.deepEqual(chosen(env), ['density:detailed']);
+    env.interval()(); await settle();
+    pending.filter((p) => p.call.method === 'GET').at(-1).resolve(response(fx.view));
+    await settle();
+    assert.deepEqual(pressed(env, 'scenario:'), ['scenario:recent_pace']);
+    assert.deepEqual(pressed(env, 'horizon:'), ['horizon:24h']);
+    assert.ok(env.calls.every((call) => !/\/prefs$/.test(call.url)), 'no display choice is saved');
+    // Every read still in the air (the chart asked for the limit on screen)
+    // is answered, so no request's own bound is left waiting.
+    for (let i = 0; i < 4; i++) {
+      pending.forEach((p) => { if (!p.done) { p.done = true; p.resolve(response(fx.view)); } });
+      await settle();
+    }
+    env.disposeHooks[0]();
   } else if (mode.startsWith('focus_')) {
     // Nodes are compared with ===: a failed deep assert on two of them would
     // walk the whole cyclic tree to print a diff.
@@ -320,20 +289,29 @@ const active = (env) => env.document.activeElement;
       // The disabled redraw dropped it, as a browser does.
       assert.ok(active(env) === env.document.body, 'focus did not fall to the body');
       // Another redraw while the read is in the air keeps the place.
-      click(env, 'account-details'); await settle();
+      click(env, 'accounts'); await settle();
       assert.ok(active(env) === env.document.body, 'a redraw in flight moved focus');
     }
-    if (mode === 'focus_moved_on') byFocus(env.root, 'settings').focus();
+    if (mode === 'focus_moved_on') byFocus(env.root, 'about').focus();
     if (mode === 'focus_left_frame') env.document.hasFocus = () => false;
     const job = pending.at(-1);
     if (mode === 'focus_failure') job.reject(new Error('host refused'));
     else if (job.call.method === 'GET') job.resolve(response(fx.view));
     else job.resolve(response({ ok: true, quota_updates: [] }));
     await settle();
+    if (job.call.method === 'POST' && mode !== 'focus_failure') {
+      // A Refresh that ran reads the whole projection once more: still in
+      // flight until that read ends.
+      const read = pending.at(-1);
+      assert.equal(read.call.method, 'GET');
+      assert.equal(refresh().disabled, true);
+      read.resolve(response(fx.view));
+      await settle();
+    }
     const now = active(env);
     assert.equal(refresh().disabled, false);
     if (mode === 'focus_moved_on') {
-      assert.equal(now.getAttribute('data-focus'), 'settings');
+      assert.equal(now.getAttribute('data-focus'), 'about');
       assert.equal(now.isConnected, true);
     } else if (mode === 'focus_left_frame' || mode === 'focus_never_on_refresh') {
       assert.ok(now === null || now === env.document.body, 'focus was pulled onto Refresh');
@@ -341,6 +319,70 @@ const active = (env) => env.document.activeElement;
       assert.ok(now === refresh(), 'keyboard focus did not come back to Refresh');
       assert.equal(now.isConnected, true);
       if (mode === 'focus_failure') assert.match(env.root.textContent, /whether it ran is unknown/);
+    }
+    env.disposeHooks[0]();
+  } else if (mode.startsWith('select_')) {
+    // Clear and Escape remove the card the keyboard may be on: it goes back
+    // to the bar or row that selected the account — or, that one gone since
+    // (the list folded, another reading), to the account list.
+    let current = fx.view;
+    const env = await boot(() => current);
+    const key = () => { const a = active(env); return a && a.getAttribute ? a.getAttribute('data-focus') : null; };
+    const card = () => classes(env.root, 'inspector')[0];
+    const escape = () => env.document.listeners.keydown[0]({ key: 'Escape' });
+    const only = fx.view.reserve.summary.groups.find((g) => (g.bars || []).length === 1);
+    assert.ok(only && only.bars[0].account === 'codex:c1', 'a limit only c1 has a bar in');
+    const bar = 'bar:' + only.key + ':codex:c1';
+    const expectBack = (want) => {
+      assert.equal(card(), undefined, 'the selection is dropped');
+      assert.equal(key(), want);
+      assert.ok(active(env).isConnected, 'focus on a node the redraw removed');
+    };
+    if (mode === 'select_clear_from_bar' || mode === 'select_escape_from_card') {
+      click(env, bar);
+      assert.ok(card() && key() === bar, 'the bar selects and keeps the keyboard');
+      if (mode === 'select_clear_from_bar') {
+        byFocus(env.root, 'inspector-clear').focus();
+        click(env, 'inspector-clear');
+      } else {
+        byFocus(env.root, 'inspector-diag').focus();
+        click(env, 'inspector-diag');
+        assert.equal(key(), 'inspector-diag');
+        escape();
+      }
+      expectBack(bar);
+    } else if (mode === 'select_clear_from_row') {
+      click(env, 'accounts');
+      click(env, 'acct:codex:c2');
+      assert.ok(card() && key() === 'acct:codex:c2');
+      byFocus(env.root, 'inspector-clear').focus();
+      click(env, 'inspector-clear');
+      expectBack('acct:codex:c2');
+    } else if (mode === 'select_opener_folded') {
+      click(env, 'accounts');
+      click(env, 'acct:codex:c2');
+      click(env, 'accounts');
+      assert.equal(byFocus(env.root, 'acct:codex:c2'), undefined, 'the row is folded away');
+      assert.ok(card());
+      byFocus(env.root, 'inspector-clear').focus();
+      click(env, 'inspector-clear');
+      expectBack('accounts');
+    } else if (mode === 'select_opener_gone_after_reading') {
+      click(env, bar);
+      const gone = JSON.parse(JSON.stringify(fx.view));
+      gone.reserve.summary.groups.forEach((g) => {
+        if (g.key === only.key) g.bars = g.bars.filter((b) => b.account !== 'codex:c1');
+      });
+      current = gone;
+      env.interval()();
+      await settle();
+      assert.equal(byFocus(env.root, bar), undefined, 'the opening bar is gone with the reading');
+      assert.ok(card(), 'the account itself is still there');
+      byFocus(env.root, 'inspector-clear').focus();
+      escape();
+      expectBack('accounts');
+    } else {
+      throw new Error('unknown case ' + mode);
     }
     env.disposeHooks[0]();
   } else {
@@ -356,10 +398,13 @@ def widget_view(tmp_path_factory):
 
 
 @pytest.mark.parametrize("case", [
-    "prefs_reversed", "prefs_older_fails_late", "prefs_older_fails_first", "prefs_newest_fails",
-    "prefs_reading_asked_before",
+    # 0.8.0: the widget saves no display choice (its five prefs cases retired
+    # with the settings panel); the prefs route's ordering stays tested above.
+    "choices_survive_readings",
     "focus_after_refresh", "focus_after_poll", "focus_failure", "focus_moved_on",
     "focus_left_frame", "focus_never_on_refresh",
+    "select_clear_from_bar", "select_escape_from_card", "select_clear_from_row",
+    "select_opener_folded", "select_opener_gone_after_reading",
 ])
 def test_widget_order_and_focus(widget_view, case):
     node = _node()
@@ -448,10 +493,122 @@ def test_real_chrome_keyboard_refresh_keeps_focus(widget_view):
             page.focus('[data-focus="refresh"]')
             page.keyboard.press("Enter")
             page.wait_for_function("window.__pending.length === 1")
-            page.focus('[data-focus="settings"]')
+            page.focus('[data-focus="about"]')
             page.evaluate("window.__answer(true)")
             page.wait_for_selector('[data-focus="refresh"]:not([disabled])')
             moved = page.evaluate(FOCUS_STATE)
-            assert (moved["key"], moved["connected"]) == ("settings", True), moved
+            assert (moved["key"], moved["connected"]) == ("about", True), moved
+        finally:
+            browser.close()
+
+
+# ---------------------------------------------------------------------------
+# In a real browser: Clear and Escape give the keyboard back to the bar or row
+# that selected the account, or — that one gone since — to the account list.
+
+REAL_SELECT_STUB = r"""
+(view) => {
+  window.__view = view;
+  window.fetch = (url, options = {}) => {
+    const post = ((options && options.method) || 'GET') !== 'GET';
+    const body = post ? { ok: true, quota_updates: [] } : window.__view;
+    return Promise.resolve({ ok: true, status: 200, text: async () => JSON.stringify(body) });
+  };
+}
+"""
+
+SELECT_STATE = """() => {
+  const a = document.activeElement;
+  return { key: a && a.getAttribute ? a.getAttribute('data-focus') : null, body: a === document.body,
+           connected: !!(a && a.isConnected), card: !!document.querySelector('.inspector') };
+}"""
+
+
+def _launch_engine(playwright, engine):
+    if engine == "chromium":
+        return _launch(playwright)
+    try:
+        return playwright.webkit.launch()
+    except Exception as exc:  # no WebKit build for this Playwright here
+        pytest.skip(f"no WebKit build for Playwright on this machine ({type(exc).__name__})")
+
+
+@pytest.mark.parametrize("engine", ["chromium", "webkit"])
+def test_real_browser_clear_and_escape_give_the_keyboard_back(widget_view, engine):
+    sync_api = pytest.importorskip("playwright.sync_api")
+    only = next(g for g in widget_view["reserve"]["summary"]["groups"] if len(g.get("bars") or []) == 1)
+    assert only["bars"][0]["account"] == "codex:c1"
+    bar_key = "bar:" + only["key"] + ":codex:c1"
+    bar = '[data-focus="%s"]' % bar_key
+    gone = json.loads(json.dumps(widget_view))
+    for g in gone["reserve"]["summary"]["groups"]:
+        if g["key"] == only["key"]:
+            g["bars"] = [b for b in g["bars"] if b.get("account") != "codex:c1"]
+    with sync_api.sync_playwright() as playwright:
+        browser = _launch_engine(playwright, engine)
+        try:
+            page = browser.new_page()
+            page.set_content('<!doctype html><html><head></head><body><div id="root"></div></body></html>')
+            page.evaluate(REAL_SELECT_STUB, widget_view)
+            page.add_script_tag(content=WIDGET.read_text(encoding="utf-8"))
+            page.wait_for_selector('[data-focus="refresh"]:not([disabled])')
+
+            def selected():
+                state = page.evaluate(SELECT_STATE)
+                assert state["card"] is True, state
+                return state
+
+            def back(want):
+                state = page.evaluate(SELECT_STATE)
+                assert (state["card"], state["key"], state["connected"]) == (False, want, True), state
+
+            # The keyboard: a bar selects, Clear (Enter) gives the bar back.
+            page.focus(bar)
+            page.keyboard.press("Enter")
+            assert selected()["key"] == bar_key
+            page.focus('[data-focus="inspector-clear"]')
+            page.keyboard.press("Enter")
+            back(bar_key)
+            # Escape from inside the card, Diagnostics open.
+            page.keyboard.press("Enter")
+            page.focus('[data-focus="inspector-diag"]')
+            page.keyboard.press("Enter")
+            assert selected()["key"] == "inspector-diag"
+            page.keyboard.press("Escape")
+            back(bar_key)
+            # The pointer: a click on the bar, a click on Clear.
+            page.click(bar)
+            selected()
+            page.click('[data-focus="inspector-clear"]')
+            back(bar_key)
+            # A row of the account list; then that row folded away.
+            page.click('[data-focus="accounts"]')
+            page.focus('[data-focus="acct:codex:c2"]')
+            page.keyboard.press("Enter")
+            selected()
+            page.focus('[data-focus="inspector-clear"]')
+            page.keyboard.press("Enter")
+            back("acct:codex:c2")
+            page.keyboard.press("Enter")
+            page.focus('[data-focus="accounts"]')
+            page.keyboard.press("Enter")
+            assert page.query_selector('[data-focus="acct:codex:c2"]') is None
+            selected()
+            page.focus('[data-focus="inspector-clear"]')
+            page.keyboard.press("Enter")
+            back("accounts")
+            # The opening bar gone with the next reading (Refresh reads it).
+            page.focus(bar)
+            page.keyboard.press("Enter")
+            selected()
+            page.evaluate("(view) => { window.__view = view; }", gone)
+            page.evaluate("document.querySelector('[data-focus=\"refresh\"]').click()")
+            page.wait_for_function(
+                "(sel) => !document.querySelector(sel)"
+                " && !document.querySelector('[data-focus=\"refresh\"]').disabled", arg=bar)
+            selected()
+            page.focus('[data-focus="inspector-clear"]')
+            page.keyboard.press("Escape")
+            back("accounts")
         finally:
             browser.close()

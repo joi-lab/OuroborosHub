@@ -13,7 +13,7 @@ from pathlib import Path
 import plugin
 import quota_history
 import test_quotas
-from test_reserve import _node
+from test_reserve import _node, widget_reserve
 from test_last_known import _healthy
 
 NODE_ROBUST = r"""
@@ -207,6 +207,52 @@ const refreshBtn = (env) => byFocus(env.root, 'refresh');
   assert.equal(env.requests.filter((r) => r.method === 'POST').length, 1);
   assert.equal(env.requests.at(-1).method, 'GET', 'passive retry is the ordinary poll');
 
+  // 8b. 0.8.0: a Refresh that ran is followed by one read of the whole
+  // projection, inside the same in-flight lifecycle (no poll and no second
+  // Refresh meanwhile). When that read fails, the coherent screen stays —
+  // kept, dated — and the banner says the refresh ran but its result could
+  // not be read; when it hangs, the read's own bound ends it. The POST is
+  // never sent again and nothing from its answer is merged in.
+  env = bootControlled();
+  await settle();
+  env.requests[0].resolve(answer(fx.good));
+  await settle();
+  for (const ending of ['fails', 'hangs']) {
+    refreshBtn(env).listeners.click[0]();
+    await settle();
+    const ran = env.requests.at(-1);
+    assert.equal(ran.method, 'POST');
+    ran.resolve(answer({ ok: true, quota_updates: [{ harness: 'codex', subject_id: 'c1',
+      quota: { state: 'ok', label: '77% used', constraints: [] } }], refreshed_at: new Date().toISOString() }));
+    await settle();
+    const after = env.requests.at(-1);
+    assert.equal(after.method, 'GET');
+    assert.doesNotMatch(after.url, /reuse=1/, 'a new status read, not a reused one');
+    assert.equal(after.init.timeoutMs, 60000);
+    assert.ok(refreshBtn(env).disabled, 'still in flight while the read after the refresh runs');
+    const asked = env.requests.length;
+    env.poll();
+    refreshBtn(env).listeners.click[0]();
+    await settle();
+    assert.equal(env.requests.length, asked, 'no poll and no second refresh meanwhile');
+    if (ending === 'fails') after.resolve(answer('bad gateway', 502));
+    else env.fireTimers(65000);
+    await settle();
+    assert.ok(!refreshBtn(env).disabled);
+    assert.match(env.root.textContent, /Live refresh ran at \d\d:\d\d, but the reading after it could not be read/);
+    assert.match(env.root.textContent, ending === 'fails' ? /Reading could not be refreshed \(HTTP 502\)/
+      : /Reading could not be refreshed \(no answer within 60 s\)/);
+    assert.match(env.root.textContent, /Reserve · Codex/, 'the coherent screen stays');
+    assert.doesNotMatch(env.root.textContent, /77% used/, 'nothing from the POST answer is merged in');
+  }
+  assert.equal(env.requests.filter((r) => r.method === 'POST').length, 2);
+  // The next ordinary read is drawn as it is, and the note goes with it.
+  env.poll();
+  await settle();
+  env.requests.at(-1).resolve(answer(fx.good));
+  await settle();
+  assert.doesNotMatch(env.root.textContent, /could not be refreshed|Live refresh ran/);
+
   // 9. Disposed in flight: the late answer draws nothing and throws nothing.
   env = bootControlled();
   await settle();
@@ -236,15 +282,14 @@ def test_real_widget_ends_every_read_and_refresh(tmp_path, monkeypatch):
             c["resets_at"] = plugin.qs.iso(now + 86400)
     store = quota_history.HistoryStore(tmp_path)
     good = plugin.build_view(good_payload, "", now)
-    good["reserve"] = plugin.reserve_view(store, good_payload, now, now, harness="codex",
-                                          chart=False, name_accounts=True)
+    good["reserve"] = widget_reserve(store, good_payload, now, now, harness="codex", name_accounts=True)
     latest = plugin.LatestRead()
     latest.put(good_payload, "", now - 60)
     effective, cached = latest.effective(None)
     down = plugin.build_view(effective, "HTTP 503 from /api/claudexor/status", now,
                              reads=plugin.facet_states(None), cached=cached)
-    down["reserve"] = plugin.reserve_view(store, effective, None, now, harness="codex", chart=False,
-                                          cached=cached, reads=plugin.facet_states(None), name_accounts=True)
+    down["reserve"] = widget_reserve(store, effective, None, now, harness="codex",
+                                     cached=cached, reads=plugin.facet_states(None), name_accounts=True)
     assert good["complete"] is True and down["complete"] is False
     widget_path = Path(__file__).with_name("widget.js").resolve()
     harness = test_quotas.NODE_WIDGET_MATRIX.split("(async () => {")[0]

@@ -786,6 +786,227 @@ def test_chart_steps_only_at_reported_resets_and_matches_the_research_example():
     assert line_at(pace, NOW + 7 * 3600) == pytest.approx(0.0 + 0.36 + 0.73, abs=1e-6)
 
 
+# ---------------------------------------------------------------------------
+# 0.8.0: the futures the widget draws — every account read now, the row's
+# own figure, to the horizon — and the reset schedule they are made of
+
+
+def _schedule(sc):
+    return [(round((e["at"] - NOW) / 3600, 3), e["accounts"], e["adds"], e["total_after"]) for e in sc["schedule"]]
+
+
+def test_both_scenarios_start_at_the_figure_and_reach_the_horizon():
+    for horizon in ("24h", "7d"):
+        chart = qs.build_chart(forecast_state(), horizon=horizon)
+        for name, paced in (("no_new_use", 0), ("recent_pace", 3)):
+            sc = chart["scenarios"][name]
+            assert sc["line"][0] == [round(NOW), 1.5] == [chart["now"], chart["current_windows"]]
+            assert sc["line"][-1][0] == chart["end"]
+            assert (sc["accounts"], sc["at_pace"], sc["held"]) == (3, paced, 3 - paced)
+
+
+def test_what_a_reset_gives_back_depends_on_the_scenario():
+    """The research example: x 80% used resets in 8 h, y 50% in 24 h, z 20%
+    in 72 h, at 4, 2 and 1 percentage points an hour. With no new use a reset
+    gives back what is used now; at the recent pace, what has been used by
+    then — the same functions the lines are drawn from."""
+    chart = qs.build_chart(forecast_state(), horizon="24h")
+    assert _schedule(chart["scenarios"]["no_new_use"]) == [(8.0, 1, 0.8, 2.3), (24.0, 1, 0.5, 2.8)]
+    assert _schedule(chart["scenarios"]["recent_pace"]) == [(8.0, 1, 1.0, 2.06), (24.0, 1, 0.98, 1.92)]
+    # Past the horizon: when, and for how many accounts — never how much.
+    later = chart["scenarios"]["no_new_use"]["later"]
+    assert (later["at"], later["accounts"], later["more_events"]) == (round(NOW + 72 * 3600), 1, 0)
+    week = qs.build_chart(forecast_state(), horizon="7d")
+    assert _schedule(week["scenarios"]["no_new_use"])[-1] == (72.0, 1, 0.2, 3.0)
+    assert _schedule(week["scenarios"]["recent_pace"])[-1] == (72.0, 1, 0.92, 1.04)
+    assert week["scenarios"]["recent_pace"]["later"] is None
+    # x runs out at 5 h, before its reset; after their refills x and y run
+    # out again inside the week (z does not: 72 h + 100 h is past it).
+    runs = [(round((r["at"] - NOW) / 3600, 3), r["after_refill"]) for r in week["scenarios"]["recent_pace"]["runs_out"]]
+    assert runs == [(5.0, False), (33.0, True), (74.0, True)]
+    assert chart["scenarios"]["no_new_use"]["runs_out"] == []
+    # The summary's next reset gives back what the "no new use" schedule's
+    # first event does; the tool's next_reset itself is unchanged.
+    data = payload([snap("codex", sid, [constraint("primary", used, reset=hours * 3600)])
+                    for sid, used, hours in (("x", .8, 8), ("y", .5, 24), ("z", .2, 72))],
+                   [profile("codex", sid) for sid in "xyz"])
+    summary, _ = summary_of(data)
+    g = summary["groups"][0]
+    assert g["next_reset_returns"] == 0.8
+    assert g["next_reset"] == {"at": at(8 * 3600), "accounts": 1}
+
+
+def test_a_reset_exactly_at_the_horizon_is_drawn_with_its_refill():
+    """y resets exactly at the 24-hour horizon. Its refill is in the schedule,
+    so the line shows it too — the left value and then the right one at the
+    horizon's instant — and the checkpoint there agrees. (The older
+    no_new_use line kept only the value before it, as before.)"""
+    chart = qs.build_chart(forecast_state(), horizon="24h")
+    end = chart["end"]
+    for name, before, after in (("no_new_use", 2.3, 2.8), ("recent_pace", 0.94, 1.92)):
+        sc = chart["scenarios"][name]
+        assert sc["line"][-2:] == [[end, before], [end, after]], name
+        assert sc["checkpoints"][-1] == {"after_seconds": 86400, "at": end, "value": after}, name
+        assert sc["schedule"][-1]["total_after"] == after, name
+    assert chart["no_new_use"][-1] == [end, 2.3]
+    assert [r["at"] for r in chart["resets"]] == [round(NOW + 8 * 3600), end]
+
+
+def test_resets_reported_within_two_minutes_are_one_event_with_its_span():
+    state = scenario_state([("a", 0.4, 3600, 0.1), ("c", 0.9, 3660, 0.2), ("b", 0.0, None, 0.0)])
+    chart = qs.build_chart(state, horizon="24h")
+    for name in ("no_new_use", "recent_pace"):
+        sc = chart["scenarios"][name]
+        assert len(sc["schedule"]) == 1, name
+        event = sc["schedule"][0]
+        assert (event["at"], event["last"], event["accounts"]) == (round(NOW + 3600), round(NOW + 3660), 2)
+        # The total is the one after the last of them, as the table says.
+        row = next(r for r in chart["table"] if r.get("event", "").startswith("reported reset"))
+        assert row["until"] == qs.iso(NOW + 3660)
+        assert row["scenario_" + name] == round(event["total_after"], 2), name
+    # With no use both refill fully; at the pace c has run out (0.1 left at
+    # 0.2 an hour) and a used 0.1 more by then: a different amount back.
+    assert chart["scenarios"]["no_new_use"]["schedule"][0]["adds"] == pytest.approx(0.4 + 0.9)
+    assert chart["scenarios"]["recent_pace"]["schedule"][0]["adds"] == pytest.approx(0.5 + 1.0)
+    assert chart["reset_events"] == [{"at": round(NOW + 3600), "last": round(NOW + 3660), "accounts": 2}]
+
+
+def test_a_reset_cluster_straddling_the_horizon_is_split_at_it():
+    """Two half-full accounts report resets a minute either side of the
+    24-hour horizon — within RESET_TOLERANCE_SEC, so one event if nothing cut
+    it. Split at the horizon first: the schedule, the marks and the table
+    count only the refill inside the span, so the total after it is the 1.5
+    the line ends at, never 2; the other is only ``later``, when and for
+    how many."""
+    state = scenario_state([("a", 0.5, 86400 - 60, 0.0), ("b", 0.5, 86400 + 60, 0.0)], window=WEEK)
+    chart = qs.build_chart(state, horizon="24h")
+    inside, past = round(NOW + 86400 - 60), round(NOW + 86400 + 60)
+    for name in ("no_new_use", "recent_pace"):
+        sc = chart["scenarios"][name]
+        assert [(e["at"], e["last"], e["accounts"], e["adds"], e["total_after"]) for e in sc["schedule"]] \
+            == [(inside, inside, 1, 0.5, 1.5)], name
+        assert sc["line"][-1] == [chart["end"], 1.5], name
+        assert sc["checkpoints"][-1]["value"] == 1.5, name
+        assert sc["later"] == {"at": past, "accounts": 1, "more_events": 0, "more_accounts": 0}, name
+    assert chart["resets"] == [{"at": inside, "accounts": 1}]
+    assert chart["reset_events"] == [{"at": inside, "last": inside, "accounts": 1}]
+    row = next(r for r in chart["table"] if r.get("event", "").startswith("reported reset"))
+    assert row["event"] == "reported reset · 1 account" and "until" not in row
+    assert row["scenario_no_new_use"] == row["scenario_recent_pace"] == 1.5
+    assert all(qs.parse_instant(r["at"]) <= chart["end"] for r in chart["table"])
+    # On the week span both are inside: one event, as before.
+    week = qs.build_chart(state, horizon="7d")
+    hold = week["scenarios"]["no_new_use"]
+    assert [(e["at"], e["last"], e["accounts"], e["total_after"]) for e in hold["schedule"]] \
+        == [(inside, past, 2, 2.0)]
+    assert hold["later"] is None
+
+
+def test_the_shown_assumptions_are_the_drawn_scenarios_and_the_legacy_ones_are_apart():
+    """The notes the widget shows describe what it draws: the recent-pace
+    future runs every account read now to the horizon. The older cohort line's
+    wording (stopping at the first reset) and the refill scenario's are kept
+    only under ``legacy_assumptions``, by field."""
+    chart = qs.build_chart(forecast_state(), horizon="24h")
+    shown = " ".join(chart["assumptions"])
+    assert "Recent pace: every account read now" in shown
+    assert "stops at the first reported reset" not in shown
+    assert "Refill scenario" not in shown and "(mixed)" not in shown
+    legacy = chart["legacy_assumptions"]
+    assert set(legacy) == {"recent_pace", "recent_pace_refill_scenario"}
+    assert "stops at the first reported reset" in legacy["recent_pace"]
+    assert all(field in chart for field in legacy)
+
+
+def test_an_account_with_no_reported_reset_is_never_refilled():
+    state = scenario_state([("a", 0.3, None, 0.05), ("b", 0.0, None, 0.0)])
+    for horizon in ("24h", "7d"):
+        chart = qs.build_chart(state, horizon=horizon)
+        hold, pace = chart["scenarios"]["no_new_use"], chart["scenarios"]["recent_pace"]
+        assert hold["schedule"] == pace["schedule"] == [] and hold["later"] is None
+        assert hold["no_reset"] == pace["no_reset"] == 2
+        assert {v for _t, v in hold["line"]} == {1.7}
+        # 0.7 left at 5%/h runs out after 14 hours and stays out: no refill.
+        assert pace["runs_out"] == [{"at": round(NOW + 14 * 3600), "reset_reported": False, "after_refill": False}]
+        assert pace["line"][-1] == [chart["end"], 1.0]
+        assert pace["zero_growth"] == 1
+
+
+def test_accounts_with_no_qualified_pace_are_held_in_the_pace_scenario():
+    state = scenario_state([("a", 0.4, 3600, 0.1), ("b", 0.6, 7200, 0.3)])
+    member = next(m for m in state.groups[0].members if m.subject_id == "b")
+    member.rate = {"state": "warming_up", "reason": "short_span"}
+    chart = qs.build_chart(state, horizon="24h")
+    pace = chart["scenarios"]["recent_pace"]
+    assert (pace["accounts"], pace["at_pace"], pace["held"]) == (2, 1, 1)
+    # b is held at 0.4 and refills at its reset (+0.6); a burns 0.1 by its reset.
+    assert _schedule(pace) == [(1.0, 1, 0.5, 1.4), (2.0, 1, 0.6, 1.9)]
+    # With no account at pace the scenario is the same as no new use.
+    member_a = next(m for m in state.groups[0].members if m.subject_id == "a")
+    member_a.rate = {"state": "insufficient", "reason": "gap"}
+    chart = qs.build_chart(state, horizon="24h")
+    assert chart["scenarios"]["recent_pace"]["at_pace"] == 0
+    assert chart["scenarios"]["recent_pace"]["line"] == chart["scenarios"]["no_new_use"]["line"]
+
+
+def test_restricted_accounts_stay_in_the_scenarios():
+    """Measured quota is not a dispatch verdict: a cooling account's share is
+    in the row's figure, so it is in both futures too."""
+    cooling = constraint("cooldown", None, window=None, cooldown=at(900))
+    data = payload([snap("codex", "a", [constraint("primary", 0.2, reset=3600), cooling]),
+                    snap("codex", "b", [constraint("primary", 0.6, reset=7200)])],
+                   [profile("codex", sid) for sid in "ab"], harnesses=("codex",))
+    state = qs.compute(data, qs.HistoryView(state="empty"), NOW)
+    summary = qs.build_summary(data, state.view, NOW, state=state)
+    assert summary["groups"][0]["restrictions"]["cooling"]["accounts"] == 1
+    chart = qs.build_chart(state, horizon="24h")
+    for sc in chart["scenarios"].values():
+        assert sc["accounts"] == 2
+        assert sc["line"][0][1] == summary["groups"][0]["measured"]["windows"] == 1.2
+
+
+def test_with_no_current_reading_no_future_is_drawn(tmp_path):
+    store = quota_history.HistoryStore(tmp_path)
+    timelines = {"a": [(-3000, 0.10, 2 * 86400)], "b": [(-3000, 0.50, 2 * 86400)]}
+    sweep(store, timelines, -3000, -600)
+    data = host_at(NOW, timelines)
+    for row in data["quota"]:
+        row["freshness"] = "stale"
+    chart = plugin.reserve_view(store, data, NOW, NOW)["chart"]
+    assert chart["scenarios"] is None and chart["current_windows"] is None
+    assert chart["past_basis"] == "last_known" and chart["past"][-1][1] is None
+    assert [v for _t, v in chart["past"][:-1] if v is not None]          # the dated record stays
+
+
+def test_a_moving_reported_reset_is_read_as_reported_now(tmp_path):
+    """A rolling window reports a later reset at each reading. The schedule
+    is the reset reported now: the earlier time is not promised."""
+    store = quota_history.HistoryStore(tmp_path)
+    sweep(store, {"a": [(-3000, 0.30, 3 * 3600)]}, -3000, -1500)
+    now_data = host_at(NOW, {"a": [(-60, 0.32, 5 * 3600)]})
+    chart = plugin.reserve_view(store, now_data, NOW, NOW)["chart"]
+    for sc in chart["scenarios"].values():
+        assert [e["at"] for e in sc["schedule"]] == [round(NOW + 5 * 3600)]
+    assert "Reset times are as reported now and may move" in " ".join(chart["assumptions"])
+
+
+def test_the_tool_answer_is_unchanged_by_the_widget_futures():
+    """The tool's fields stay what they were for the same state: the
+    scenarios and next_reset_returns are the widget's, additive, and never
+    in the compact answer."""
+    data = payload([snap("codex", sid, [constraint("primary", used, reset=hours * 3600)])
+                    for sid, used, hours in (("x", .8, 8), ("y", .5, 24))],
+                   [profile("codex", sid) for sid in "xy"])
+    summary, _ = summary_of(data)
+    row = qs.compact(summary)["groups"][0]
+    assert set(row) == {"key", "family", "limit", "duration", "remaining_windows", "of_accounts",
+                        "average_remaining_pct", "accounts_at_limit", "unrestricted_windows", "coverage",
+                        "newest_observed_at", "oldest_observed_at", "next_reset", "pace_to_reset",
+                        "recent_pace", "tightest_in_family", "accounts_known_to_apply", "headline"}
+    assert row["next_reset"] == {"at": at(8 * 3600), "accounts": 1}
+    assert "scenario" not in json.dumps(qs.compact(summary)) and "returns" not in json.dumps(qs.compact(summary))
+
+
 def test_chart_table_and_bounds():
     chart = qs.build_chart(forecast_state(), horizon="7d")
     assert chart["horizon"] == "7d" and chart["end"] - chart["now"] == 7 * 86400
@@ -1160,7 +1381,15 @@ def test_collector_records_failures_as_gaps_and_reuses_a_recent_route_read(tmp_p
     def sweeps():
         if not store.path.exists():
             return 0
-        return sqlite3.connect(store.path).execute("SELECT count(*) FROM sweep").fetchone()[0]
+        # SQLite creates the file before the collector commits its schema.
+        # File existence alone is not a completed first sweep.
+        conn = sqlite3.connect(store.path)
+        try:
+            if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='sweep'").fetchone():
+                return 0
+            return conn.execute("SELECT count(*) FROM sweep").fetchone()[0]
+        finally:
+            conn.close()
 
     loop, task = run_collector(factory, lambda: sweeps() >= 2)
     try:
@@ -1278,6 +1507,20 @@ def _node():
     return next((Path(item) for item in candidates if item and Path(item).is_file()), None)
 
 
+def widget_reserve(store, data, read_at, now, **kw):
+    """The reserve as the widget's first read gets it (0.8.0): the timeline is
+    open on every mount, so the answer carries the chart of the family's
+    default limit over that limit's own span — a week for a limit longer than
+    a day, as the widget asks — and the widget asks for nothing more."""
+    out = plugin.reserve_view(store, data, read_at, now, horizon="24h", **kw)
+    chart = out.get("chart")
+    if chart:
+        default = next((g for g in out["summary"]["groups"] if g["key"] == chart["group_key"]), None)
+        if default and (default["window_seconds"] or 0) > 86400:
+            out = plugin.reserve_view(store, data, read_at, now, horizon="7d", **kw)
+    return out
+
+
 NODE_RESERVE_MATRIX = r"""
 function click(env, key) {
   const node = byFocus(env.root, key);
@@ -1285,10 +1528,11 @@ function click(env, key) {
   node.listeners.click[0]({ stopPropagation() {} });
 }
 const hasSvg = (root) => walk(root).some((n) => n.getAttribute('class') === 'chart-svg');
-// 0.7.0: a limit is one .lrow; its details button is data-focus "reserve:<key>"
-// and carries the whole spoken summary; the name button is "limit:<key>".
-const rowOf = (env, key) => byFocus(env.root, 'reserve:' + key).parentNode;
+// 0.8.0: a limit is one .lrow; its name button (data-focus "limit:<key>")
+// carries the whole spoken summary and shows the limit in the timeline.
+const rowOf = (env, key) => byFocus(env.root, 'limit:' + key).parentNode;
 const has = (c, name) => String(c.className).split(/\s+/).includes(name);
+const paths = (env) => walk(env.root).filter((n) => n.tagName === 'PATH').map((n) => n.getAttribute('class'));
 
 (async () => {
   const fixture = JSON.parse(process.env.RESERVE_FIXTURE);
@@ -1297,19 +1541,19 @@ const has = (c, name) => String(c.className).split(/\s+/).includes(name);
   const tight = groups.find((x) => x.tightest);
   const other = groups.find((x) => x.key !== tight.key);
   assert.ok(tight && other, 'fixture has a tightest limit and another one');
-  assert.equal(fixture.view.reserve.chart.group_key, tight.key, 'the skill charts the tightest limit by default');
+  const chart = fixture.view.reserve.chart;
+  assert.equal(chart.group_key, tight.key, 'the skill charts the tightest limit by default');
 
   // 1. The first screen: every limit as one row with the skill's own figures,
-  // the tightest marked, the chart folded and not even asked for.
-  const noChart = JSON.parse(JSON.stringify(fixture.view));
-  delete noChart.reserve.chart;
-  let env = await boot(noChart);
+  // the tightest marked and in the timeline, which is open and drawn from the
+  // first answer — nothing more is asked.
+  let env = await boot(fixture.view);
   let text = env.root.textContent;
   assert.match(text, /Reserve · Codex/);
   groups.forEach((g) => {
-    // The figure is the skill's own current windows alone, of the accounts
-    // it applies to; last-known windows are said under it, never added in.
-    const row = byFocus(env.root, 'reserve:' + g.key).parentNode;
+    // The figure is the skill's own current windows alone, of the accounts it
+    // applies to; last-known windows are said under it, never added in.
+    const row = rowOf(env, g.key);
     assert.equal(classes(row, 'l-fig')[0].textContent,
                  (g.measured.accounts ? g.measured.windows.toFixed(2) : '—') + ' of ' + g.slots);
     if (g.last_known && g.last_known.accounts) {
@@ -1321,18 +1565,20 @@ const has = (c, name) => String(c.className).split(/\s+/).includes(name);
   assert.match(stamp.title, /provider readings observed \d\d:\d\d/);
   assert.match(stamp.title, /status read \d\d:\d\d/);
   assert.match(stamp.title, /times in /);
-  assert.ok(!hasSvg(env.root), 'the chart is folded by default');
-  const toggle = byFocus(env.root, 'chart-toggle');
-  assert.equal(toggle.getAttribute('aria-expanded'), 'false');
-  assert.match(toggle.textContent, /Show chart/);
-  assert.equal(env.calls.length, 1);
+  assert.ok(hasSvg(env.root), 'the timeline is open on every mount');
+  assert.equal(byFocus(env.root, 'chart-toggle').getAttribute('aria-expanded'), 'true');
+  assert.equal(env.calls.length, 1, env.calls.map((c) => c.url).join());
   assert.ok(env.calls[0].url.startsWith(PREFIX + 'quotas?'));
-  assert.match(env.calls[0].url, /chart=0/);
-  assert.doesNotMatch(env.calls[0].url, /reuse=1|group=|horizon=/);
-  // The tightest row wears the mark, in words too.
-  const tightRow = byFocus(env.root, 'reserve:' + tight.key);
+  assert.doesNotMatch(env.calls[0].url, /chart=0|reuse=1/);
+  // The tightest row wears the mark, in words too, and is the one in the timeline.
+  const tightName = byFocus(env.root, 'limit:' + tight.key);
   assert.equal(classes(rowOf(env, tight.key), 'rs-tight').length, 1);
-  assert.match(tightRow.getAttribute('aria-label'), /lowest average share left in this family/);
+  assert.match(tightName.getAttribute('aria-label'), /lowest average share left in this family/);
+  assert.equal(tightName.getAttribute('aria-pressed'), 'true');
+  assert.ok(has(rowOf(env, tight.key), 'sel'));
+  // The timeline stands right under the selected limit's row.
+  const after = rowOf(env, tight.key).parentNode.childNodes;
+  assert.ok(has(after[after.indexOf(rowOf(env, tight.key)) + 1], 'tl-block'));
   assert.equal(classes(rowOf(env, other.key), 'rs-tight').length, 0);
   // One bar per account the limit applies to, as the skill sends them:
   // restricted ones marked, unknown ones outlined; the row says it in words.
@@ -1342,38 +1588,107 @@ const has = (c, name) => String(c.className).split(/\s+/).includes(name);
   assert.equal(cells.filter((c) => has(c, 'last')).length, tight.bars.filter((b) => b.state === 'last_known').length);
   assert.equal(cells.filter((c) => has(c, 'restricted')).length, tight.bars.filter((b) => b.restricted).length);
   assert.ok(cells.filter((c) => has(c, 'restricted')).length > 0);
-  assert.match(tightRow.getAttribute('aria-label'), /1 stale/);
-  assert.match(tightRow.getAttribute('aria-label'), /1 cooldown reported \(0\.86\)/);
+  assert.match(tightName.getAttribute('aria-label'), /1 stale/);
+  assert.match(tightName.getAttribute('aria-label'), /1 cooldown reported \(0\.86\)/);
   assert.match(text, /cooling down/);
-  // Details stay folded until the row is opened.
-  assert.doesNotMatch(text, /mixed plans|Recent pace|Even use/);
-  assert.equal(tightRow.getAttribute('aria-expanded'), 'false');
+  // The next reported reset stands in the row, with what it gives back.
+  assert.match(classes(rowOf(env, tight.key), 'l-tail')[0].textContent,
+               new RegExp('next reset .*\\+' + tight.next_reset_returns.toFixed(2) + ' if unused'));
 
-  // 2. Opening the chart asks once, with reuse, for the tightest limit.
-  click(env, 'chart-toggle');
-  assert.match(env.root.textContent, /Loading the chart for this limit/);
+  // 2. The timeline: the record behind now and one future ahead of it, from
+  // the row's own figure, with its reset schedule and checkpoints; no estimate
+  // cohort, no refill toggle, no point marks or hatching, no "no new use"
+  // line hidden away.
+  assert.ok(paths(env).includes('line-observed'));
+  assert.ok(paths(env).includes('line-scenario'));
+  assert.ok(!paths(env).some((c) => /line-pace|line-hold|line-cohort|line-refill|gap-band/.test(c)), paths(env).join());
+  assert.equal(walk(env.root).filter((n) => /point-mark|rail-line/.test(String(n.getAttribute('class') || ''))).length, 0);
+  text = env.root.textContent;
+  assert.match(text, /Each of the 2 current accounts keeps its share and is refilled once, at its next reported reset; no later reset is assumed/);
+  assert.match(text, /Reported resets · no new use/);
+  assert.match(text, /Left if nothing more is used: in 24 h ≈ /);
+  assert.match(text, /Details, notes and data/);
+  assert.match(text, /Recorded since /);
+  assert.match(text, /times in /);
+  const schedule = classes(env.root, 'schedule')[0];
+  const sc = chart.scenarios.no_new_use;
+  const rowsShown = Math.min(2, sc.schedule.length);
+  assert.equal(classes(schedule, 'n').filter((n) => n.tagName === 'TD').length, rowsShown * 3);
+  if (sc.schedule.length) {
+    assert.match(schedule.textContent, new RegExp('\\+' + sc.schedule[0].adds.toFixed(2) + sc.schedule[0].total_after.toFixed(2)
+      + ' of ' + chart.y_max));
+  }
+  // The legend names whose total each line is.
+  assert.match(classes(env.root, 'chart-legend')[0].textContent,
+               new RegExp('recorded · ' + chart.past_accounts + ' accounts?.*no new use · ' + chart.accounts + ' current'));
+
+  // The keyboard cursor and the spoken read-out say what the chart says, for
+  // the limit on screen: at now the recorded total is the row's figure here.
+  const plot = byFocus(env.root, 'chart-plot');
+  const readout = classes(env.root, 'chart-readout')[0];
+  plot.listeners.focus[0]();
+  const name = classes(rowOf(env, tight.key), 'l-name-text')[0].textContent;
+  assert.ok(readout.textContent.includes(name), readout.textContent);
+  assert.match(readout.textContent, new RegExp('recorded ' + tight.measured.windows.toFixed(2) + ' of '
+    + chart.past_accounts + ' accounts?\\b'));
+  assert.match(readout.textContent, new RegExp('no new use ' + tight.measured.windows.toFixed(2) + ' of '
+    + chart.accounts + ' current accounts?'));
+  const tipText = classes(env.root, 'chart-tip')[0].textContent;
+  assert.ok(tipText.includes(name + ' · account-windows left, scale ' + chart.y_max), tipText);
+  plot.listeners.keydown[0]({ key: 'End', preventDefault() {} });
+  assert.match(readout.textContent, /· scenario — .*no new use \d+\.\d\d of \d+ current accounts?/);
+  plot.listeners.keydown[0]({ key: 'Home', preventDefault() {} });
+  assert.match(readout.textContent, /recorded /);
+
+  // The future is a choice beside the chart: recent pace is the same chart's
+  // other scenario — drawn at once, nothing asked — with its own schedule.
+  click(env, 'scenario:recent_pace');
+  assert.equal(env.calls.length, 1);
+  assert.match(env.root.textContent, /Reported resets · recent pace/);
+  const pace = chart.scenarios.recent_pace;
+  assert.match(classes(env.root, 'chart-legend')[0].textContent,
+               new RegExp('recent pace · ' + pace.at_pace + ' of ' + pace.accounts + ' current'));
+  assert.match(env.root.textContent, new RegExp(pace.at_pace + ' of ' + pace.accounts + ' current at their pace of the last '));
+  click(env, 'scenario:no_new_use');
+
+  // Choosing another limit (its row's name) asks once, with reuse, for that
+  // limit's chart, and its timeline stands under its own row.
+  click(env, 'limit:' + other.key);
+  assert.match(env.root.textContent, /Loading the timeline for this limit/);
   await settle();
   assert.equal(env.calls.length, 2);
   assert.match(env.calls[1].url, /reuse=1/);
-  assert.match(env.calls[1].url, /horizon=24h/);
-  assert.doesNotMatch(env.calls[1].url, /chart=0/);
-  assert.match(env.calls[1].url, new RegExp('group=' + encodeURIComponent(tight.key).replace(/[|]/g, '\\|')));
-  // The fake host answers without a chart: the same question is not asked again.
+  assert.match(env.calls[1].url, new RegExp('group=' + encodeURIComponent(other.key).replace(/[|]/g, '\\|')));
   await settle();
-  assert.equal(env.calls.length, 2);
-  assert.equal(byFocus(env.root, 'chart-toggle').getAttribute('aria-expanded'), 'true');
-  // Closing it again: the next timed read leaves the chart out.
+  assert.equal(env.calls.length, 2, 'the fake host answers without it: not asked again');
+  click(env, 'limit:' + tight.key);
+  await settle();
+  click(env, 'horizon:24h');
+  await settle();
+  assert.match(env.calls.at(-1).url, /horizon=24h/);
+
+  // 3. Folding the timeline: the next timed read leaves the chart out (and
+  // the host answers without one); unfolding it asks once, with reuse.
+  const noChart = JSON.parse(JSON.stringify(fixture.view));
+  delete noChart.reserve.chart;
+  env = await boot((url) => (/chart=0/.test(url) ? noChart : fixture.view));
   click(env, 'chart-toggle');
+  assert.ok(!hasSvg(env.root));
+  assert.equal(byFocus(env.root, 'chart-toggle').getAttribute('aria-expanded'), 'false');
   env.interval()();
   await settle();
   assert.match(env.calls.at(-1).url, /chart=0/);
-  assert.ok(!hasSvg(env.root));
+  click(env, 'chart-toggle');
+  await settle();
+  assert.match(env.calls.at(-1).url, /reuse=1/);
+  assert.ok(hasSvg(env.root));
 
-  // 3. A row unfolds its details, and they survive the timed redraw, with
-  // the keyboard still on the row.
+  // 4. The limit's details, notes and data table sit under the timeline;
+  // open, they survive the timed redraw, with the keyboard on them. About
+  // carries the unit and the caveats, folded until asked.
   env = await boot(fixture.view);
-  click(env, 'reserve:' + tight.key);
-  text = env.root.textContent;
+  const details = classes(env.root, 'chart-table')[0];
+  text = details.textContent;
   assert.match(text, /mixed plans/);
   assert.match(text, /pro: 0\.86 account-windows across 1 account/);
   assert.match(text, /prolite: 0\.48 account-windows across 1 account/);
@@ -1382,119 +1697,55 @@ const has = (c, name) => String(c.className).split(/\s+/).includes(name);
   assert.match(text, /Recent pace: /);
   assert.match(text, /Even use/);
   assert.match(text, /to each account’s reported reset/);
-  byFocus(env.root, 'reserve:' + tight.key).focus();
-  env.interval()();
-  await settle();
-  assert.equal(byFocus(env.root, 'reserve:' + tight.key).getAttribute('aria-expanded'), 'true');
-  assert.match(env.root.textContent, /mixed plans/);
-  assert.equal(env.document.activeElement.getAttribute('data-focus'), 'reserve:' + tight.key);
-  // The how-to-read note carries the unit and the caveats, folded until asked.
-  assert.doesNotMatch(env.root.textContent, /not tokens or hours|Not tokens or hours/);
-  click(env, 'reserve-about');
-  assert.match(env.root.textContent, /Not tokens or hours/);
-  assert.match(env.root.textContent, /never added together/);
-  assert.match(env.root.textContent, /not a dispatch guarantee/);
-
-  // 4. With the chart on hand for the limit on screen, opening it asks nothing.
-  env = await boot(fixture.view);
-  click(env, 'chart-toggle');
-  await settle();
-  assert.equal(env.calls.length, 1);
-  assert.ok(hasSvg(env.root));
-  const paths = walk(env.root).filter((n) => n.tagName === 'PATH').map((n) => n.getAttribute('class'));
-  // 0.7.0: the observed record and the estimate; the flat no-new-use
-  // scenario is no longer drawn (it stays in the data table).
-  assert.ok(paths.includes('line-pace'));
-  assert.ok(paths.some((c) => /^line-observed/.test(c)));
-  assert.ok(!paths.includes('line-hold'));
-  text = env.root.textContent;
-  assert.match(text, /At the pace observed over the last .*, if it continued/);
-  assert.match(text, /Notes and data table/);
-  assert.match(text, /Recorded since /);
-  assert.match(text, /times in /);
-  assert.match(classes(env.root, 'chart-sub')[0].textContent, /left, in full accounts/);
-
-  // The keyboard cursor and the spoken read-out say what the chart says, for
-  // the limit on screen: at now the observed total is the row's figure.
-  const plot = byFocus(env.root, 'chart-plot');
-  const readout = classes(env.root, 'chart-readout')[0];
-  plot.listeners.focus[0]();
-  const name = classes(rowOf(env, tight.key), 'l-name-text')[0].textContent;
-  assert.ok(readout.textContent.includes(name), readout.textContent);
-  // Of the accounts the observed line sums (its record), not the current count.
-  assert.match(readout.textContent, new RegExp('observed ' + tight.measured.windows.toFixed(2) + ' of '
-    + fixture.view.reserve.chart.past_accounts + ' accounts?\\b'));
-  const tipText = classes(env.root, 'chart-tip')[0].textContent;
-  assert.match(tipText, new RegExp(tight.measured.windows.toFixed(2)));
-  const chart = fixture.view.reserve.chart;
-  assert.ok(tipText.includes(name + ' · account-windows left, scale ' + chart.y_max), tipText);
-  plot.listeners.keydown[0]({ key: 'End', preventDefault() {} });
-  assert.match(readout.textContent, /if the pace continues — .*estimate (not drawn|\d+\.\d\d of \d+ in the estimate)/);
-  plot.listeners.keydown[0]({ key: 'Home', preventDefault() {} });
-  assert.match(readout.textContent, /observed /);
-
-  // Choosing another limit asks once, with reuse, for that limit's chart.
-  click(env, 'limit:' + other.key);
-  assert.match(env.root.textContent, /Loading the chart for this limit/);
-  await settle();
-  assert.equal(env.calls.length, 2);
-  assert.match(env.calls[1].url, /reuse=1/);
-  assert.match(env.calls[1].url, new RegExp('group=' + encodeURIComponent(other.key).replace(/[|]/g, '\\|')));
-  await settle();
-  assert.equal(env.calls.length, 2);
-  // Horizon switch asks for the 7-day chart.
-  click(env, 'limit:' + tight.key);
-  await settle();
-  click(env, 'horizon:7d');
-  await settle();
-  assert.match(env.calls.at(-1).url, /horizon=7d/);
-
-  // 5. The chart, its data table and the keyboard on it survive the poll.
-  env = await boot(fixture.view);
-  click(env, 'chart-toggle');
-  const table = classes(env.root, 'chart-table')[0];
-  assert.ok(!table.open);
-  table.open = true;
-  table.listeners.toggle[0]();
+  assert.match(text, /Only each account’s next reported reset is applied/);
+  // The notes describe the futures drawn, never the older cohort line that
+  // stopped at the first reset (kept apart, by field, and not shown).
+  assert.match(text, /Recent pace: every account read now/);
+  assert.doesNotMatch(text, /stops at the first reported reset|Refill scenario|\(mixed\)/);
+  assert.ok(!details.open);
+  details.open = true;
+  details.listeners.toggle[0]();
   byFocus(env.root, 'chart-table').focus();
   const callsBefore = env.calls.length;
   env.interval()();
   await settle();
   assert.ok(env.calls.length > callsBefore, 'the poll read again');
-  assert.doesNotMatch(env.calls.at(-1).url, /chart=0/, 'an open chart is read with the poll');
-  assert.match(env.calls.at(-1).url, /horizon=24h/);
-  assert.ok(hasSvg(env.root), 'the chart stays open');
+  assert.doesNotMatch(env.calls.at(-1).url, /chart=0/, 'an open timeline is read with the poll');
+  assert.ok(hasSvg(env.root));
   const reopened = classes(env.root, 'chart-table')[0];
-  assert.notEqual(reopened, table);
+  assert.notEqual(reopened, details);
   assert.equal(reopened.open, true);
   assert.equal(env.document.activeElement.getAttribute('data-focus'), 'chart-table');
-  assert.equal(env.document.activeElement.parentNode, reopened);
   reopened.open = false;
   reopened.listeners.toggle[0]();
   env.interval()();
   await settle();
   assert.ok(!classes(env.root, 'chart-table')[0].open);
+  assert.doesNotMatch(env.root.textContent, /not tokens or hours|Not tokens or hours/);
+  click(env, 'about');
+  assert.match(env.root.textContent, /Not tokens or hours/);
+  assert.match(env.root.textContent, /never added together/);
+  assert.match(env.root.textContent, /not a dispatch guarantee/);
 
-  // 6. Warming up and an unavailable overview are said in words; account details stay.
+  // 5. Warming up and an unavailable overview are said in words; the account
+  // list stands open when there is no overview to fold it under.
   env = await boot(fixture.warming);
-  const warmTight = fixture.warming.reserve.summary.groups.find((x) => x.tightest);
-  click(env, 'reserve:' + warmTight.key);
-  assert.match(env.root.textContent, /warming up/);
-  assert.match(env.root.textContent, /at least 15 minutes.*trailing hour/);
-  click(env, 'chart-toggle');
-  assert.match(env.root.textContent, /estimate — not drawn/);
-  assert.match(env.root.textContent, /No estimate yet/);
+  assert.match(classes(env.root, 'chart-table')[0].textContent, /warming up/);
+  assert.match(classes(env.root, 'chart-table')[0].textContent, /at least 15 minutes.*trailing hour/);
+  click(env, 'scenario:recent_pace');
+  assert.match(env.root.textContent, /No account has a measured pace yet \(warming up: .*\): the same as no new use/);
   env = await boot(fixture.failed);
   assert.match(env.root.textContent, /Reserve overview unavailable/);
-  assert.match(env.root.textContent, /Account details below are unaffected/);
-  assert.ok(classes(env.root, 'account-plane').length === 1);
+  assert.match(env.root.textContent, /The account list below is unaffected/);
+  assert.equal(byFocus(env.root, 'accounts'), undefined);
+  assert.equal(classes(env.root, 'acc-row').length, 3);
 
-  // 7. Two limits with one label, "7 day (Fable)", scoped to different models
+  // 6. Two limits with one label, "7 day (Fable)", scoped to different models
   // stay two limits on screen, in words and in what a screen reader hears.
   env = await boot(fixture.scoped);
   const rows = classes(env.root, 'lrow');
   assert.equal(rows.length, 2);
-  const heard = rows.map((r) => classes(r, 'l-more')[0].getAttribute('aria-label'));
+  const heard = rows.map((r) => classes(r, 'l-name')[0].getAttribute('aria-label'));
   assert.match(heard[0], /models: fable-a, fable-b/);
   assert.match(heard[1], /models: fable-c, fable-d/);
   const names = rows.map((r) => classes(r, 'l-name-text')[0].textContent);
@@ -1502,21 +1753,30 @@ const has = (c, name) => String(c.className).split(/\s+/).includes(name);
   // Family accounts without a reading of the limit are said, not counted as zero.
   assert.match(env.root.textContent, /0\.70 of 1/);
   assert.match(heard[0], /2 other accounts: no reading, limit may not apply/);
-  classes(rows[0], 'l-more')[0].listeners.click[0]({ stopPropagation() {} });
-  assert.match(env.root.textContent, /models: fable-a, fable-b/);
-  assert.match(env.root.textContent, /2 other accounts: no reading, limit may not apply/);
-  click(env, 'chart-toggle');
   const scopedTight = fixture.scoped.reserve.summary.groups.find((x) => x.tightest);
-  assert.match(classes(env.root, 'chart-scope')[0].textContent,
-               new RegExp('models: ' + scopedTight.models.join(', ')));
-  // A gap in the record breaks the observed line: two pieces, not one, the
-  // piece before the gap runs up to it, and the gap is drawn as a band.
-  const observedLine = walk(env.root).find((n) => n.getAttribute('class') === 'line-observed');
+  assert.match(classes(env.root, 'tl-scope')[0].textContent, new RegExp('models: ' + scopedTight.models.join(', ')));
+  // A gap in the record breaks the recorded line: two pieces, not one, and
+  // the piece before the gap runs up to it. Nothing is drawn across it.
+  const observedLine = walk(env.root).find((n) => n.getAttribute('class') === 'line-observed' && n.tagName === 'PATH');
   const pieces = observedLine.getAttribute('d').split('M').filter(Boolean);
   assert.equal(pieces.length, 2);
   assert.match(pieces[0], /L/);
-  assert.ok(walk(env.root).some((n) => n.getAttribute('class') === 'gap-band'));
-  assert.match(env.root.textContent, /not recorded/);
+  assert.ok(!walk(env.root).some((n) => /gap-band/.test(String(n.getAttribute('class') || ''))));
+
+  // 7. The legend names a recorded line only where one is drawn: a value
+  // held over a stretch of time. A value alone at its instant, a gap at once
+  // after it, draws nothing — the legend says there is no record.
+  const lone = JSON.parse(JSON.stringify(fixture.view));
+  const lc = lone.reserve.chart;
+  const mid = lc.now - 600;
+  lc.past = [[lc.start, null], [mid, 1.2], [mid, null], [lc.now, null]];
+  env = await boot(lone);
+  assert.match(classes(env.root, 'chart-legend')[0].textContent, /no record in this span yet/);
+  assert.doesNotMatch(classes(env.root, 'chart-legend')[0].textContent, /recorded · /);
+  lc.past = [[lc.start, null], [mid, 1.2], [mid + 300, null], [lc.now, null]];
+  env = await boot(lone);
+  assert.match(classes(env.root, 'chart-legend')[0].textContent,
+               new RegExp('recorded · ' + lc.past_accounts + ' accounts?'));
 })().catch((error) => {
   console.error(error && error.stack ? error.stack : error);
   process.exitCode = 1;
@@ -1563,10 +1823,12 @@ def _widget_fixture(tmp_path):
     data["quota"][0]["constraints"].append({"id": "cooldown", "used_ratio": None, "window_seconds": None,
                                             "cooldown_until": qs.iso(now + 900)})
     view = plugin.build_view(data, "")
-    view["reserve"] = plugin.reserve_view(store, data, now, now, harness="codex")
+    # As the widget route answers its first read: account keys on the bars,
+    # and the chart of the default limit over its own span (widget_reserve).
+    view["reserve"] = widget_reserve(store, data, now, now, harness="codex", name_accounts=True)
     warming = plugin.build_view(data, "")
-    warming["reserve"] = plugin.reserve_view(quota_history.HistoryStore(tmp_path / "empty"), data, now, now,
-                                             harness="codex")
+    warming["reserve"] = widget_reserve(quota_history.HistoryStore(tmp_path / "empty"), data, now, now,
+                                        harness="codex", name_accounts=True)
     failed = plugin.build_view(data, "")
     failed["reserve"] = {"summary": None, "chart": None, "error": "reserve summary failed (ValueError)"}
     assert view["reserve"]["chart"]["recent_pace"], view["reserve"]["summary"]["groups"]
@@ -1595,7 +1857,7 @@ def _scoped_view(folder, now):
             plugin.persist_sweep(store, status(), "", t)
         t += 120
     view = plugin.build_view(status(), "")
-    view["reserve"] = plugin.reserve_view(store, status(), now, now, harness="codex")
+    view["reserve"] = widget_reserve(store, status(), now, now, harness="codex", name_accounts=True)
     groups = view["reserve"]["summary"]["groups"]
     assert [g["models"] for g in groups] == [["fable-a", "fable-b"], ["fable-c", "fable-d"]]
     assert groups[0]["coverage"]["other_family_accounts"] == 2
@@ -2353,7 +2615,7 @@ def _final_fixture(tmp_path, monkeypatch):
 
     data = _scripted_sweeps(store, script, list(range(-2400, 1, 120)), sids=("a", "b", "c"))
     chart_view = plugin.build_view(data, "", NOW)
-    chart_view["reserve"] = plugin.reserve_view(store, data, NOW, NOW, harness="codex")
+    chart_view["reserve"] = widget_reserve(store, data, NOW, NOW, harness="codex", name_accounts=True)
     points = chart_view["reserve"]["chart"]["points"]
     assert points == [[round(NOW - 2400), 2.1], [round(NOW - 1440), None], [round(NOW - 840), 2.02]], points
     return {"route": route, "chart": chart_view}
@@ -2370,139 +2632,107 @@ function only(route, sid) {
   view.groups.forEach((g) => { g.accounts = g.accounts.filter((a) => a.subject_id === sid); });
   return view;
 }
-const dotOf = (root) => classes(byFocus(root, 'account-btn'), 'state-dot')[0].className;
-// What the account itself says: its plane and its selector button (the
-// overview above speaks for the whole family, restrictions included).
-const accountSpoken = (root) => allSpoken(classes(root, 'account-plane')[0])
-  + ' ' + byFocus(root, 'account-btn').getAttribute('aria-label');
+// 0.8.0: what the account itself says — its card (the inspector), with its
+// windows under Diagnostics, and its row in the account list.
+const card = (root) => classes(root, 'inspector')[0];
+const dotOf = (root) => classes(card(root), 'state-dot')[0].className;
+const stateOf = (root, sid) => classes(byFocus(root, 'acct:claude:' + sid), 'acc-state')[0].textContent;
+async function opened(view, sid) {
+  const env = await boot(view);
+  click(env, 'accounts');
+  click(env, 'acct:claude:' + sid);
+  return env;
+}
 
 (async () => {
   const fx = JSON.parse(process.env.FINAL_FIXTURE);
 
-  // Finding 2: every account label, tone and bar reads the unrounded verdict
+  // Finding 2: every account word, tone and bar reads the unrounded verdict
   // the overview counts by. 99.6% is not the limit; 1.4, an ended cycle and
   // disagreeing sources are no current bar and no spent verdict.
-  let env = await boot(only(fx.route, 'near'));
-  let plane = classes(env.root, 'account-plane')[0];
-  // 0.6.3: the compact selector carries the share; windows unfold below.
-  assert.match(byFocus(env.root, 'account-btn').textContent, /99\.6% used/);
-  assert.equal(classes(plane, 'quota-tile').length, 0);
-  assert.doesNotMatch(accountSpoken(env.root), /Limit reached|100% used|\bspent\b/);
+  let env = await opened(only(fx.route, 'near'), 'near');
+  assert.doesNotMatch(allSpoken(card(env.root)), /Limit reached|100% used|\bspent\b/);
   assert.doesNotMatch(dotOf(env.root), /\bbad\b/);
-  assert.match(byFocus(env.root, 'account-btn').getAttribute('aria-label'), /99\.6% used/);
-  click(env, 'account-details');
-  assert.match(classes(env.root, 'quota-tile').map((t) => t.textContent).join(' '), /99\.6% used/);
+  assert.notEqual(stateOf(env.root, 'near'), 'limit reached');
+  assert.equal(classes(card(env.root), 'win-line').length, 0, 'windows wait under Diagnostics');
+  click(env, 'inspector-diag');
+  assert.match(classes(card(env.root), 'win-line').map((t) => t.textContent).join(' '), /99\.6% used/);
 
-  env = await boot(only(fx.route, 'full'));
-  assert.match(allSpoken(env.root), /Limit reached/);
-  assert.match(byFocus(env.root, 'account-btn').textContent, /100% used/);
+  env = await opened(only(fx.route, 'full'), 'full');
+  assert.match(allSpoken(card(env.root)), /Limit reached/);
+  assert.equal(stateOf(env.root, 'full'), 'limit reached');
   assert.match(dotOf(env.root), /\bbad\b/);
 
   const asides = { bad: /ratio outside 0–100%/, ended: /its reported reset has passed/, split: /its sources disagree/ };
   for (const sid of Object.keys(asides)) {
-    env = await boot(only(fx.route, sid));
-    plane = classes(env.root, 'account-plane')[0];
-    const brief = plane.textContent;
-    assert.match(byFocus(env.root, 'account-btn').textContent, /40% used/, sid);
+    env = await opened(only(fx.route, sid), sid);
+    const brief = card(env.root).textContent;
     assert.match(brief, asides[sid], sid);
     assert.match(brief, /not counted now/, sid);
-    assert.equal(classes(plane, 'acct-win').length, 0, sid + ': windows are behind Details');
-    assert.doesNotMatch(accountSpoken(env.root), /Limit reached|100% used|\bspent\b/, sid);
-    click(env, 'account-details');
-    const card = classes(env.root, 'account-plane')[0].textContent;
-    assert.match(card, /7 days?40% used|week40% used/, sid);
-    assert.match(card, new RegExp('Not current — ' + asides[sid].source), sid);
-    const staleTiles = classes(env.root, 'quota-tile').filter((t) => String(t.className).includes('stale'));
-    assert.ok(staleTiles.length >= 1, sid);
+    assert.doesNotMatch(allSpoken(card(env.root)), /Limit reached|100% used|\bspent\b/, sid);
+    assert.equal(stateOf(env.root, sid), 'ready', sid);
+    click(env, 'inspector-diag');
+    const text = card(env.root).textContent;
+    assert.match(text, /week40% used/, sid);
+    assert.match(text, new RegExp('Not current — ' + asides[sid].source), sid);
+    const staleLines = classes(card(env.root), 'win-line').filter((t) => /\bstale\b/.test(String(t.className)));
+    assert.ok(staleLines.length >= 1, sid);
     if (sid === 'bad') {
-      assert.match(staleTiles.map((t) => t.textContent).join(' '), /Unreadable ratio/);
       // No number, no share: no bar at all — an empty one would read as 0% left.
-      const unreadable = staleTiles.filter((t) => /Unreadable ratio/.test(t.textContent));
+      const unreadable = staleLines.filter((t) => /Unreadable ratio/.test(t.textContent));
       assert.ok(unreadable.length);
       unreadable.forEach((t) => assert.equal(classes(t, 'meter').length, 0));
     }
-    if (sid === 'ended') assert.match(staleTiles.map((t) => t.textContent).join(' '), /50% used/);
-    if (sid === 'split') assert.match(staleTiles.map((t) => t.textContent).join(' '), /20% used.*50% used|50% used.*20% used/);
+    if (sid === 'ended') assert.match(staleLines.map((t) => t.textContent).join(' '), /50% used/);
+    if (sid === 'split') assert.match(staleLines.map((t) => t.textContent).join(' '), /20% used.*50% used|50% used.*20% used/);
     assert.equal(walk(env.root).filter((n) => /\bmeter\b.*\bspent\b/.test(String(n.className))).length, 0, sid);
   }
 
   // A last-known reading at exactly 100% reads "100% used", muted, not a verdict.
-  env = await boot(only(fx.route, 'ok'));
-  click(env, 'account-details');
-  const lastKnown = classes(env.root, 'quota-last-known').map((b) => b.textContent).join(' ');
+  env = await opened(only(fx.route, 'ok'), 'ok');
+  click(env, 'inspector-diag');
+  const lastKnown = classes(card(env.root), 'quota-last-known').map((b) => b.textContent).join(' ');
   assert.match(lastKnown, /Last known · observed .*100% used/);
-  assert.doesNotMatch(allSpoken(classes(env.root, 'account-plane')[0]), /<100|Limit reached/);
+  assert.doesNotMatch(allSpoken(card(env.root)), /<100|Limit reached/);
 
   // The account list reads the same verdicts, row by row.
   env = await boot(fx.route);
-  click(env, 'account-btn');
-  const said = (sid) => byFocus(env.root, 'opt:claude:' + sid).getAttribute('aria-label');
-  assert.match(said('near'), /99\.6%/);
-  assert.doesNotMatch(said('near'), /spent|alert/);
-  assert.match(said('full'), /alert/);
-  ['bad', 'ended', 'split'].forEach((sid) => assert.doesNotMatch(said(sid), /100%|spent|alert/, sid));
-  // The overview row agrees: one account at the limit, never a rounded "0%".
+  click(env, 'accounts');
+  const said = (sid) => byFocus(env.root, 'acct:claude:' + sid).getAttribute('aria-label');
+  assert.doesNotMatch(said('near'), /limit reached|alert/);
+  assert.match(said('full'), /limit reached/);
+  ['bad', 'ended', 'split'].forEach((sid) => assert.doesNotMatch(said(sid), /100%|limit reached|alert/, sid));
+  // The overview row agrees: one account at the limit, named, never a rounded "0%".
   const five = fx.route.reserve.summary.groups.find((g) => g.key.includes('|five_hour|'));
-  const row = byFocus(env.root, 'reserve:' + five.key);
-  // 0.7.0: a single account at the limit is named (v4), with its reset.
+  const row = byFocus(env.root, 'limit:' + five.key);
   assert.match(row.getAttribute('aria-label'), /full at the limit until /);
   assert.equal(classes(row.parentNode, 'bar').filter((c) => String(c.className).includes('spent')).length, 1);
 
-  // Finding 1: single-sweep points are marks of their own, reachable by the
-  // cursor and the keyboard, listed in the table, never joined to the line.
+  // Finding 1, 0.8.0: a total seen at one sweep only holds for no stretch of
+  // time. It is not drawn as a mark (no symbols on the chart); the record
+  // stays a line with breaks, and every such sighting is listed in the data
+  // table under Details, the disagreeing one as "not settled".
   env = await boot(fx.chart);
-  // A narrow frame: the plot is 260 px wide, so an arrow step (a sixtieth of
-  // the axis) is shorter than the pointer's six-pixel snap.
-  env.root.clientWidth = 300;
-  click(env, 'chart-toggle');
-  await settle();
-  // SVG nodes carry their class as an attribute.
   const svgClasses = (name) => walk(env.root).filter((n) =>
     String(n.getAttribute('class') || '').split(/\s+/).includes(name));
-  const seen = svgClasses('point-seen').filter((n) => n.tagName === 'CIRCLE');
-  const unsettled = svgClasses('point-unsettled').filter((n) => n.tagName === 'CIRCLE');
-  assert.equal(seen.length, 3, 'two point marks and one legend swatch');
-  assert.equal(unsettled.length, 2, 'one point mark and one legend swatch');
-  const marks = svgClasses('point-mark');
-  assert.equal(marks.length, 3);
-  marks.forEach((m) => assert.ok(Number(m.getAttribute('cx')) >= 30, 'a point lies inside the drawn time axis'));
+  assert.ok(svgClasses('chart-svg').length, 'the timeline is drawn');
+  assert.equal(svgClasses('point-mark').length + svgClasses('point-seen').length + svgClasses('point-unsettled').length, 0);
+  assert.ok(svgClasses('line-observed').some((n) => n.tagName === 'PATH'));
   const legend = classes(env.root, 'chart-legend')[0].textContent;
-  assert.match(legend, /seen at one sweep only/);
-  assert.match(legend, /sources disagree at one sweep/);
+  assert.doesNotMatch(legend, /one sweep|≠/);
   const plot = byFocus(env.root, 'chart-plot');
   plot.focus();
   plot.listeners.focus[0]();
   plot.listeners.keydown[0]({ key: 'Home', preventDefault() {} });
-  // 0.7.0: the axis is the whole chosen range, not where the record begins,
-  // so the first recorded point lies some arrow steps in from Home.
-  const readNow = () => classes(env.root, 'chart-readout')[0].textContent;
-  const press = (key) => plot.listeners.keydown[0]({ key, preventDefault() {} });
-  const toFirstPoint = () => {
-    for (let guard = 0; guard < 80 && !/this sweep/.test(readNow()); guard++) press('ArrowRight');
-  };
-  toFirstPoint();
-  const heard = [readNow()];
-  for (let i = 0; i < 3; i++) {
-    press('ArrowRight');
-    heard.push(readNow());
+  for (let i = 0; i < 70; i++) {
+    plot.listeners.keydown[0]({ key: 'ArrowRight', preventDefault() {} });
+    assert.doesNotMatch(classes(env.root, 'chart-readout')[0].textContent, /this sweep|disagree/);
   }
-  assert.match(heard[0], /observed at this sweep only 2\.10 of 3/);
-  assert.match(heard[1], /sources disagree at this sweep/);
-  assert.match(heard[2], /observed at this sweep only 2\.02 of 3/);
-  assert.doesNotMatch(heard[3], /this sweep only|disagree/);
-  plot.listeners.keydown[0]({ key: 'ArrowLeft', preventDefault() {} });
-  assert.match(classes(env.root, 'chart-readout')[0].textContent, /observed at this sweep only 2\.02 of 3/);
-  // Home goes to the start of the axis, never pulled onto a point nearby
-  // (in a narrow frame an arrow step can be shorter than the pointer's snap).
-  plot.listeners.keydown[0]({ key: 'Home', preventDefault() {} });
-  assert.doesNotMatch(classes(env.root, 'chart-readout')[0].textContent, /this sweep|disagree/);
-  toFirstPoint();
-  assert.match(classes(env.root, 'chart-readout')[0].textContent, /observed at this sweep only 2\.10 of 3/);
   const table = classes(env.root, 'chart-table')[0].textContent;
-  assert.match(table, /every total seen at one sweep only/);
-  assert.match(table, /2\.10.*seen at this sweep only/);
+  assert.match(table, /3 totals seen at one sweep only .* are listed in the table, not drawn/);
+  assert.match(table, /2\.10seen at this sweep only/);
   assert.match(table, /not settled.*sources disagree at this sweep/);
-  assert.match(table, /2\.02.*seen at this sweep only/);
+  assert.match(table, /2\.02seen at this sweep only/);
 })().catch((error) => {
   console.error(error && error.stack ? error.stack : error);
   process.exitCode = 1;
@@ -2534,11 +2764,7 @@ function click(env, key) {
   node.listeners.click[0]({ stopPropagation() {} });
 }
 const hasSvg = (root) => walk(root).some((n) => n.getAttribute('class') === 'chart-svg');
-// 0.7.0: a limit is one .lrow; its details button is data-focus "reserve:<key>"
-// and carries the whole spoken summary; the name button is "limit:<key>".
-const rowOf = (env, key) => byFocus(env.root, 'reserve:' + key).parentNode;
-const has = (c, name) => String(c.className).split(/\s+/).includes(name);
-const unreadOf = (g) => g.coverage.stale_only + g.coverage.invalid + g.coverage.conflicting + g.coverage.reset_passed;
+const rowOf = (env, key) => byFocus(env.root, 'limit:' + key).parentNode;
 
 // The host's appearance bridge, so a theme change can be sent to the widget.
 async function bootThemed(view) {
@@ -2557,8 +2783,6 @@ async function bootThemed(view) {
     clearInterval() {},
     addEventListener() {},
     setTimeout: (callback, ms) => setTimeout(callback, ms),
-    // 0.7.0: the widget bounds every request with a backstop timer and
-    // clears it when the request settles.
     clearTimeout: (id) => clearTimeout(id),
     __ouroWidgetOnDispose() {},
     OuroborosWidget: { onTheme(fn) { themeListener = fn; fn('light'); return () => { themeListener = null; }; } },
@@ -2577,102 +2801,104 @@ async function bootThemed(view) {
   const groups = view.reserve.summary.groups.filter((g) => g.harness === 'codex');
   const tight = groups.find((g) => g.tightest);
 
-  // 1. Each new mount: the compact overview, the chart folded and not asked
-  // for, and the account folded to a brief that still says its state.
+  // 1. Each new mount (0.8.0 defaults, never saved): the limits, the timeline
+  // of the lowest-left limit open under its row with "no new use" and the
+  // limit's own span, the account list folded, no account selected, About shut.
   let env = await bootThemed(view);
-  assert.ok(!hasSvg(env.root), 'chart folded by default');
-  assert.match(env.calls[0].url, /chart=0/);
-  let plane = classes(env.root, 'account-plane')[0];
-  assert.ok(plane && plane.className.split(/\s+/).includes('collapsed'), 'account folded by default');
-  assert.equal(classes(env.root, 'quota-tile').length, 0);
-  assert.equal(byFocus(env.root, 'account-details').getAttribute('aria-expanded'), 'false');
-  assert.equal(classes(plane, 'acct-win').length, 0, 'window details stay folded');
-  assert.match(byFocus(env.root, 'account-btn').textContent, /\d+% used/);
-  assert.equal(classes(byFocus(env.root, 'account-btn'), 'state-dot').length, 1);
+  assert.ok(hasSvg(env.root), 'timeline open by default');
+  assert.doesNotMatch(env.calls[0].url, /chart=0/);
+  assert.equal(byFocus(env.root, 'scenario:no_new_use').getAttribute('aria-pressed'), 'true');
+  assert.equal(byFocus(env.root, 'horizon:' + (tight.window_seconds > 86400 ? '7d' : '24h')).getAttribute('aria-pressed'), 'true');
+  assert.equal(byFocus(env.root, 'accounts').getAttribute('aria-expanded'), 'false');
+  assert.equal(byFocus(env.root, 'about').getAttribute('aria-expanded'), 'false');
+  assert.equal(classes(env.root, 'inspector').length, 0);
+  assert.equal(classes(env.root, 'win-line').length, 0);
 
-  // Coverage in every row (0.7.0): the figure is of every account the limit
-  // applies to, and the row says how many of them are current.
+  // Coverage in every row: the figure is of every account the limit applies
+  // to, and the row says how many of them are current.
   groups.forEach((g) => {
-    const row = byFocus(env.root, 'reserve:' + g.key);
-    assert.match(classes(row.parentNode, 'l-fig')[0].textContent, new RegExp(' of ' + g.slots + '$'));
-    assert.match(row.getAttribute('aria-label'),
-                 new RegExp(g.measured.accounts + ' current of ' + g.slots + ' accounts'));
+    const name = byFocus(env.root, 'limit:' + g.key);
+    assert.match(classes(name.parentNode, 'l-fig')[0].textContent, new RegExp(' of ' + g.slots + '$'));
+    assert.match(name.getAttribute('aria-label'), new RegExp(g.measured.accounts + ' current of ' + g.slots + ' accounts'));
   });
   // "lowest left": a ranking of averages, and said so.
-  const tightRow = byFocus(env.root, 'reserve:' + tight.key);
-  const badge = classes(tightRow.parentNode, 'rs-tight')[0];
+  const badge = classes(rowOf(env, tight.key), 'rs-tight')[0];
   assert.equal(badge.textContent, 'lowest left');
   assert.match(badge.title, /lowest average share left/i);
   assert.match(badge.title, /a ranking, not a verdict/);
-  assert.match(tightRow.getAttribute('aria-label'), /lowest average share left in this family/);
+  assert.match(byFocus(env.root, 'limit:' + tight.key).getAttribute('aria-label'), /lowest average share left in this family/);
   assert.doesNotMatch(allSpoken(env.root), /tightest/i);
-  // What is not counted is said on the first screen, never as zero.
-  assert.match(classes(env.root, 'reserve-cover')[0].textContent, /not counted/);
-  assert.match(classes(env.root, 'reserve-cover')[0].textContent, /never as zero/);
+  // What is not counted is said in short under the rows — never as zero —
+  // and the link opens the account list, which says it by name.
+  const cover = byFocus(env.root, 'cover');
+  assert.match(cover.getAttribute('aria-label'), /not counted/);
+  assert.match(cover.getAttribute('aria-label'), /never as zero/);
+  click(env, 'cover');
+  assert.equal(byFocus(env.root, 'accounts').getAttribute('aria-expanded'), 'true');
+  assert.match(classes(env.root, 'acc-cover').map((n) => n.textContent).join(' '), /not counted, never as zero/);
+  click(env, 'accounts');
 
-  // How to read: cells are not aligned across rows; a scoped cap binds its models.
-  click(env, 'reserve-about');
-  let about = classes(env.root, 'reserve-about')[0].textContent;
+  // About: bars are not aligned across rows; a scoped cap binds its models.
+  click(env, 'about');
+  let about = classes(env.root, 'about-panel')[0].textContent;
   assert.match(about, /a column does not follow one account/);
   assert.match(about, /binds only the models it names/);
   assert.match(about, /watched without a break since \d\d:\d\d/);
-  click(env, 'reserve-about');
+  click(env, 'about');
 
-  // 2. Account details open on request and stay open through a poll and a
-  // theme change; the keyboard stays on the button.
-  click(env, 'account-details');
-  assert.ok(classes(env.root, 'quota-tile').length > 0);
-  byFocus(env.root, 'account-details').focus();
+  // 2. A selected account stays selected through a poll and a theme change,
+  // its diagnostics open, the keyboard on them.
+  click(env, 'accounts');
+  click(env, 'acct:codex:c1');
+  click(env, 'inspector-diag');
+  assert.ok(classes(env.root, 'win-line').length > 0);
+  byFocus(env.root, 'inspector-diag').focus();
   env.interval()();
   await settle();
-  assert.equal(byFocus(env.root, 'account-details').getAttribute('aria-expanded'), 'true');
-  assert.ok(classes(env.root, 'quota-tile').length > 0);
-  assert.equal(env.document.activeElement.getAttribute('data-focus'), 'account-details');
+  assert.equal(byFocus(env.root, 'inspector-diag').getAttribute('aria-expanded'), 'true');
+  assert.ok(classes(env.root, 'win-line').length > 0);
+  assert.equal(env.document.activeElement.getAttribute('data-focus'), 'inspector-diag');
   assert.equal(env.theme('dark'), 'dark');
   await settle();
-  assert.ok(classes(env.root, 'quota-tile').length > 0);
+  assert.ok(classes(env.root, 'inspector').length);
 
-  // 3. The chart, opened, survives a poll and a theme change too.
-  click(env, 'chart-toggle');
-  await settle();
-  assert.ok(hasSvg(env.root));
+  // 3. The timeline survives a poll and a theme change too, and says what it
+  // assumes — in one line on the face, every caveat under its details.
   env.interval()();
   await settle();
   assert.ok(hasSvg(env.root));
   assert.doesNotMatch(env.calls.at(-1).url, /chart=0/);
   env.theme('light');
   assert.ok(hasSvg(env.root));
-  const panel = classes(env.root, 'chart-panel')[0].textContent;
-  assert.match(panel, /no additional unreported resets/);
-  assert.match(panel, /not how far it is reliable/);
-  assert.doesNotMatch(panel, /Stops:|ended \d|unreported cycle|cycle nobody/);
-  assert.equal(walk(env.root).filter((n) => String(n.getAttribute('class') || '').startsWith('line-end')).length, 0);
-  const regions = walk(env.root).filter((n) => n.getAttribute('class') === 'region-text').map((n) => n.textContent);
-  assert.equal(regions.length, 2);
-  assert.match(regions[0], /observed/);
-  assert.match(regions[1], /if the pace continues|ahead/);
+  const block = classes(env.root, 'tl-block')[0].textContent;
+  assert.match(block, /no later reset is assumed/);
+  assert.match(block, /no additional unreported resets/);
+  assert.match(block, /not how far it is reliable/);
+  assert.doesNotMatch(block, /Stops:|ended \d|unreported cycle|cycle nobody/);
+  assert.equal(walk(env.root).filter((n) => /^line-end|region-text/.test(String(n.getAttribute('class') || ''))).length, 0);
   // The table is a sample of the line and says so.
   assert.match(classes(env.root, 'chart-table')[0].textContent, /of \d+ recorded changes/);
 
-  // 4. A new mount starts compact again: nothing of the last session is kept.
+  // 4. A new mount starts with the defaults again: nothing of the last
+  // session is kept.
   env = await bootThemed(view);
-  assert.ok(!hasSvg(env.root));
-  assert.ok(classes(env.root, 'account-plane')[0].className.split(/\s+/).includes('collapsed'));
-  assert.match(env.calls[0].url, /chart=0/);
+  assert.ok(hasSvg(env.root));
+  assert.equal(classes(env.root, 'inspector').length, 0);
+  assert.equal(byFocus(env.root, 'accounts').getAttribute('aria-expanded'), 'false');
 
-  // 5. With no reserve overview there is nothing to fold under: the account is whole.
+  // 5. With no reserve overview the account list is all there is: open, and
+  // a selected account shows its windows without a Diagnostics fold.
   env = await boot(fixture.failed);
-  assert.ok(classes(env.root, 'quota-tile').length > 0);
-  assert.ok(!byFocus(env.root, 'account-details'));
+  click(env, 'acct:codex:c1');
+  assert.ok(classes(env.root, 'win-line').length > 0);
+  assert.ok(!byFocus(env.root, 'inspector-diag'));
 
   // 6. The unbroken watch is said as what it is: a start, or a lower bound.
   const bounded = JSON.parse(JSON.stringify(view));
   bounded.reserve.summary.history.unbroken_watch.exact = false;
   env = await boot(bounded);
-  click(env, 'reserve-about');
-  about = classes(env.root, 'reserve-about')[0].textContent;
-  // The look-back's first sweep can lie up to one sweep inside it: the bound
-  // is that moment, never "the last 74 min".
+  click(env, 'about');
+  about = classes(env.root, 'about-panel')[0].textContent;
   assert.match(about, /watched without a break at least since \d\d:\d\d/);
   assert.doesNotMatch(allSpoken(env.root), /for at least the last|74 min/);
   assert.doesNotMatch(allSpoken(env.root), /collecting since|session start|start of the session/i);
@@ -2693,15 +2919,13 @@ async function bootThemed(view) {
   });
   try {
     env = await boot(view);
-    click(env, 'chart-toggle');
-    await settle();
     const plot = byFocus(env.root, 'chart-plot');
     plot.focus();
     plot.listeners.focus[0]();
     plot.listeners.keydown[0]({ key: 'ArrowRight', preventDefault() {} });
     plot.listeners.keydown[0]({ key: 'ArrowRight', preventDefault() {} });
     const moved = classes(env.root, 'chart-readout')[0].textContent;
-    assert.match(moved, /if the pace continues/);
+    assert.match(moved, /· scenario — /);
     env.interval()();
     await settle();
     assert.equal(env.document.activeElement.getAttribute('data-focus'), 'chart-plot');
@@ -3033,14 +3257,23 @@ const pad = (n) => (n < 10 ? '0' : '') + n;
 // The widget's own date words (formatResetAt), so the test does not depend
 // on the machine's time zone.
 const fmt = (iso) => { const d = new Date(iso); return d.getDate() + ' ' + MONTHS[d.getMonth()] + ', ' + pad(d.getHours()) + ':' + pad(d.getMinutes()); };
-const plane = (root) => classes(root, 'account-plane')[0];
-const dotOf = (root) => classes(byFocus(root, 'account-btn'), 'state-dot')[0].className;
-const verdictOf = (root) => classes(plane(root), 'quota-primary-row')[0];
-const cooldownLines = (root) => classes(plane(root), 'quota-cooldown').map((n) => n.textContent);
+// 0.8.0: the account's own card (the inspector), its windows under
+// Diagnostics, and its row in the account list.
+const card = (root) => classes(root, 'inspector')[0];
+const dotOf = (root) => classes(card(root), 'state-dot')[0].className;
+const verdictOf = (root) => classes(card(root), 'quota-primary-row')[0];
+const cooldownLines = (root) => classes(card(root), 'quota-cooldown').map((n) => n.textContent);
+async function opened(view, sid, diagnostics) {
+  const env = await boot(view);
+  click(env, 'accounts');
+  click(env, 'acct:claude:' + sid);
+  if (diagnostics) click(env, 'inspector-diag');
+  return env;
+}
 
 (async () => {
   const fx = JSON.parse(process.env.CLOSURE_FIXTURE);
-  // The widget judges a tile's own cooldown against its clock: this process
+  // The widget judges a window's own cooldown against its clock: this process
   // runs at the moment the route answered (plus five seconds).
   Date.now = () => fx.now_ms;
   const route = fx.route;
@@ -3060,37 +3293,36 @@ const cooldownLines = (root) => classes(plane(root), 'quota-cooldown').map((n) =
   };
   for (const sid of Object.keys(cooling)) {
     for (const details of [false, true]) {
-      const env = await boot(only(route, sid));
-      if (details) click(env, 'account-details');
+      const env = await opened(only(route, sid), sid, details);
       // One cooldown sentence carries scope, end and provenance; no duplicate verdict.
       assert.equal(verdictOf(env.root), undefined, sid + ': no duplicate cooling verdict');
-      const coolingText = cooldownLines(env.root).join(' ');
-      assert.match(coolingText, /^Cooling down/, sid);
-      if (cooling[sid]) assert.ok(coolingText.includes('until ' + cooling[sid]), sid + ' ' + coolingText);
-      else assert.doesNotMatch(coolingText, /until/, sid);
-      assert.doesNotMatch(allSpoken(plane(env.root)), /Limit reached|Resets/, sid);
-      assert.match(dotOf(env.root), /\bbad\b/, sid);
       const lines = cooldownLines(env.root);
       assert.equal(lines.length, 1, sid + ': ' + lines.join(' | '));
       assert.match(lines[0], /^Cooling down · whole account/, sid);
+      if (cooling[sid]) assert.ok(lines[0].includes('until ' + cooling[sid]), sid + ' ' + lines[0]);
+      else assert.doesNotMatch(lines[0], /until/, sid);
+      assert.doesNotMatch(allSpoken(card(env.root)), /Limit reached|Resets/, sid);
+      assert.match(dotOf(env.root), /\bbad\b/, sid);
+      // The account list says it in the same words, amber: a hold, not a spent share.
+      const state = classes(byFocus(env.root, 'acct:claude:' + sid), 'acc-state')[0];
+      assert.equal(state.textContent, 'cooling down', sid);
+      assert.match(state.className, /\bwarn\b/, sid);
     }
   }
-  let env = await boot(only(route, 'cool-split'));
-  assert.match(byFocus(env.root, 'account-btn').textContent, /40% used/);
-  click(env, 'account-details');
-  assert.match(plane(env.root).textContent, /7 days?40% used|week40% used/);
-  env = await boot(only(route, 'cool-stale'));
+  let env = await opened(only(route, 'cool-split'), 'cool-split', true);
+  assert.match(card(env.root).textContent, /week40% used/);
+  env = await opened(only(route, 'cool-stale'), 'cool-stale');
   assert.match(cooldownLines(env.root)[0], /reported by a stale reading observed/);
-  env = await boot(only(route, 'cool-unreadable'));
+  env = await opened(only(route, 'cool-unreadable'), 'cool-unreadable');
   assert.match(cooldownLines(env.root)[0], /end time unreadable/);
-  env = await boot(only(route, 'avail-only'));
+  env = await opened(only(route, 'avail-only'), 'avail-only');
   assert.match(cooldownLines(env.root)[0], /no end time reported/);
-  env = await boot(only(route, 'invalid'));
-  assert.match(plane(env.root).textContent, /not counted now \(ratio outside 0–100%\)/);
+  env = await opened(only(route, 'invalid'), 'invalid');
+  assert.match(card(env.root).textContent, /not counted now \(ratio outside 0–100%\)/);
 
   // At the limit and cooling: two facts, each with its own time.
-  env = await boot(only(route, 'full'));
-  let verdict = verdictOf(env.root).textContent;
+  env = await opened(only(route, 'full'), 'full');
+  const verdict = verdictOf(env.root).textContent;
   assert.match(verdict, /^Limit reached/);
   assert.ok(verdict.includes('Resets ' + fmt(q('full').resets_at)), verdict);
   assert.ok(!verdict.includes(fmt(q('full').cooldowns[0].until)), verdict);
@@ -3098,89 +3330,66 @@ const cooldownLines = (root) => classes(plane(root), 'quota-cooldown').map((n) =
   assert.match(dotOf(env.root), /\bbad\b/);
   // The bare cooldown's own end, repeated by the engine as its resets_at, is
   // said once, as the cooldown's end — never as a reset; the week's reset stays.
-  click(env, 'account-details');
-  const tiles = classes(env.root, 'quota-tile').map((t) => t.textContent);
-  const bareTile = tiles.find((t) => /Cooldown/.test(t));
-  assert.ok(bareTile && bareTile.includes(fmt(q('full').cooldowns[0].until)), tiles.join(' | '));
-  assert.doesNotMatch(bareTile, /resets/);
-  assert.ok(tiles.find((t) => /100% used/.test(t)).includes(fmt(q('full').resets_at)), tiles.join(' | '));
+  click(env, 'inspector-diag');
+  const lines = classes(card(env.root), 'win-line').map((t) => t.textContent);
+  const bareLine = lines.find((t) => /Cooldown/.test(t));
+  assert.ok(bareLine && bareLine.includes(fmt(q('full').cooldowns[0].until)), lines.join(' | '));
+  assert.doesNotMatch(bareLine, /resets/);
+  assert.ok(lines.find((t) => /100% used/.test(t)).includes(fmt(q('full').resets_at)), lines.join(' | '));
 
   // A model's cooldown marks the model, not the account.
-  env = await boot(only(route, 'cool-scoped'));
+  env = await opened(only(route, 'cool-scoped'), 'cool-scoped');
   assert.equal(verdictOf(env.root), undefined, 'state ok: the windows speak');
   assert.match(cooldownLines(env.root).join(' '), /^Cooling down · Fable · until /);
   assert.match(dotOf(env.root), /\bwarn\b/);
-  assert.doesNotMatch(allSpoken(plane(env.root)), /Limit reached|Resets/);
+  assert.doesNotMatch(allSpoken(card(env.root)), /Limit reached|Resets/);
 
   // The reserve and the account read that cooldown one way, window by window.
   // It came from the older source, the Fable share from the newer one: the
-  // reserve holds the share back, and so do the tile and the list row's bar.
-  // The shared week, which no cooldown covers, stays neutral everywhere.
+  // reserve holds the share back, and so does the window's line. The shared
+  // week, which no cooldown covers, stays neutral everywhere.
   const keyOf = (part) => route.reserve.summary.groups.find((g) => g.key.includes(part)).key;
-  // 0.7.0: the bars sit in the limit's row beside its details button.
-  const heldCells = classes(byFocus(env.root, 'reserve:' + keyOf('|weekly_scoped:Fable|')).parentNode, 'bar')
+  const heldCells = classes(byFocus(env.root, 'limit:' + keyOf('|weekly_scoped:Fable|')).parentNode, 'bar')
     .filter((c) => !/\bunknown\b/.test(c.className));
   assert.equal(heldCells.length, 1);
   assert.match(heldCells[0].className, /\brestricted\b/);
   assert.match(heldCells[0].title, /: 60% left — restricted now( · |$)/);
+  click(env, 'inspector-diag');
   const meterOf = (node) => classes(node, 'meter')[0];
-  // The selector's bar is the account's hottest shared window: the week.
-  assert.match(byFocus(env.root, 'account-btn').textContent, /20% used/);
-  assert.doesNotMatch(meterOf(byFocus(env.root, 'account-btn')).className, /\brestricted\b/);
-  click(env, 'account-details');
-  const tileOf = (label) => classes(env.root, 'quota-tile').find((t) => t.title === label);
-  assert.match(meterOf(tileOf('7 day (Fable)')).className, /\brestricted\b/);
-  assert.equal(meterOf(tileOf('7 day (Fable)')).title, '60% left — held back now');
-  assert.doesNotMatch(meterOf(tileOf('7 day')).className, /\brestricted\b/);
-  click(env, 'account-btn');
-  const opt = byFocus(env.root, 'opt:claude:cool-scoped');
-  const wins = classes(opt, 'acct-win');
-  const winOf = (label) => wins.find((w) => w.title.startsWith(label + ' — '));
-  assert.equal(wins.length, 2);
-  assert.match(meterOf(winOf('7 day (Fable)')).className, /\brestricted\b/);
-  assert.equal(meterOf(winOf('7 day (Fable)')).title, '60% left — held back now');
-  assert.doesNotMatch(meterOf(winOf('7 day')).className, /\brestricted\b/);
+  const lineOf = (label) => classes(card(env.root), 'win-line').find((l) => classes(l, 'win-tag')[0].title === label);
+  assert.match(meterOf(lineOf('7 day (Fable)')).className, /\brestricted\b/);
+  assert.equal(meterOf(lineOf('7 day (Fable)')).title, '60% left — held back now');
+  assert.doesNotMatch(meterOf(lineOf('7 day')).className, /\brestricted\b/);
   // The bar is the share left, the figure beside it the share used, and each
-  // says which: never a bare "40%" beside a bar 60% long — on screen, on
-  // hover or aloud.
+  // says which: never a bare "40%" beside a bar 60% long.
   for (const [label, used] of [['7 day (Fable)', '40'], ['7 day', '20']]) {
-    const win = winOf(label);
-    assert.equal(classes(win, 'acct-win-pct')[0].textContent, used + '% used', label);
-    assert.ok(win.title.startsWith(label + ' — ' + used + '% used'), win.title);
-    assert.equal(meterOf(win).title.split(' — ')[0], (100 - used) + '% left', label);
+    const line = lineOf(label);
+    assert.equal(classes(line, 'win-used')[0].textContent, used + '% used', label);
+    assert.match(line.getAttribute('aria-label'), new RegExp(used + '% used'), label);
+    assert.equal(meterOf(line).title.split(' — ')[0], (100 - used) + '% left', label);
   }
-  const optSaid = opt.getAttribute('aria-label');
-  assert.match(optSaid, /40% used/);
-  assert.match(optSaid, /20% used/);
-  assert.doesNotMatch(optSaid, /\d%(?! used)/, optSaid);
 
   // Controls: an expired cooldown and no cooldown say nothing of one.
   for (const sid of ['cool-expired', 'plain']) {
-    env = await boot(only(route, sid));
+    env = await opened(only(route, sid), sid);
     assert.deepEqual(cooldownLines(env.root), [], sid);
-    assert.doesNotMatch(allSpoken(plane(env.root)), /Cooling|\bcooldown\b|Limit reached/, sid);
+    assert.doesNotMatch(allSpoken(card(env.root)), /Cooling|\bcooldown\b|Limit reached/, sid);
     assert.doesNotMatch(dotOf(env.root), /\bbad\b/, sid);
   }
 
   // The account list reads the same facts.
   env = await boot(route);
-  click(env, 'account-btn');
-  const said = (sid) => byFocus(env.root, 'opt:claude:' + sid).getAttribute('aria-label');
-  const rowDot = (sid) => classes(byFocus(env.root, 'opt:claude:' + sid), 'state-dot')[0].className;
+  click(env, 'accounts');
+  const said = (sid) => byFocus(env.root, 'acct:claude:' + sid).getAttribute('aria-label');
   ['cool-split', 'cool-stale', 'cool-unreadable', 'partial', 'bare', 'avail-only', 'invalid', 'stale-only']
-    .forEach((sid) => { assert.match(said(sid), / cooldown\b|cooling down/, sid); assert.match(rowDot(sid), /\bbad\b/, sid); });
-  ['cool-expired', 'plain'].forEach((sid) => {
-    assert.doesNotMatch(said(sid), / cooldown\b|cooling down|alert/, sid);
-    assert.doesNotMatch(rowDot(sid), /\bbad\b/, sid);
-  });
+    .forEach((sid) => assert.match(said(sid), /cooling down/, sid));
+  ['cool-expired', 'plain'].forEach((sid) => assert.doesNotMatch(said(sid), /cooling down|cooldown|alert/, sid));
 
   // (1) The unified engine's default row shows the legacy reading the
   // overview counts for it.
-  env = await boot(only(fx.alias, 'claude-default'));
-  assert.match(byFocus(env.root, 'account-btn').textContent, /40% used/);
-  click(env, 'account-details');
-  assert.match(plane(env.root).textContent, /40% used/);
-  assert.doesNotMatch(allSpoken(plane(env.root)), /No quota window reported/);
+  env = await opened(only(fx.alias, 'claude-default'), 'claude-default', true);
+  assert.match(card(env.root).textContent, /40% used/);
+  assert.doesNotMatch(allSpoken(card(env.root)), /No quota window reported/);
 })().catch((error) => {
   console.error(error && error.stack ? error.stack : error);
   process.exitCode = 1;
@@ -3210,8 +3419,8 @@ def test_real_widget_account_closure_matrix(tmp_path, monkeypatch):
 
 # Skill-review closure: a sweep whose sources disagree has no total. Where the
 # line has no value either (the last sighting before a gap, a sighting inside
-# one), it is still a point, and the widget marks it on a rail of its own
-# above the value scale — never hidden, never at a value.
+# one), it is still a point of the record. 0.8.0: the widget lists every such
+# point in the data table and draws none (no marks, no rail on the chart).
 
 def _gap_singleton_script(offset):
     """Account a: vouched to -1800, where its last sighting disagrees; a gap
@@ -3242,7 +3451,7 @@ def _gap_singleton_view(directory, script=_gap_singleton_script):
 
     data = _scripted_sweeps(store, snaps, list(range(-2400, 1, 120)), sids=("a", "b"))
     view = plugin.build_view(data, "", NOW)
-    view["reserve"] = plugin.reserve_view(store, data, NOW, NOW, harness="codex")
+    view["reserve"] = widget_reserve(store, data, NOW, NOW, harness="codex", name_accounts=True)
     return view
 
 
@@ -3272,81 +3481,41 @@ NODE_GAP_SINGLETON = r"""
 (async () => {
   const view = JSON.parse(process.env.GAP_FIXTURE);
   const env = await boot(view);
-  byFocus(env.root, 'chart-toggle').listeners.click[0]({ stopPropagation() {} });
-  await settle();
   const svg = walk(env.root).find((n) => n.getAttribute('class') === 'chart-svg');
   assert.ok(svg, 'the chart is drawn');
   const cls = (n) => String(n.getAttribute('class') || '').split(/\s+/);
   const inSvg = (name) => walk(svg).filter((n) => cls(n).includes(name));
-  const marks = inSvg('point-mark');
-  const rail = marks.filter((n) => cls(n).includes('point-rail'));
-  const seen = marks.filter((n) => cls(n).includes('point-seen'));
-  // Both disagreeing sightings are marked, on the rail; the settled one keeps
-  // its place at its value.
-  assert.equal(marks.length, 3);
-  assert.equal(rail.length, 2);
-  assert.equal(seen.length, 1);
-  rail.forEach((m) => assert.ok(cls(m).includes('point-unsettled')));
-  // The rail lies above the value scale: above the "full" line, far from 0.
-  const grid = (name) => inSvg('grid').filter((n) => cls(n).includes(name))[0];
-  const capY = Number(grid('cap').getAttribute('y1'));
-  const zeroY = Number(grid('base').getAttribute('y1'));
-  const railY = Number(rail[0].getAttribute('cy'));
-  rail.forEach((m) => assert.equal(Number(m.getAttribute('cy')), railY));
-  assert.ok(railY < capY - 5, 'rail ' + railY + ' is above the cap line ' + capY);
-  assert.ok(Number(seen[0].getAttribute('cy')) > capY && Number(seen[0].getAttribute('cy')) < zeroY);
-  const railLine = inSvg('rail-line')[0];
-  assert.ok(railLine && Number(railLine.getAttribute('y1')) === railY);
-  assert.equal(inSvg('rail-text')[0].textContent, '≠');
-  // Ordered in time along the rail, inside the drawn axis.
-  const xs = rail.map((m) => Number(m.getAttribute('cx')));
-  assert.ok(xs[0] < xs[1] && xs[0] >= 30, xs.join(','));
-  // The line is still drawn, and stops at the gap.
+  // 0.8.0: a sweep whose sources disagree has no total, and a total seen at
+  // one sweep holds for no stretch of time: neither is drawn — no marks, no
+  // rail, no symbol. The record stays a line that stops at the gap.
+  assert.equal(inSvg('point-mark').length + inSvg('point-rail').length + inSvg('rail-line').length, 0);
+  assert.equal(walk(svg).filter((n) => n.tagName === 'TEXT' && /≠/.test(n.textContent)).length, 0);
   const line = inSvg('line-observed').find((n) => n.tagName === 'PATH');
   assert.ok(line && /M/.test(line.getAttribute('d')));
   assert.equal((line.getAttribute('d').match(/M/g) || []).length, 2, 'two stretches: before and after the gap');
+  assert.doesNotMatch(classes(env.root, 'chart-legend')[0].textContent, /≠|one sweep/);
 
-  const legend = classes(env.root, 'chart-legend')[0].textContent;
-  assert.match(legend, /≠ sources disagree at one sweep where no line is drawn — no value/);
-  assert.match(legend, /seen at one sweep only/);
-
-  // Keyboard: an arrow step stops on each rail point and reads it out.
+  // The keyboard never lands on a value that is not there: in the gap the
+  // record says it has none, never a zero.
   const plot = byFocus(env.root, 'chart-plot');
   plot.focus();
   plot.listeners.focus[0]();
   plot.listeners.keydown[0]({ key: 'Home', preventDefault() {} });
   const heard = [];
-  for (let i = 0; i < 40 && heard.length < 3; i++) {
+  for (let i = 0; i < 70; i++) {
     plot.listeners.keydown[0]({ key: 'ArrowRight', preventDefault() {} });
-    const said = classes(env.root, 'chart-readout')[0].textContent;
-    if (/this sweep/.test(said) && heard[heard.length - 1] !== said) heard.push(said);
+    heard.push(classes(env.root, 'chart-readout')[0].textContent);
   }
-  assert.match(heard[0], /sources disagree at this sweep, no value here \(≠ rail\)/);
-  assert.match(heard[1], /sources disagree at this sweep, no value here \(≠ rail\)/);
-  assert.match(heard[2], /observed at this sweep only 1\.14 of 2/);
-  heard.slice(0, 2).forEach((said) => assert.doesNotMatch(said, /\b0(\.00)? of 2|no record/));
+  heard.forEach((said) => assert.doesNotMatch(said, /this sweep|\b0(\.00)? of 2/));
+  assert.ok(heard.some((said) => /recorded no record \(gap\)/.test(said)));
 
-  // Pointer: over a rail mark, the tooltip names it and draws no value dot.
-  const box = { left: 0, top: 0, width: Number(svg.getAttribute('width')), height: Number(svg.getAttribute('height')) };
-  svg.getBoundingClientRect = () => box;
-  const hit = inSvg('hit')[0];
-  hit.listeners.pointermove[0]({ clientX: xs[1] });
-  const tip = classes(env.root, 'chart-tip')[0];
-  assert.equal(tip.style.display, 'block');
-  assert.match(tip.textContent, /not settled/);
-  assert.match(tip.textContent, /sources disagree at this sweep/);
-  assert.match(tip.textContent, /no value here · on the ≠ rail/);
-  assert.equal(walk(tip).filter((n) => cls(n).includes('rail-line')).length, 1, 'the rail swatch');
-  inSvg('cursor-dot').forEach((d) => assert.equal(d.getAttribute('visibility'), 'hidden'));
-  const cursor = inSvg('cursor-line')[0];
-  assert.equal(cursor.getAttribute('visibility'), 'visible');
-  assert.ok(Number(cursor.getAttribute('y1')) <= railY - 3, 'the cursor reaches the rail');
-  assert.match(classes(env.root, 'chart-readout')[0].textContent, /no value here \(≠ rail\)/);
-
-  // The notes and the table say the same.
+  // Every such sweep is still on record: the details say so, and the table
+  // lists each — the two that disagree as "not settled", the settled one with
+  // its total.
   const table = classes(env.root, 'chart-table')[0].textContent;
-  assert.match(table, /on the ≠ rail above the plot/);
+  assert.match(table, /3 totals seen at one sweep only .* are listed in the table, not drawn/);
   assert.equal((table.match(/sources disagree at this sweep/g) || []).length, 2);
+  assert.match(table, /1\.14seen at this sweep only/);
 })().catch((error) => {
   console.error(error && error.stack ? error.stack : error);
   process.exitCode = 1;
@@ -3354,7 +3523,7 @@ NODE_GAP_SINGLETON = r"""
 """
 
 
-def test_real_widget_marks_a_disagreeing_sighting_in_a_gap_on_its_rail(tmp_path):
+def test_real_widget_lists_single_sweep_sightings_and_never_draws_them(tmp_path):
     import test_quotas
 
     node = _node()
@@ -3366,6 +3535,640 @@ def test_real_widget_marks_a_disagreeing_sighting_in_a_gap_on_its_rail(tmp_path)
         [str(node), "-e", textwrap.dedent(harness + NODE_GAP_SINGLETON)],
         cwd=widget_path.parent,
         env={**dict(os.environ), "WIDGET_PATH": str(widget_path), "GAP_FIXTURE": json.dumps(view)},
+        text=True, capture_output=True, timeout=60, check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+# ---------------------------------------------------------------------------
+# Final repairs: the horizon is the one whole second the chart publishes as
+# ``end``, whatever fraction of a second ``now`` was read at; and the widget
+# lists every single-sweep point, a page at a time, not the table's newest few.
+
+
+def _iso_exact(stamp):
+    """An instant with its fraction of a second, as a vendor may report it."""
+    import datetime as _dt
+    moment = _dt.datetime.fromtimestamp(stamp, _dt.timezone.utc)
+    return moment.isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def _chart_read_at(now, resets, horizon):
+    """One account per reported reset (absolute, fraction kept), each 40%
+    used, read at ``now``: nothing recorded, so no pace."""
+    snaps = []
+    for index, reset in enumerate(resets):
+        row = constraint("primary", .4)
+        row["resets_at"] = _iso_exact(reset)
+        snaps.append(snap("codex", f"a{index}", [row], observed_abs=now - 60))
+    data = payload(snaps, [profile("codex", f"a{index}") for index in range(len(resets))])
+    return qs.build_chart(qs.compute(data, qs.HistoryView(state="empty"), now), horizon=horizon)
+
+
+def _published_at_horizon(chart, now, horizon_end, total):
+    """Everything the chart says at its horizon says ``total`` there."""
+    assert chart["end"] == horizon_end
+    for sc in chart["scenarios"].values():
+        assert sc["line"][-1] == [horizon_end, total]
+        assert sc["checkpoints"][-1]["at"] == horizon_end and sc["checkpoints"][-1]["value"] == total
+        # Every checkpoint is the whole second of the original now plus its offset.
+        assert [cp["at"] for cp in sc["checkpoints"]] == [round(now + cp["after_seconds"])
+                                                          for cp in sc["checkpoints"]]
+    rows = [row for row in chart["table"] if row["at"] == qs.iso(horizon_end)]
+    assert rows and all(row["scenario_no_new_use"] == total and row["scenario_recent_pace"] == total
+                        for row in rows)
+
+
+@pytest.mark.parametrize("horizon", ["24h", "7d"])
+def test_fractional_now_above_half_a_reset_at_the_published_horizon_is_inside(horizon):
+    """Read at .75 of a second: ``end`` rounds up to the next whole second.
+    A reset exactly then used to fall past the unrounded horizon — in
+    ``later``, with no refill on the line, the checkpoint or the table —
+    while the chart published that very second as its end."""
+    span = qs.HORIZONS[horizon]
+    now = NOW + 0.75
+    end = round(NOW + span) + 1
+    chart = _chart_read_at(now, [end], horizon)
+    # The original now and the figure at it stay as read.
+    assert chart["now"] == round(now) and chart["current_windows"] == 0.6
+    for sc in chart["scenarios"].values():
+        assert sc["line"][0] == [round(now), 0.6]
+        assert [(e["at"], e["accounts"], e["total_after"]) for e in sc["schedule"]] == [(end, 1, 1.0)]
+        assert sc["later"] is None
+        assert sc["line"][-2:] == [[end, 0.6], [end, 1.0]]     # refilled at the horizon, not before
+    _published_at_horizon(chart, now, end, 1.0)
+    assert chart["resets"] == [{"at": end, "accounts": 1}]
+    assert [row["event"] for row in chart["table"] if row["at"] == qs.iso(end) and row.get("event")] \
+        == ["reported reset · 1 account"]
+
+
+@pytest.mark.parametrize("horizon", ["24h", "7d"])
+def test_fractional_now_below_half_a_reset_past_the_published_horizon_is_not_applied(horizon):
+    """Read at .25 of a second: ``end`` rounds down. A reset exactly at that
+    second is inside and refilled there; one a fifth of a second later —
+    before the unrounded horizon, after the published one — is only in
+    ``later`` and refills nothing: never applied before its own time on a
+    line that ends at the published second."""
+    span = qs.HORIZONS[horizon]
+    now = NOW + 0.25
+    end = round(NOW + span)
+    chart = _chart_read_at(now, [end, end + 0.2], horizon)
+    assert chart["now"] == round(now) and chart["current_windows"] == 1.2
+    for sc in chart["scenarios"].values():
+        assert sc["line"][0] == [round(now), 1.2]
+        assert [(e["at"], e["accounts"], e["total_after"]) for e in sc["schedule"]] == [(end, 1, 1.6)]
+        # Its own time, to the second it is published at (here the same
+        # second as the horizon): when, never applied.
+        assert sc["later"] == {"at": round(end + 0.2), "accounts": 1, "more_events": 0, "more_accounts": 0}
+        assert max(v for _t, v in sc["line"]) == 1.6
+    _published_at_horizon(chart, now, end, 1.6)
+    assert chart["resets"] == [{"at": end, "accounts": 1}]
+    # A whole-second now is unchanged by any of it.
+    whole = _chart_read_at(NOW, [end, end + 0.2], horizon)
+    assert whole["end"] == end and [e["at"] for e in whole["scenarios"]["no_new_use"]["schedule"]] == [end]
+    _published_at_horizon(whole, NOW, end, 1.6)
+
+
+# A reset inside the span keeps its fraction of a second: never applied
+# before it happens. What the widget's cursor reads off the line (lineAt),
+# the checkpoints and the table say the same at a whole second either side.
+
+
+def _cursor_at(points, t):
+    """widget.js lineAt: inside the line, the value just after anything at
+    ``t`` (a step there reads its right side); outside it, nothing."""
+    if not points or t < points[0][0] or t > points[-1][0]:
+        return None
+    return line_at(points, t, right=True)
+
+
+# (now's fraction, the reset from NOW, whether the 6-hour checkpoint comes
+# before it). Read at .25 that checkpoint is NOW + 21600; at .75, NOW + 21601.
+FRACTIONAL_RESETS = [
+    (0.25, 21600.2, True),     # a fifth of a second after the checkpoint
+    (0.25, 21600.0, False),    # at it
+    (0.25, 21599.8, False),    # a fifth of a second before it
+    (0.75, 21601.3, True),     # in the second the checkpoint rounds up to
+    (0.75, 21600.6, False),    # in the half second it rounds up over
+]
+
+
+@pytest.mark.parametrize("fraction, offset, before", FRACTIONAL_RESETS)
+def test_a_reset_with_a_fraction_of_a_second_is_never_applied_before_it(fraction, offset, before):
+    now = NOW + fraction
+    reset = qs.parse_instant(_iso_exact(NOW + offset))      # as the chart reads it
+    checkpoint = round(now + 6 * 3600)
+    expected = 0.6 if before else 1.0
+    chart = _chart_read_at(now, [NOW + offset], "24h")
+    for name, sc in chart["scenarios"].items():
+        # The reset at its own time, in the schedule and on the line.
+        assert [(e["at"], e["last"]) for e in sc["schedule"]] == [(reset, reset)], name
+        assert [[t, v] for t, v in sc["line"] if t == reset] == [[reset, 0.6], [reset, 1.0]], name
+        times = [t for t, _v in sc["line"]]
+        assert times == sorted(times) and (times[0], times[-1]) == (chart["now"], chart["end"]), name
+        six = next(cp for cp in sc["checkpoints"] if cp["after_seconds"] == 6 * 3600)
+        assert (six["at"], six["value"]) == (checkpoint, expected), name
+        for cp in sc["checkpoints"]:
+            assert _cursor_at(sc["line"], cp["at"]) == cp["value"], (name, cp)
+        assert (_cursor_at(sc["line"], reset - 0.05), _cursor_at(sc["line"], reset)) == (0.6, 1.0), name
+
+    # The table: its reset row at the reset's own instant, every row in time
+    # order by the instant it says — the 6-hour row of the same second before
+    # a reset a fraction into it — and each saying what the cursor reads there.
+    table = chart["table"]
+    instants = [qs.parse_instant(row["at"]) for row in table]
+    assert instants == sorted(instants)
+    reset_row = next(row for row in table if row.get("event", "").startswith("reported reset"))
+    assert qs.parse_instant(reset_row["at"]) == reset and "until" not in reset_row
+    assert reset_row["at"] == qs.iso_exact(reset)
+    span_row = next(row for row in table if row["at"] == qs.iso(checkpoint) and not row.get("event"))
+    assert span_row["scenario_no_new_use"] == span_row["scenario_recent_pace"] == expected
+    if before:
+        assert table.index(span_row) < table.index(reset_row)
+    for row in table:
+        if "scenario_no_new_use" not in row or row.get("event") == "now":
+            continue
+        at = qs.parse_instant(row.get("until") or row["at"])
+        for name, sc in chart["scenarios"].items():
+            assert row["scenario_" + name] == round(_cursor_at(sc["line"], at), 2), (name, row)
+
+
+def test_one_event_of_resets_a_fraction_apart_keeps_both_instants():
+    """Two resets in one second, a checkpoint at its whole second before
+    both: one event from the first to the last, each at its own instant."""
+    now = NOW + 0.25
+    first, last = (qs.parse_instant(_iso_exact(NOW + offset)) for offset in (21600.2, 21600.7))
+    chart = _chart_read_at(now, [NOW + 21600.2, NOW + 21600.7], "24h")
+    for name, sc in chart["scenarios"].items():
+        assert [(e["at"], e["last"], e["accounts"], e["adds"], e["total_after"]) for e in sc["schedule"]] \
+            == [(first, last, 2, 0.8, 2.0)], name
+        line = sc["line"]
+        assert [_cursor_at(line, t) for t in (NOW + 21600, first, last)] == [1.2, 1.6, 2.0], name
+        assert next(cp for cp in sc["checkpoints"] if cp["after_seconds"] == 6 * 3600)["value"] == 1.2
+    row = next(row for row in chart["table"] if row.get("event", "").startswith("reported reset"))
+    assert (row["at"], row["until"]) == (qs.iso_exact(first), qs.iso_exact(last))
+    assert row["scenario_no_new_use"] == 2.0
+    # Whole seconds are written as iso() writes them, and iso() is unchanged.
+    assert qs.iso_exact(NOW) == qs.iso(NOW) and qs.iso(first) == qs.iso(NOW + 21600)
+
+
+def test_the_widgets_own_lineat_agrees_with_the_checkpoints_around_a_fractional_reset():
+    """The real lineAt of widget.js, run on the published lines: at each
+    checkpoint it reads the checkpoint, a hair before the reset the total
+    before it, at the reset the total after it."""
+    node = _node()
+    assert node is not None, "a Node runtime is required for widget tests"
+    source = Path(__file__).with_name("widget.js").read_text(encoding="utf-8")
+    head = "    function lineAt(points, t) {"
+    assert source.count(head) == 1
+    body = "function lineAt(points, t) {" + source.split(head, 1)[1].split("\n    }\n", 1)[0] + "\n}"
+    cases = []
+    for fraction, offset, _before in FRACTIONAL_RESETS:
+        reset = qs.parse_instant(_iso_exact(NOW + offset))
+        for sc in _chart_read_at(NOW + fraction, [NOW + offset], "24h")["scenarios"].values():
+            checks = [[cp["at"], cp["value"]] for cp in sc["checkpoints"]] + [[reset - 0.05, 0.6], [reset, 1.0]]
+            cases.append({"line": sc["line"], "checks": checks})
+    script = body + textwrap.dedent("""
+        const cases = JSON.parse(process.env.LINE_CASES);
+        console.log(JSON.stringify(cases.map((c) => c.checks.map((check) => lineAt(c.line, check[0])))));
+    """)
+    result = subprocess.run([str(node), "-e", script], env={**os.environ, "LINE_CASES": json.dumps(cases)},
+                            text=True, capture_output=True, timeout=60, check=False)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert json.loads(result.stdout) == [[value for _t, value in case["checks"]] for case in cases]
+
+
+def _sightings_view(directory, first, horizon=None):
+    """Sweeps every 120 s from ``first`` to now. Account a: one source held
+    throughout and, at every other sweep, a reading seen at that sweep only
+    — every fourth of them beside another source observed within a second of
+    it at another value (the sources disagree). Account b holds throughout."""
+    store = quota_history.HistoryStore(directory)
+
+    def seen(offset):
+        a = {"app": (first - 100.0, .30, 86400)}
+        step = offset // 120
+        if step % 2 == 0:
+            a["rollout"] = (offset - 5.0, .31 + (step // 2 % 5) / 100.0, 86400)
+            if step // 2 % 4 == 0:
+                a["cli"] = (offset - 5.4, .40, 86400)
+        return {"a": a, "b": {"app": (first - 100.0, .50, 86400)}}
+
+    def snaps(offset):
+        return [snap("codex", account, [constraint("primary", ratio, reset=reset)], source=source,
+                     observed_abs=NOW + obs)
+                for account, sources in seen(offset).items() for source, (obs, ratio, reset) in sources.items()]
+
+    data = _scripted_sweeps(store, snaps, list(range(first, 1, 120)))
+    view = plugin.build_view(data, "", NOW)
+    view["reserve"] = (plugin.reserve_view(store, data, NOW, NOW, horizon=horizon, harness="codex",
+                                           name_accounts=True) if horizon
+                       else widget_reserve(store, data, NOW, NOW, harness="codex", name_accounts=True))
+    return view
+
+
+def test_the_chart_keeps_every_single_sweep_point_the_table_only_its_newest(tmp_path):
+    chart = _sightings_view(tmp_path, -10800)["reserve"]["chart"]
+    points = chart["points"]
+    assert len(points) == 45 and chart["past_clipped_before"] is None
+    assert sum(1 for _t, v in points if v is None) == 11
+    assert [t for t, _v in points] == sorted(t for t, _v in points)
+    # The payload's table is unchanged: a sample of the newest few only.
+    sampled = [[qs.parse_instant(row["at"]), row["observed"]] for row in chart["table"] if row.get("sighting")]
+    assert sampled == points[-qs.TABLE_PAST_ROWS:]
+
+
+NODE_SIGHTINGS_PAGES = r"""
+function click(env, key) {
+  const node = byFocus(env.root, key);
+  assert.ok(node, 'no node with data-focus ' + key);
+  node.listeners.click[0]({ stopPropagation() {} });
+}
+const details = (env) => classes(env.root, 'chart-table')[0];
+function page(env) {
+  const box = classes(details(env), 'sightings')[0];
+  assert.ok(box, 'the sightings are listed under Details');
+  return {
+    caption: walk(box).find((n) => n.tagName === 'CAPTION').textContent,
+    rows: walk(box).filter((n) => n.tagName === 'TR' && n.parentNode.tagName === 'TBODY')
+      .map((tr) => tr.childNodes.map((td) => td.textContent)),
+  };
+}
+const said = (p) => (p[1] === null ? ['not settled', 'sources disagree at this sweep']
+                                    : [p[1].toFixed(2), 'seen at this sweep only']);
+// The page shows points[lo, hi) in time order, each once in all of Details.
+function expectPage(env, points, lo, hi) {
+  const shown = page(env);
+  assert.equal(shown.caption, 'Seen at one sweep only · ' + (lo + 1) + '–' + hi + ' of ' + points.length);
+  assert.deepEqual(shown.rows.map((r) => r.slice(1)), points.slice(lo, hi).map(said));
+  shown.rows.forEach((r) => assert.ok(r[0].length > 4, 'a time on every row'));
+  const text = details(env).textContent;
+  const valued = points.slice(lo, hi).filter((p) => p[1] !== null).length;
+  assert.equal((text.match(/seen at this sweep only/g) || []).length, valued);
+  assert.equal((text.match(/sources disagree at this sweep/g) || []).length, hi - lo - valued);
+  assert.match(text, new RegExp(points.length + ' totals seen at one sweep only .* are listed in the table, not drawn'));
+}
+const at = (env, key) => byFocus(env.root, key);
+const disabled = (env, key) => at(env, key).getAttribute('aria-disabled') === 'true';
+
+(async () => {
+  const fx = JSON.parse(process.env.SIGHTINGS_FIXTURE);
+
+  // More than the table's newest 8, fewer than a page: every one, no pages.
+  const few = fx.small.reserve.chart.points;
+  assert.ok(few.length > 8 && few.length <= 20, String(few.length));
+  let env = await boot(fx.small);
+  expectPage(env, few, 0, few.length);
+  assert.equal(at(env, 'sightings:older'), undefined);
+  // The recorded sample keeps its own count and lists no sighting.
+  assert.match(details(env).textContent, /The table lists \d+ of \d+ recorded changes/);
+
+  // More than a page: the newest page first, in time order.
+  const points = fx.view.reserve.chart.points;
+  const N = points.length;
+  assert.ok(N > 40, String(N));
+  let current = fx.view;
+  env = await boot((url) => (/horizon=24h/.test(url) ? fx.day : current));
+  const open = details(env);
+  open.open = true;
+  open.listeners.toggle[0]();
+  expectPage(env, points, N - 20, N);
+  assert.ok(disabled(env, 'sightings:newer') && !disabled(env, 'sightings:older'));
+
+  // Older moves a page back, the keyboard stays on the button.
+  click(env, 'sightings:older');
+  expectPage(env, points, N - 40, N - 20);
+  assert.equal(env.document.activeElement.getAttribute('data-focus'), 'sightings:older');
+  assert.ok(!disabled(env, 'sightings:newer'));
+
+  // A poll keeps Details open, the page and the focus.
+  env.interval()();
+  await settle();
+  assert.equal(details(env).open, true);
+  expectPage(env, points, N - 40, N - 20);
+  assert.equal(env.document.activeElement.getAttribute('data-focus'), 'sightings:older');
+
+  // A new sighting at the next poll: the same page back from the newest,
+  // each older page on by one row.
+  const grown = JSON.parse(JSON.stringify(fx.view));
+  const more = grown.reserve.chart.points;
+  more.push([grown.reserve.chart.now - 30, 1.11]);
+  current = grown;
+  env.interval()();
+  await settle();
+  expectPage(env, more, more.length - 40, more.length - 20);
+
+  // To the oldest page; there Older says so, does nothing and keeps focus.
+  click(env, 'sightings:older');
+  expectPage(env, more, 0, more.length - 40);
+  assert.ok(disabled(env, 'sightings:older'));
+  click(env, 'sightings:older');
+  expectPage(env, more, 0, more.length - 40);
+  assert.equal(env.document.activeElement.getAttribute('data-focus'), 'sightings:older');
+
+  // Fewer sightings at a poll (older ones out of the span): the page is
+  // the last there is, not an empty one.
+  const shrunk = JSON.parse(JSON.stringify(fx.view));
+  shrunk.reserve.chart.points = shrunk.reserve.chart.points.slice(-25);
+  current = shrunk;
+  env.interval()();
+  await settle();
+  expectPage(env, shrunk.reserve.chart.points, 0, 5);
+  assert.ok(disabled(env, 'sightings:older'));
+  assert.equal(env.document.activeElement.getAttribute('data-focus'), 'sightings:older');
+  click(env, 'sightings:newer');
+  expectPage(env, shrunk.reserve.chart.points, 5, 25);
+  assert.equal(env.document.activeElement.getAttribute('data-focus'), 'sightings:newer');
+  click(env, 'sightings:older');
+
+  // Another span is another list: it starts at its newest page.
+  click(env, 'horizon:24h');
+  await settle();
+  const day = fx.day.reserve.chart;
+  assert.equal(day.horizon, '24h');
+  expectPage(env, day.points, day.points.length - 20, day.points.length);
+})().catch((error) => {
+  console.error(error && error.stack ? error.stack : error);
+  process.exitCode = 1;
+});
+"""
+
+
+def test_real_widget_pages_through_every_single_sweep_point(tmp_path):
+    import test_quotas
+
+    node = _node()
+    assert node is not None, "a Node runtime is required for widget tests"
+    fixture = {"small": _sightings_view(tmp_path / "small", -3000),
+               "view": _sightings_view(tmp_path / "week", -10800),
+               "day": _sightings_view(tmp_path / "day", -10800, horizon="24h")}
+    assert fixture["view"]["reserve"]["chart"]["horizon"] == "7d"
+    harness = test_quotas.NODE_WIDGET_MATRIX.split("(async () => {")[0]
+    widget_path = Path(__file__).with_name("widget.js").resolve()
+    result = subprocess.run(
+        [str(node), "-e", textwrap.dedent(harness + NODE_SIGHTINGS_PAGES)],
+        cwd=widget_path.parent,
+        env={**dict(os.environ), "WIDGET_PATH": str(widget_path), "SIGHTINGS_FIXTURE": json.dumps(fixture)},
+        text=True, capture_output=True, timeout=60, check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+# Owner, 8 Oct: the 5-hour chart could not be found. A limit's name is the
+# control that charts it, and now looks like one: the chart mark and "Show
+# chart" inside the same button, one handler, its spoken label unchanged.
+
+
+def _five_hour_and_weekly(directory):
+    """Two Claude accounts with a 5-hour and a weekly limit; the 5-hour one
+    has the lowest share left, so it is the family's default chart."""
+    store = quota_history.HistoryStore(directory)
+
+    def snaps(offset):
+        return [snap("claude", sid, [constraint("five_hour", five, FIVE_H, reset=3600, label="5 hour"),
+                                     constraint("seven_day", week, WEEK, reset=3 * 86400, label="7 day")],
+                     observed_abs=NOW + offset - 5)
+                for sid, five, week in (("p", .70, .20), ("q", .60, .30))]
+
+    data = _scripted_sweeps(store, snaps, list(range(-2400, 1, 120)), sids=("p", "q"), harness="claude")
+    base = plugin.build_view(data, "", NOW)
+
+    def answer(group_key, horizon):
+        view = json.loads(json.dumps(base))
+        view["reserve"] = plugin.reserve_view(store, data, NOW, NOW, harness="claude", group=group_key,
+                                              horizon=horizon, name_accounts=True)
+        return view
+
+    first = answer("", "24h")
+    keys = {g["key"].split("|")[1]: g for g in first["reserve"]["summary"]["groups"]}
+    five, week = keys["five_hour"], keys["seven_day"]
+    assert five["tightest"] and not week["tightest"]
+    assert first["reserve"]["chart"]["group_key"] == five["key"] and first["reserve"]["chart"]["horizon"] == "24h"
+    weekly = answer(week["key"], "7d")
+    assert weekly["reserve"]["chart"]["group_key"] == week["key"]
+    return {"five": first, "week": weekly, "five_key": five["key"], "week_key": week["key"]}
+
+
+NODE_FIVE_HOUR_TO_WEEKLY = r"""
+const nameOf = (env, key) => byFocus(env.root, 'limit:' + key);
+const rowOf = (env, key) => nameOf(env, key).parentNode;
+const cueOf = (env, key) => classes(nameOf(env, key), 'l-chart')[0];
+const below = (env, key) => {
+  const row = rowOf(env, key);
+  const next = row.parentNode.childNodes[row.parentNode.childNodes.indexOf(row) + 1];
+  return next && String(next.className).split(/\s+/).includes('tl-block') ? next : null;
+};
+function expectCharted(env, shown, other) {
+  assert.equal(nameOf(env, shown).getAttribute('aria-pressed'), 'true');
+  assert.equal(nameOf(env, other).getAttribute('aria-pressed'), 'false');
+  assert.equal(cueOf(env, shown).textContent, 'Hide chart');
+  assert.equal(cueOf(env, other).textContent, 'Show chart');
+  assert.match(nameOf(env, shown).getAttribute('aria-label'), / — its timeline is shown below$/);
+  assert.match(nameOf(env, other).getAttribute('aria-label'), / — show its timeline$/);
+  assert.ok(below(env, shown), 'the timeline stands under the charted limit');
+  assert.equal(below(env, other), null);
+  assert.equal(classes(env.root, 'tl-block').length, 1);
+}
+
+(async () => {
+  const fx = JSON.parse(process.env.SWITCH_FIXTURE);
+  const asked = (url) => decodeURIComponent(url);
+  const env = await boot((url) => (asked(url).includes('group=' + fx.week_key) ? fx.week : fx.five));
+  const five = fx.five_key, week = fx.week_key;
+
+  // The name is a visible control: the chart mark and two words inside the
+  // one button, which keeps its one handler and its spoken label.
+  [five, week].forEach((key) => {
+    const btn = nameOf(env, key);
+    assert.equal(btn.tagName, 'BUTTON');
+    assert.equal(btn.listeners.click.length, 1);
+    const cue = cueOf(env, key);
+    assert.equal(cue.parentNode, btn);
+    assert.equal(cue.getAttribute('data-focus'), null);
+    assert.equal(walk(cue).filter((n) => n.tagName === 'SVG').length, 1, 'the chart mark');
+    assert.equal(walk(btn).filter((n) => n !== btn && n.tagName === 'BUTTON').length, 0);
+    assert.match(classes(btn, 'l-name-text')[0].textContent, key === five ? /^5-hour$/ : /^Weekly$/);
+  });
+  // The family's lowest-left limit, the 5-hour one, is charted first.
+  expectCharted(env, five, week);
+  assert.equal(env.calls.length, 1);
+
+  // 5 hour -> weekly: the weekly name asks once, with reuse, for its chart
+  // over its own span, and its timeline replaces the 5-hour one.
+  nameOf(env, week).focus();
+  nameOf(env, week).listeners.click[0]({ stopPropagation() {} });
+  assert.match(below(env, week).textContent, /Loading the timeline for this limit/);
+  await settle();
+  assert.equal(env.calls.length, 2);
+  const url = asked(env.calls[1].url);
+  assert.ok(url.includes('group=' + week), url);
+  assert.match(url, /horizon=7d/);
+  assert.match(url, /reuse=1/);
+  expectCharted(env, week, five);
+  assert.ok(walk(below(env, week)).some((n) => n.getAttribute('class') === 'chart-svg'));
+  assert.equal(byFocus(env.root, 'horizon:7d').getAttribute('aria-pressed'), 'true');
+  assert.equal(env.document.activeElement.getAttribute('data-focus'), 'limit:' + week);
+
+  // ... and back: the 5-hour chart over 24 hours.
+  nameOf(env, five).focus();
+  nameOf(env, five).listeners.click[0]({ stopPropagation() {} });
+  await settle();
+  assert.match(asked(env.calls.at(-1).url), /horizon=24h/);
+  expectCharted(env, five, week);
+  assert.equal(env.document.activeElement.getAttribute('data-focus'), 'limit:' + five);
+
+  // On the charted limit the same button folds the timeline, and says so.
+  nameOf(env, five).listeners.click[0]({ stopPropagation() {} });
+  assert.equal(cueOf(env, five).textContent, 'Show chart');
+  assert.equal(nameOf(env, five).getAttribute('aria-pressed'), 'false');
+  assert.equal(walk(env.root).filter((n) => n.getAttribute('class') === 'chart-svg').length, 0);
+})().catch((error) => {
+  console.error(error && error.stack ? error.stack : error);
+  process.exitCode = 1;
+});
+"""
+
+
+def test_real_widget_switches_from_the_five_hour_chart_to_the_weekly_one(tmp_path):
+    import test_quotas
+
+    node = _node()
+    assert node is not None, "a Node runtime is required for widget tests"
+    fixture = _five_hour_and_weekly(tmp_path)
+    harness = test_quotas.NODE_WIDGET_MATRIX.split("(async () => {")[0]
+    widget_path = Path(__file__).with_name("widget.js").resolve()
+    result = subprocess.run(
+        [str(node), "-e", textwrap.dedent(harness + NODE_FIVE_HOUR_TO_WEEKLY)],
+        cwd=widget_path.parent,
+        env={**dict(os.environ), "WIDGET_PATH": str(widget_path), "SWITCH_FIXTURE": json.dumps(fixture)},
+        text=True, capture_output=True, timeout=60, check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+# A focused page button whose pages go (45 sightings, then 20 or fewer, then
+# none) hands the keyboard to the Details summary; a span left while its
+# chart had no sightings yet is still another list.
+
+NODE_SIGHTINGS_FOCUS = r"""
+function click(env, key) {
+  const node = byFocus(env.root, key);
+  assert.ok(node, 'no node with data-focus ' + key);
+  node.listeners.click[0]({ stopPropagation() {} });
+}
+const details = (env) => classes(env.root, 'chart-table')[0];
+const listed = (env) => classes(details(env), 'sightings')[0];
+const caption = (env) => walk(listed(env)).find((n) => n.tagName === 'CAPTION').textContent;
+const focused = (env) => env.document.activeElement;
+const inTree = (env, node) => walk(env.root).includes(node);
+// Nodes are compared by identity only: a failed deepEqual would print the tree.
+function onSummary(env) {
+  const summary = byFocus(env.root, 'chart-table');
+  const at = focused(env);
+  assert.ok(summary && at === summary,
+    'the keyboard is on the Details summary, not on ' + (at && at.getAttribute('data-focus')));
+  assert.ok(inTree(env, at), 'the focus is on a node on the page');
+}
+function withPoints(view, points) {
+  const out = JSON.parse(JSON.stringify(view));
+  out.reserve.chart.points = points;
+  return out;
+}
+async function poll(env) {
+  const before = env.calls.length;
+  env.interval()();
+  await settle();
+  return env.calls.slice(before);
+}
+
+(async () => {
+  const fx = JSON.parse(process.env.SIGHTINGS_FIXTURE);
+  const points = fx.view.reserve.chart.points;
+  const N = points.length;
+  assert.equal(N, 45);
+
+  // 45 → 20 or fewer → none, the keyboard on Older throughout.
+  let current = fx.view;
+  let env = await boot(() => current);
+  details(env).open = true;
+  details(env).listeners.toggle[0]();
+  click(env, 'sightings:older');
+  assert.equal(caption(env), 'Seen at one sweep only · 6–25 of 45');
+  assert.equal(focused(env).getAttribute('data-focus'), 'sightings:older');
+  const asked = await poll(env);
+  assert.equal(asked.length, 1, JSON.stringify(asked));
+  assert.equal(focused(env).getAttribute('data-focus'), 'sightings:older');
+  assert.ok(inTree(env, focused(env)), 'the focus is on a node on the page');
+
+  current = withPoints(fx.view, points.slice(-15));
+  assert.deepEqual(await poll(env), asked, 'no other request');
+  assert.equal(details(env).open, true);
+  assert.ok(!byFocus(env.root, 'sightings:older'), 'no page buttons');
+  assert.equal(caption(env), 'Seen at one sweep only · 1–15 of 15');
+  onSummary(env);
+
+  current = withPoints(fx.view, []);
+  assert.deepEqual(await poll(env), asked, 'no other request');
+  assert.equal(details(env).open, true);
+  assert.ok(!listed(env), 'no sightings listed');
+  onSummary(env);
+  assert.deepEqual(await poll(env), asked);
+  onSummary(env);
+
+  // They come back: the newest page, the keyboard left on the summary.
+  current = fx.view;
+  assert.deepEqual(await poll(env), asked);
+  assert.equal(caption(env), 'Seen at one sweep only · 26–45 of 45');
+  onSummary(env);
+  assert.equal(env.calls.filter((c) => c.method !== 'GET').length, 0);
+
+  // Away to a span with no sightings yet and back: the newest page again.
+  let day = withPoints(fx.day, []);
+  current = fx.view;
+  env = await boot((url) => (/horizon=24h/.test(url) ? day : current));
+  details(env).open = true;
+  details(env).listeners.toggle[0]();
+  click(env, 'sightings:older');
+  assert.equal(caption(env), 'Seen at one sweep only · 6–25 of 45');
+  click(env, 'horizon:24h');
+  await settle();
+  assert.equal(details(env).open, true);
+  assert.ok(!listed(env), 'no sightings listed');
+  click(env, 'horizon:7d');
+  await settle();
+  assert.equal(caption(env), 'Seen at one sweep only · 26–45 of 45');
+
+  // And when the empty span's own sightings arrive, at its newest page.
+  click(env, 'sightings:older');
+  click(env, 'horizon:24h');
+  await settle();
+  assert.ok(!listed(env), 'no sightings listed');
+  day = fx.day;
+  await poll(env);
+  const M = fx.day.reserve.chart.points.length;
+  assert.ok(M > 20, String(M));
+  assert.equal(caption(env), 'Seen at one sweep only · ' + (M - 19) + '–' + M + ' of ' + M);
+})().catch((error) => {
+  console.error(error && error.stack ? error.stack : error);
+  process.exitCode = 1;
+});
+"""
+
+
+def test_real_widget_keeps_the_keyboard_when_the_sightings_pages_go(tmp_path):
+    import test_quotas
+
+    node = _node()
+    assert node is not None, "a Node runtime is required for widget tests"
+    fixture = {"view": _sightings_view(tmp_path / "week", -10800),
+               "day": _sightings_view(tmp_path / "day", -10800, horizon="24h")}
+    assert fixture["view"]["reserve"]["chart"]["horizon"] == "7d"
+    harness = test_quotas.NODE_WIDGET_MATRIX.split("(async () => {")[0]
+    widget_path = Path(__file__).with_name("widget.js").resolve()
+    result = subprocess.run(
+        [str(node), "-e", textwrap.dedent(harness + NODE_SIGHTINGS_FOCUS)],
+        cwd=widget_path.parent,
+        env={**dict(os.environ), "WIDGET_PATH": str(widget_path), "SIGHTINGS_FIXTURE": json.dumps(fixture)},
         text=True, capture_output=True, timeout=60, check=False,
     )
     assert result.returncode == 0, result.stdout + result.stderr
