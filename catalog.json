@@ -1,8 +1,8 @@
 {
-  "schema_version": 1,
-  "name": "OuroborosHub",
   "description": "Official Ouroboros skills catalog.",
+  "name": "OuroborosHub",
   "raw_base_url": "https://raw.githubusercontent.com/razzant/OuroborosHub/main",
+  "schema_version": 1,
   "skills": [
     {
       "description": "Геоданные 2ГИС: поиск мест и организаций, геокодирование адресов и обратное геокодирование координат, построение маршрутов (авто, пешком, вело, самокат, мото, грузовик, такси), расчёт изохрон (зоны достижимости), создание статической карты PNG с маркерами, линиями и полигонами и кликабельные ссылки на интерактивную карту 2ГИС. Требует API-ключ 2ГИС.",
@@ -355,93 +355,93 @@
       "files": [
         {
           "path": "SKILL.md",
-          "size": 62029,
-          "sha256": "5875abe9d67f831d0deaf635d6b22f4d2791bfba8dfa7515b74bc18032f7ba80"
+          "sha256": "5875abe9d67f831d0deaf635d6b22f4d2791bfba8dfa7515b74bc18032f7ba80",
+          "size": 62029
         },
         {
           "path": "plugin.py",
-          "size": 78281,
-          "sha256": "375008d09232bd4ff08cf9851d1958ec9fb105bc1a8a85da61dcbd200a87b6d7"
+          "sha256": "375008d09232bd4ff08cf9851d1958ec9fb105bc1a8a85da61dcbd200a87b6d7",
+          "size": 78281
         },
         {
           "path": "quota_history.py",
-          "size": 32793,
-          "sha256": "be14c2935fee2775df278ee06c9f357e6e548f0af812c9ce56165fd9f4c5e29a"
+          "sha256": "be14c2935fee2775df278ee06c9f357e6e548f0af812c9ce56165fd9f4c5e29a",
+          "size": 32793
         },
         {
           "path": "quota_summary.py",
-          "size": 134572,
-          "sha256": "67b9f4aabac271831db261e2496ae7a99e2b83272ba7f91e9835bc93dd052284"
+          "sha256": "67b9f4aabac271831db261e2496ae7a99e2b83272ba7f91e9835bc93dd052284",
+          "size": 134572
         },
         {
           "path": "test_bars.py",
-          "size": 10918,
-          "sha256": "858a511456e32cfe2cbdbb5e3dfae68debf0c86221aa6034fba8ae55a74efd5b"
+          "sha256": "858a511456e32cfe2cbdbb5e3dfae68debf0c86221aa6034fba8ae55a74efd5b",
+          "size": 10918
         },
         {
           "path": "test_clarity.py",
-          "size": 9288,
-          "sha256": "862779db2ff2cd524cb42c28ec9a4db26c0a5a1aa0ea613ebd1c38140ffd6839"
+          "sha256": "862779db2ff2cd524cb42c28ec9a4db26c0a5a1aa0ea613ebd1c38140ffd6839",
+          "size": 9288
         },
         {
           "path": "test_last_known.py",
-          "size": 20630,
-          "sha256": "08f94201763b4ce4fa6ca885f0bc550b0076c4b3f49456559b70d35f042fc140"
+          "sha256": "08f94201763b4ce4fa6ca885f0bc550b0076c4b3f49456559b70d35f042fc140",
+          "size": 20630
         },
         {
           "path": "test_model_holds.py",
-          "size": 35560,
-          "sha256": "51238b820d83fc6c4d771d9a2de05f52beb989e8c83f6794c8407ace2855607e"
+          "sha256": "51238b820d83fc6c4d771d9a2de05f52beb989e8c83f6794c8407ace2855607e",
+          "size": 35560
         },
         {
           "path": "test_order_focus.py",
-          "size": 29138,
-          "sha256": "1e6e5c5d615909433713a09d1a99a16426ead83a77668db618b3f3d04ce47406"
+          "sha256": "1e6e5c5d615909433713a09d1a99a16426ead83a77668db618b3f3d04ce47406",
+          "size": 29138
         },
         {
           "path": "test_quotas.py",
-          "size": 79320,
-          "sha256": "537f4a089cb83c8b4b94bf6ccb9242e5821ebd9f16273f60bfb679e1ec9d3859"
+          "sha256": "537f4a089cb83c8b4b94bf6ccb9242e5821ebd9f16273f60bfb679e1ec9d3859",
+          "size": 79320
         },
         {
           "path": "test_r3.py",
-          "size": 67021,
-          "sha256": "2916d1a6a2ed82d88395220943be7ad481bd684213c31fb0d54693f88b073311"
+          "sha256": "2916d1a6a2ed82d88395220943be7ad481bd684213c31fb0d54693f88b073311",
+          "size": 67021
         },
         {
           "path": "test_repair_r2.py",
-          "size": 17996,
-          "sha256": "17527df511e6fc603cb52c5ebfe2bc184cdf4fb2c99d08f098dd924eab6c452b"
+          "sha256": "17527df511e6fc603cb52c5ebfe2bc184cdf4fb2c99d08f098dd924eab6c452b",
+          "size": 17996
         },
         {
           "path": "test_repair_r3.py",
-          "size": 25357,
-          "sha256": "0d74640f493fdd7e250a8bdfc9f3dded3338b7f4587de498213885a19d052d58"
+          "sha256": "0d74640f493fdd7e250a8bdfc9f3dded3338b7f4587de498213885a19d052d58",
+          "size": 25357
         },
         {
           "path": "test_repair_r4.py",
-          "size": 19901,
-          "sha256": "be6083136e6d754b548c8ad14408c404266c28176d6ad2d99083a13130b15b42"
+          "sha256": "be6083136e6d754b548c8ad14408c404266c28176d6ad2d99083a13130b15b42",
+          "size": 19901
         },
         {
           "path": "test_reserve.py",
-          "size": 216847,
-          "sha256": "f2a91c26c6018c9f440a3c5b75ea7aeb6b40a7dad616cceae8a0aa0893c05704"
+          "sha256": "f2a91c26c6018c9f440a3c5b75ea7aeb6b40a7dad616cceae8a0aa0893c05704",
+          "size": 216847
         },
         {
           "path": "test_robust_widget.py",
-          "size": 13449,
-          "sha256": "fd7d7d755463be75283ed92648ea00bbebc956a7056c9be987e02c5d8fd34487"
+          "sha256": "fd7d7d755463be75283ed92648ea00bbebc956a7056c9be987e02c5d8fd34487",
+          "size": 13449
         },
         {
           "path": "test_scope_identity.py",
-          "size": 10297,
-          "sha256": "f84d33ccee5d45533ede85a17afe6c77f3c57b5e7e2797472aead402b2f52a42"
+          "sha256": "f84d33ccee5d45533ede85a17afe6c77f3c57b5e7e2797472aead402b2f52a42",
+          "size": 10297
         },
         {
           "path": "widget.js",
-          "size": 231865,
-          "sha256": "52088399d8a3b3e5a778c225d53d1d31c0b660f93f1745aa3ca33ad52362a7c2"
+          "sha256": "52088399d8a3b3e5a778c225d53d1d31c0b660f93f1745aa3ca33ad52362a7c2",
+          "size": 231865
         }
       ],
       "name": "claudexor_quotas",
@@ -490,54 +490,69 @@
       "version": "0.1.2"
     },
     {
-      "description": "Read-only context-size charts for model requests over a chosen horizon, with honest telemetry coverage.",
+      "description": "Read-only chart of model-request input sizes from the local usage store, with honest freshness and coverage.",
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "196482a663ca00595ba0adb393e39194e88ac873313929612f9d36fd4ae31899",
-          "size": 31166
+          "sha256": "0950c2c12faa8bb0124aa8bd087e41d60dc51b295423522f1cc1316b030476ac",
+          "size": 19496
         },
         {
           "path": "lens_core.py",
-          "sha256": "dfc8404adf65f3dbc12caefac9171cca5e9f17017ea3ee4176b530f0ec736351",
-          "size": 48669
+          "sha256": "5faa96a2018a328a81d34a272aa32fa637e78327b23941d4c5201a74dfc719f2",
+          "size": 57660
+        },
+        {
+          "path": "lens_store.py",
+          "sha256": "e324b11d55abae4b5e6847c84505aa6ebc8c38d7f66395386e157e937d7b4274",
+          "size": 24376
         },
         {
           "path": "plugin.py",
-          "sha256": "41ee8a35db43cb68b03c8706d4a500769de2a36a701d17408af89de399874135",
-          "size": 8036
+          "sha256": "3910ccdc0adcf95f0cf55839da75478d6d9eaaf0e136f6b51f30570d692f00cf",
+          "size": 12358
+        },
+        {
+          "path": "tests/store_fixture.py",
+          "sha256": "0fe78cfd1c368f0afdcd2198c3823c9f3fa7b2001eeb35ed022db73dba200899",
+          "size": 10526
         },
         {
           "path": "tests/test_lens_core.py",
-          "sha256": "2dc346d2901d8bd0facf978c5579518b0218304e5b1adc88524a513e3064f732",
-          "size": 79402
+          "sha256": "d5d6116756c8cb6099776bf5163b6bee896b6c26a20936eadc2309feca0ae0d4",
+          "size": 80305
+        },
+        {
+          "path": "tests/test_lens_store.py",
+          "sha256": "d3671fa3b1710c7ba57da237f20b78c83b35a89e302fa99be6e742e036d43030",
+          "size": 33107
         },
         {
           "path": "tests/test_plugin_routes.py",
-          "sha256": "c90e87f06b513e7f7566bdbb21bf09dde121f0a2ead04a5ff4b69e7579a8bf0b",
-          "size": 24712
+          "sha256": "f7c6ad69316107d9875ec0f6c5e33c84829e20ce1e2aa8ded70ab94e98164d45",
+          "size": 29993
         },
         {
           "path": "tests/test_widget_contract.py",
-          "sha256": "12333ff7ae77a9608781c0dd08cbce0a0beea0769875445cc7565134a80e4158",
-          "size": 10200
+          "sha256": "59360dfb104d5974c9ae2bcd06baa55b234a788973061d4892d58b88b21a55b0",
+          "size": 13719
         },
         {
           "path": "tests/widget_smoke.cjs",
-          "sha256": "f3c3b08adcdf86efb83b2d04010a81b0190aab61f4a7091c86f20a98d5a48411",
-          "size": 24084
+          "sha256": "42351a25f370e24e11d7f077dfbcf4df0140f993ca94d01d02d7f9ba386f4a46",
+          "size": 36277
         },
         {
           "path": "widget.js",
-          "sha256": "ac846dda9f7cb178306024d66f5871c29148af6cae98fd64954ed490a22bc820",
-          "size": 76801
+          "sha256": "b33889540f95b1e0b3f82cfe19a8a067b64fa5562da6f9afbf20adcdc30ef937",
+          "size": 73448
         }
       ],
       "name": "context-lens",
       "slug": "context-lens",
       "type": "extension",
-      "version": "1.1.3",
-      "when_to_use": "The owner wants to understand reported input sizes, their spread and growth within tasks."
+      "version": "1.2.0",
+      "when_to_use": "The owner wants to understand reported input sizes, their spread and which requests belong to one task."
     },
     {
       "description": "Помогает выбрать клинику и врача, посмотреть свободные слоты и оформить очную запись через DocDoc API 1.0.13.",
@@ -749,6 +764,30 @@
       "type": "extension",
       "version": "0.1.0",
       "when_to_use": "User asks about geopolitical events, conflict data, news stories, entities, energy infrastructure, macro-finance indicators, prediction markets, or needs real-time structured intelligence. Covers: armed clashes, protests, disasters, political events, CAMEO+ coded events, clustered news stories with article evidence, entity profiles, GEM energy assets, macro-finance quotes/series, Kalshi prediction market probabilities, and web research with source extraction."
+    },
+    {
+      "description": "Основной веб-поиск этой установки. Для обычного поиска внешней информации сначала используй GigaSearch; при явном выборе пользователя или недоступности сервиса выбери подходящую альтернативу.",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "sha256": "48eed09170f3a27bbea27b16c16dbecafc3ac16935c3d9bbb459830abde22bae",
+          "size": 5578
+        },
+        {
+          "path": "plugin.py",
+          "sha256": "ff04e5c038e83e2768c874f994cbfb06f74eefebaebd0afd02ac9747a448c2af",
+          "size": 8974
+        },
+        {
+          "path": "test_gigasearch.py",
+          "sha256": "37ca6babf5fe17a8849676ca0b7a9dbc740e3479065e6c0f4ab6dd8996b23dbe",
+          "size": 9908
+        }
+      ],
+      "name": "gigasearch",
+      "slug": "gigasearch",
+      "type": "extension",
+      "version": "0.1.1"
     },
     {
       "description": "Universal Google Workspace integration for Google Sheets, Docs, and Drive via Service Account authentication.",
@@ -2074,30 +2113,6 @@
       "slug": "yylo-tasks",
       "type": "instruction",
       "version": "0.1.0"
-    },
-    {
-      "slug": "gigasearch",
-      "name": "gigasearch",
-      "version": "0.1.1",
-      "type": "extension",
-      "files": [
-        {
-          "path": "SKILL.md",
-          "sha256": "48eed09170f3a27bbea27b16c16dbecafc3ac16935c3d9bbb459830abde22bae",
-          "size": 5578
-        },
-        {
-          "path": "plugin.py",
-          "sha256": "ff04e5c038e83e2768c874f994cbfb06f74eefebaebd0afd02ac9747a448c2af",
-          "size": 8974
-        },
-        {
-          "path": "test_gigasearch.py",
-          "sha256": "37ca6babf5fe17a8849676ca0b7a9dbc740e3479065e6c0f4ab6dd8996b23dbe",
-          "size": 9908
-        }
-      ],
-      "description": "Основной веб-поиск этой установки. Для обычного поиска внешней информации сначала используй GigaSearch; при явном выборе пользователя или недоступности сервиса выбери подходящую альтернативу."
     }
   ]
 }
