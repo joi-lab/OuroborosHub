@@ -6,11 +6,13 @@ the bundled-Node fake DOM of test_quotas. What is checked is what the widget
 sets on each bar — its height, its marks, its words — not the style sheet.
 """
 import json
+import html
 import os
 import subprocess
 import time
 from pathlib import Path
 
+import pytest
 import plugin
 import quota_history as qh
 import quota_summary as qs
@@ -58,7 +60,7 @@ const has = (c, name) => String(c.className).split(/\s+/).includes(name);
   assert.match(b[1].title, /last known, read .* not current/);
   // The figure is the current readings alone (owner choice, 0.7.0): the
   // last-known values stand under it, dated and named, never inside it.
-  assert.match(classes(r, 'l-fig')[0].textContent, /^2\.06 of 9$/);
+  assert.match(classes(r, 'l-fig')[0].textContent, /^2\.06 of 9 accounts$/);
   assert.match(classes(r, 'l-sub')[0].textContent, /^Last known 1\.40 · /);
   assert.match(classes(r, 'l-sub')[0].title, /not in the figure: 1\.40 account-windows of 2 accounts/);
   assert.match(classes(r, 'l-sub')[0].title, /The figure: 2\.06 of 7 current accounts/);
@@ -90,7 +92,7 @@ const has = (c, name) => String(c.className).split(/\s+/).includes(name);
   assert.match(unknown[0].title, /unknown — its window reset after the last reading/);
   assert.match(unknown[0].title, /unknown, not counted, never a zero/);
   assert.doesNotMatch(unknown[0].title, /: \S+% left/);
-  assert.match(classes(r, 'l-fig')[0].textContent, /^1\.00 of 3$/);
+  assert.match(classes(r, 'l-fig')[0].textContent, /^1\.00 of 3 accounts$/);
   assert.match(classes(r, 'l-tail')[0].textContent, /1 unknown — not counted/);
 
   // 3. A crowded row: every account still has a bar of its own (narrower,
@@ -117,7 +119,7 @@ const has = (c, name) => String(c.className).split(/\s+/).includes(name);
   r = row(env, g);
   assert.equal(bars(r).length, 41);
   assert.ok(bars(r).every((c) => has(c, 'last') && heightOf(c) === 50));
-  assert.match(classes(r, 'l-fig')[0].textContent, /^— of 41$/);
+  assert.match(classes(r, 'l-fig')[0].textContent, /^— of 41 accounts$/);
   assert.match(classes(r, 'l-fig')[0].title, /^No current reading — not zero\./);
   assert.match(classes(r, 'l-sub')[0].textContent, /^Last known 20\.50 · /);
   assert.match(classes(r, 'l-sub')[0].title, /The figure: no current reading\./);
@@ -131,7 +133,7 @@ const has = (c, name) => String(c.className).split(/\s+/).includes(name);
   g = only(fx.zero);
   r = row(env, g);
   assert.deepEqual(bars(r).map((c) => c.getAttribute('data-state')), ['last_known', 'current', 'current']);
-  assert.match(classes(r, 'l-fig')[0].textContent, /^0\.00 of 3$/);
+  assert.match(classes(r, 'l-fig')[0].textContent, /^0\.00 of 3 accounts$/);
   assert.doesNotMatch(classes(r, 'l-fig')[0].title, /No current reading/);
   assert.match(classes(r, 'l-sub')[0].textContent, /^Last known 0\.50 · /);
   assert.match(byFocus(env.root, 'limit:' + g.key).getAttribute('aria-label'),
@@ -139,7 +141,7 @@ const has = (c, name) => String(c.className).split(/\s+/).includes(name);
   // With no last-known value the line under a measured zero is its average.
   env = await boot(fx.zeroOnly);
   r = row(env, only(fx.zeroOnly));
-  assert.match(classes(r, 'l-fig')[0].textContent, /^0\.00 of 2$/);
+  assert.match(classes(r, 'l-fig')[0].textContent, /^0\.00 of 2 accounts$/);
   assert.match(classes(r, 'l-sub')[0].textContent, /^0% avg left$/);
 })().catch((error) => {
   console.error(error && error.stack ? error.stack : error);
@@ -148,15 +150,16 @@ const has = (c, name) => String(c.className).split(/\s+/).includes(name);
 """
 
 
-def _view(tmp_path, name, readings, ended=()):
+def _view(tmp_path, name, readings, ended=(), windows=(WEEK,)):
     now = time.time()
     rows, profiles = [], []
     for i, (used, fresh, cooling) in enumerate(readings):
         sid = f'{name}{i:02d}'
         # An index in ``ended`` reports a reset that has already passed.
         reset = qs.iso(now - 600) if i in ended else None
-        constraints = [{'id': 'primary', 'label': 'primary', 'used_ratio': used, 'window_seconds': WEEK,
-                        'resets_at': reset}]
+        constraints = [{'id': 'primary' if window == WEEK else 'secondary', 'label': 'primary',
+                        'used_ratio': used, 'window_seconds': window, 'resets_at': reset}
+                       for window in windows]
         if cooling:
             constraints.append({'id': 'cooldown', 'used_ratio': None, 'window_seconds': None,
                                 'cooldown_until': qs.iso(now + 600)})
@@ -165,8 +168,8 @@ def _view(tmp_path, name, readings, ended=()):
     data = payload(rows, profiles, harnesses=('codex',))
     view = plugin.build_view(data, '')
     store = qh.HistoryStore(tmp_path / name)
-    view['reserve'] = plugin.reserve_view(store, data, now, now, harness='codex')
-    assert len(view['reserve']['summary']['groups']) == 1
+    view['reserve'] = plugin.reserve_view(store, data, now, now, harness='codex', name_accounts=True)
+    assert len(view['reserve']['summary']['groups']) == len(windows)
     return view
 
 
@@ -198,3 +201,94 @@ def test_real_widget_draws_each_share_to_scale(tmp_path):
         text=True, capture_output=True, timeout=60, check=False,
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+# Actual browser geometry: a document can have no horizontal scroll while its
+# flex children escape the strip and paint over the caption beside it.
+ROW_GEOMETRY = """() => {
+  const rect = (e) => {
+    const r = e.getBoundingClientRect();
+    return {left:r.left, right:r.right, top:r.top, bottom:r.bottom, width:r.width, height:r.height};
+  };
+  return {width:innerWidth, scrollWidth:document.documentElement.scrollWidth,
+    rows:[...document.querySelectorAll('.lrow')].map((row) => ({
+      row:rect(row), strip:rect(row.querySelector('.bars')),
+      bars:[...row.querySelectorAll('.bar')].map(rect),
+      name:rect(row.querySelector('.l-name')), figure:rect(row.querySelector('.l-fig')),
+      caption:rect(row.querySelector('.l-sub')), control:rect(row.querySelector('.l-chart'))
+    }))};
+}"""
+
+
+def _mount_layout_frame(page, view, width, source=None, theme='light'):
+    # Only the data transport is stubbed. Run the unmodified widget and its
+    # stylesheet inside an opaque-origin iframe at the actual widget width.
+    source = source if source is not None else Path(__file__).with_name('widget.js').read_text()
+    stub = 'window.fetch = async () => ({ok:true,status:200,text:async () => ' + json.dumps(json.dumps(view)) + '});'
+    doc = ('<!doctype html><html data-theme="' + theme + '"><head></head><body><div id="root"></div>'
+           + '<script>' + stub + '</script><script>' + source.replace('</script', '<\\/script')
+           + '</script></body></html>')
+    page.set_content('<iframe sandbox="allow-scripts" style="border:0;width:' + str(width)
+                     + 'px;height:1400px" srcdoc="' + html.escape(doc, quote=True) + '"></iframe>')
+    frame = page.frames[1]
+    frame.wait_for_selector('.lrow')
+    frame.wait_for_selector('[data-focus="refresh"]:not([disabled])')
+    return frame
+
+
+def _assert_row_geometry(geometry):
+    tolerance = 1
+    assert geometry['scrollWidth'] <= geometry['width'] + tolerance, geometry
+    heights, control_edges = [], []
+
+    def separate(a, b):
+        return (a['right'] <= b['left'] + tolerance or b['right'] <= a['left'] + tolerance
+                or a['bottom'] <= b['top'] + tolerance or b['bottom'] <= a['top'] + tolerance)
+
+    for row in geometry['rows']:
+        strip = row['strip']
+        assert len(row['bars']) == 41
+        for bar in row['bars']:
+            assert bar['left'] >= strip['left'] - tolerance and bar['right'] <= strip['right'] + tolerance, row
+            assert bar['width'] >= 4 - tolerance, bar
+            assert separate(bar, row['caption']) and separate(bar, row['control']), row
+        for item in ('name', 'figure', 'caption', 'control', 'strip'):
+            box = row[item]
+            assert row['row']['left'] - tolerance <= box['left'] <= box['right'] <= row['row']['right'] + tolerance, row
+        assert separate(row['name'], row['figure']) and separate(row['figure'], row['control']), row
+        heights.append(strip['height'])
+        control_edges.append(row['control']['right'])
+    assert max(heights) - min(heights) <= tolerance, heights
+    assert max(control_edges) - min(control_edges) <= tolerance, control_edges
+
+
+@pytest.mark.parametrize('engine', ['chromium', 'webkit'])
+@pytest.mark.parametrize('reading', ['current', 'mixed', 'last_known'])
+def test_dense_rows_fit_real_iframe_around_responsive_breakpoints(tmp_path, engine, reading):
+    from test_order_focus import _launch_engine
+
+    sync_api = pytest.importorskip('playwright.sync_api')
+    readings = [(i / 40, reading == 'current' or (reading == 'mixed' and i % 2 == 0), False)
+                for i in range(41)]
+    view = _view(tmp_path, reading, readings, windows=(WEEK, 18000))
+    with sync_api.sync_playwright() as playwright:
+        browser = _launch_engine(playwright, engine)
+        try:
+            page = browser.new_page(viewport={'width': 1100, 'height': 900})
+            errors = []
+            page.on('pageerror', lambda error: errors.append(str(error)))
+            frame = _mount_layout_frame(page, view, 678)
+            # Both sides of every row breakpoint, the reported 521 px case,
+            # the owner's normal card and narrow card widths.
+            for width in (320, 343, 359, 360, 361, 519, 520, 521, 639, 640, 641, 678):
+                page.locator('iframe').evaluate('(e, width) => { e.style.width = width + "px"; }', width)
+                frame.wait_for_function('(width) => innerWidth === width', arg=width)
+                _assert_row_geometry(frame.evaluate(ROW_GEOMETRY))
+                # Folding/unfolding the selected timeline must not resize its
+                # tracks or displace the aligned control column.
+                frame.locator('.l-chart[aria-pressed="true"]').click()
+                _assert_row_geometry(frame.evaluate(ROW_GEOMETRY))
+                frame.locator('.l-chart').first.click()
+            assert not errors, errors
+        finally:
+            browser.close()

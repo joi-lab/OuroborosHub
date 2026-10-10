@@ -408,7 +408,8 @@ function click(env, key) {
   assert.match(wideLine.title, /m23 \+1 more not listed$/);
   assert.match(wideLine.getAttribute('aria-label'), /\+1 more not listed/);
   const wideRow = byFocus(env.root, 'limit:' + keyOf('|weekly_scoped:Wide|'));
-  assert.equal(classes(wideRow, 'l-name-text')[0].textContent, 'Weekly · M00 +24');
+  // 0.8.1: the name is text beside the row's control, not inside it.
+  assert.equal(classes(wideRow.parentNode, 'l-name-text')[0].textContent, 'Weekly · M00 +24');
   assert.match(wideRow.getAttribute('aria-label'), /models: m00, m01, .*m23 \+1 more/);
 
   // A spent shared window and an account cooldown: the reset red, the

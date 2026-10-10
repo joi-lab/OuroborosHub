@@ -520,7 +520,8 @@ class HistoryStore:
     def read(self, requests: Callable[[str], Dict[Tuple[str, str], float]],
              now: float, *, max_rows: int = MAX_READ_ROWS,
              latest: Optional[Callable[[str], Iterable[Tuple[str, str]]]] = None,
-             roster: Optional[Callable[[str], Iterable[str]]] = None) -> qs.HistoryView:
+             roster: Optional[Callable[[str], Iterable[str]]] = None,
+             chart_series: Optional[Tuple[str, float]] = None) -> qs.HistoryView:
         """A read-only view. ``requests(salt)`` names the (subject, series)
         pairs wanted and the oldest last sighting worth reading for each;
         ``latest(salt)`` names pairs whose newest kept run per source is
@@ -574,6 +575,21 @@ class HistoryStore:
             view.oldest_at = None if oldest is None else float(oldest)
             view.watched_since, view.watched_since_exact = self._unbroken_watch(conn, now)
             wanted = requests(salt) if salt else {}
+            # The displayed history includes previously recorded subjects,
+            # even when the current roster no longer contains them. This
+            # says nothing about when they were removed: the schema stores
+            # quota observations, not historical rosters. Bounded read only;
+            # neither a schema change nor a new writer/index is needed.
+            if chart_series is not None:
+                series, since = chart_series
+                subjects = conn.execute(
+                    "SELECT DISTINCT subject FROM run WHERE series=? LIMIT ?",
+                    (series, MAX_LATEST_PAIRS + 1)).fetchall()
+                if len(subjects) > MAX_LATEST_PAIRS:
+                    view.truncated = True
+                for (subject,) in subjects[:MAX_LATEST_PAIRS]:
+                    pair = (str(subject), series)
+                    wanted[pair] = min(wanted.get(pair, float(since)), float(since))
             if wanted:
                 # Read before the runs: a sweep committed in between can only
                 # make a run newer than this list, never older.
@@ -600,6 +616,27 @@ class HistoryStore:
                     rows = rows[:budget]
                 budget -= len(rows)
                 view.runs[(subject, series)] = [_run_of(row) for row in reversed(rows)]
+                if chart_series is not None and series == chart_series[0] and budget > 0:
+                    # Seed a carry at the left edge from the newest older
+                    # run of each source, never from an observation after it.
+                    sources = conn.execute(
+                        "SELECT DISTINCT source FROM run WHERE subject=? AND series=? LIMIT ?",
+                        (subject, series, MAX_SOURCES_PER_PAIR + 1)).fetchall()
+                    if len(sources) > MAX_SOURCES_PER_PAIR:
+                        view.truncated = True
+                    seeds = []
+                    for (source,) in sources[:MAX_SOURCES_PER_PAIR]:
+                        if budget <= 0:
+                            view.truncated = True
+                            break
+                        seed = conn.execute(
+                            f"SELECT {_RUN_FIELDS} FROM run WHERE subject=? AND series=? "
+                            "AND source=? AND last_seen<? ORDER BY last_seen DESC, id DESC LIMIT 1",
+                            (subject, series, source, float(since))).fetchone()
+                        if seed is not None:
+                            seeds.append(_run_of(seed))
+                            budget -= 1
+                    view.runs[(subject, series)] = seeds + view.runs[(subject, series)]
             pairs = set(latest(salt)) if (latest is not None and salt) else set()
             for subject in sorted(set(roster(salt))) if (roster is not None and salt) else []:
                 found = [str(s) for (s,) in conn.execute(

@@ -1,4 +1,4 @@
-/* Claudexor Quotas widget — v0.8.0
+/* Claudexor Quotas widget — v0.9.0
  *
  * Runs as a reviewed module widget: a classic inline script inside an
  * opaque-origin sandboxed iframe whose window.fetch is a parent-mediated
@@ -13,6 +13,11 @@
  * one conditional future ahead of it on the row's own basis, and the reset
  * schedule that future is made of; the account a bar or a row of the account
  * list selects; and that list itself. Every number is the skill's.
+ *
+ * 0.8.1 is presentation only: every row has one bar-track height and one
+ * control slot at its right edge (the chart toggle, the timeline's only one);
+ * the unit is said by the figure and the title, the future's assumption by
+ * the legend, each once. No number, request or route changed.
  */
 (function () {
     'use strict';
@@ -109,7 +114,7 @@
         "--warn-text:var(--status-warn);--bad-text:var(--status-bad);",
         "--focus-accent-border:#ec7782;--share-ink:#a6a6b3;--scenario-ink:#9ab9fa;",
         "--share-track:rgba(var(--neutral-rgb),.07);--area:rgba(var(--neutral-rgb),.10);",
-        "--type-meta:12px;--type-body:14px;--type-section:16px;--row-h:32px;",
+        "--type-meta:12px;--type-body:14px;--type-section:16px;--row-h:32px;--ctl-w:96px;",
         "--space-1:4px;--space-2:8px;--space-3:12px;--space-4:16px;--space-5:24px;",
         "--radius-sm:6px;--radius-md:8px;",
         // The hatch of a last-known value: a 6px tile drawn once per theme, a
@@ -177,18 +182,22 @@
         ".reserve-age.status-warn{color:var(--warn-text)}",
         ".reserve-age.status-bad{color:var(--bad-text)}",
         ".reserve-note{margin:var(--space-2) 0}",
-        ".reserve-unit{margin:0 0 var(--space-3)}",
-        ".lrows{border-top:1px solid var(--edge)}",
-        ".lrow{display:grid;grid-template-columns:minmax(0,1fr) auto;grid-template-areas:\"name fig\" \"strip sub\" \"tail tail\";column-gap:var(--space-4);row-gap:6px;padding:var(--space-3) var(--space-2);border-bottom:1px solid var(--edge)}",
-        ".lrow.sel{background:var(--inset)}",
-        ".lrow:not(.sel) .bars{height:28px}",
-        ".lrow:not(.sel){padding-block:var(--space-2)}",
-        ".l-name{grid-area:name;justify-self:start;align-self:start;display:inline-flex;align-items:baseline;flex-wrap:wrap;gap:2px 8px;min-height:0;padding:0;border:0;background:none;font-size:var(--type-body);font-weight:500;text-align:left;line-height:1.35}",
-        ".l-name-text{text-decoration:underline;text-decoration-color:var(--edge-strong);text-underline-offset:3px}",
-        ".l-name:hover .l-name-text{text-decoration-color:var(--text-meta)}",
-        ".l-chart{display:inline-flex;align-items:center;gap:4px;align-self:center;padding:1px 8px;border:1px solid var(--edge);border-radius:999px;background:var(--surface);color:var(--text-meta);font-size:var(--type-meta);font-weight:400;white-space:nowrap}",
-        ".l-name:hover .l-chart{background:var(--inset);color:var(--text-primary)}",
+        ".reset-credits{font-size:var(--type-meta);color:var(--text-meta);margin:var(--space-2) 0;overflow-wrap:anywhere}",
+        ".reset-credits strong{color:var(--text-primary);font-weight:500}",
+        ".lrows{margin-top:var(--space-2);border-top:1px solid var(--edge)}",
+        // Every row is the same shape: name and figure, bars and their caption,
+        // the tail — and one control slot of one width at the right edge, so
+        // the chart toggles of all rows stand in one column.
+        ".lrow{display:grid;grid-template-columns:minmax(0,1fr) auto var(--ctl-w);grid-template-areas:\"name fig ctl\" \"strip sub ctl\" \"tail tail tail\";column-gap:var(--space-3);row-gap:6px;padding:var(--space-3) var(--space-2);border-bottom:1px solid var(--edge)}",
+        // The charted row and its timeline are one shaded block: no rule between them.
+        ".lrow.sel{background:var(--inset);border-bottom-color:transparent}",
+        ".l-name{grid-area:name;justify-self:start;align-self:start;display:inline-flex;align-items:baseline;flex-wrap:wrap;gap:2px 8px;min-width:0;max-width:100%;overflow-wrap:anywhere;font-size:var(--type-body);font-weight:500;line-height:1.35}",
         ".lrow.sel .l-name{font-weight:600}",
+        // The row's one control: its chart, shown or hidden. The same width
+        // in every row, whatever it says.
+        ".l-chart{grid-area:ctl;align-self:center;justify-self:stretch;display:inline-flex;align-items:center;justify-content:center;gap:5px;min-height:26px;padding:2px 8px;border:1px solid var(--edge);border-radius:999px;background:var(--surface);color:var(--text-meta);font-size:var(--type-meta);font-weight:400;line-height:1.35;white-space:nowrap}",
+        ".l-chart:hover{background:var(--inset);color:var(--text-primary)}",
+        ".l-chart.on{background:var(--inset);border-color:var(--edge-strong);color:var(--text-primary);font-weight:600}",
         ".rs-tight{font-size:var(--type-meta);color:var(--text-meta);font-weight:400;white-space:nowrap}",
         ".l-fig{grid-area:fig;justify-self:end;white-space:nowrap;line-height:1.35}",
         ".l-fig b{font-size:var(--type-section);font-weight:600;font-variant-numeric:tabular-nums}",
@@ -200,7 +209,9 @@
         ".rs-bad{color:var(--bad-text)}",
         ".rs-warn{color:var(--warn-text)}",
         // One bar per account, as tall as its share left on one 0–100% scale.
-        ".bars{grid-area:strip;justify-self:start;display:flex;align-items:flex-end;height:46px;max-width:100%;border-bottom:1px solid var(--edge-strong)}",
+        // One track height in every row, charted or not: the same share is
+        // the same height wherever it stands.
+        ".bars{grid-area:strip;justify-self:start;display:flex;align-items:flex-end;height:40px;max-width:100%;border-bottom:1px solid var(--edge-strong)}",
         ".bar{position:relative;display:block;flex:1 1 0;min-width:4px;height:100%;min-height:0;padding:0;border:0;border-radius:3px 3px 0 0;background:var(--share-track)}",
         ".bar>.fill{position:absolute;left:0;right:0;bottom:0;border-radius:2px 2px 0 0;background:var(--share-ink)}",
         ".bar:hover:not(:disabled)>.fill{filter:brightness(.82)}",
@@ -214,17 +225,13 @@
         ".bar:disabled{cursor:default}",
         ".strip-legend{display:flex;flex-wrap:wrap;gap:var(--space-2) var(--space-3);font-size:var(--type-meta);color:var(--text-meta);margin-top:var(--space-2)}",
         ".strip-legend .bar{display:inline-block;width:12px;height:16px;flex:none}",
-        ".legend-item{display:inline-flex;align-items:center;gap:6px}",
-        ".legend-item svg{flex:none}",
         // The timeline: one limit, the record behind now and one future ahead.
         ".inspector,.accounts,.about-panel{min-width:0;padding:var(--space-3) var(--space-4);border:1px solid var(--edge);border-radius:var(--radius-md);background:var(--surface)}",
-        ".tl-block{padding:var(--space-2) var(--space-2) var(--space-3);border-bottom:1px solid var(--edge);background:var(--inset)}",
-        ".tl-block.folded{padding-block:var(--space-1)}",
+        ".tl-block{padding:var(--space-1) var(--space-2) var(--space-3);border-bottom:1px solid var(--edge);background:var(--inset)}",
         ".cover-link{margin-top:var(--space-2);padding:2px 0;border:0;background:none;font-size:var(--type-meta);color:var(--text-meta);text-decoration:underline;text-decoration-color:var(--edge-strong);text-underline-offset:3px}",
         ".acc-cover{margin-top:var(--space-2);font-size:var(--type-meta);color:var(--text-meta)}",
         ".insp-head,.acc-head{display:flex;align-items:center;justify-content:space-between;gap:var(--space-2);flex-wrap:wrap}",
         ".tl-controls{display:flex;align-items:center;flex-wrap:wrap;gap:var(--space-2) var(--space-3)}",
-        ".tl-controls .chart-toggle{margin-left:auto}",
         ".seg{display:inline-flex;align-items:center;flex-wrap:wrap;gap:2px}",
         ".seg-label{font-size:var(--type-meta);color:var(--text-meta);margin-right:var(--space-1)}",
         ".seg-opt{border-color:var(--edge)}",
@@ -241,6 +248,7 @@
         ".chart-svg .hit{fill:transparent;cursor:crosshair}",
         ".area-observed{fill:var(--area)}",
         ".line-observed{fill:none;stroke:var(--text-primary);stroke-width:2;stroke-linejoin:round;stroke-linecap:round}",
+        ".line-carried{fill:none;stroke:var(--text-primary);stroke-width:2;stroke-dasharray:3 4;stroke-linejoin:round;stroke-linecap:round}",
         ".line-scenario{fill:none;stroke:var(--scenario-ink);stroke-width:2;stroke-dasharray:6 4;stroke-linejoin:round;stroke-linecap:round}",
         ".scenario-start{fill:var(--scenario-ink);stroke:var(--surface);stroke-width:1.5}",
         ".chart-svg .cursor-dot{stroke:var(--surface);stroke-width:2;stroke-dasharray:none}",
@@ -251,9 +259,13 @@
         ".tip-row{display:flex;align-items:center;gap:6px;font-variant-numeric:tabular-nums}",
         ".tip-row svg{flex:none}",
         ".tip-foot{margin-top:var(--space-1)}",
-        ".chart-legend{display:flex;flex-wrap:wrap;gap:var(--space-2) var(--space-4);margin-top:var(--space-2);font-size:var(--type-meta);color:var(--text-meta)}",
-        ".tl-facts{display:flex;flex-direction:column;gap:var(--space-1);margin-top:var(--space-3);font-size:var(--type-meta);color:var(--text-meta)}",
-        ".tl-facts .lead{font-size:var(--type-body);color:var(--text-primary)}",
+        // Under the chart, one line per line drawn: whose total it is and, for
+        // the future, what it assumes — the legend is the only place that says so.
+        ".chart-legend{display:flex;flex-direction:column;gap:var(--space-1);margin-top:var(--space-2);font-size:var(--type-meta);color:var(--text-meta)}",
+        ".legend-item{display:flex;align-items:flex-start;gap:6px;overflow-wrap:anywhere}",
+        ".legend-item svg{flex:none;margin-top:4px}",
+        ".tl-facts{display:flex;flex-direction:column;gap:var(--space-1);margin-top:var(--space-1);font-size:var(--type-meta);color:var(--text-meta)}",
+        ".tl-facts:empty{display:none}",
         ".tl-facts .warn{color:var(--warn-text)}",
         ".schedule{width:100%;margin-top:var(--space-3);border-collapse:collapse;font-size:var(--type-meta);font-variant-numeric:tabular-nums}",
         ".schedule caption{text-align:left;padding-bottom:var(--space-1);font-size:var(--type-body);font-weight:500;color:var(--text-primary)}",
@@ -367,8 +379,14 @@
         ".empty-title{font-size:var(--type-section);font-weight:500;margin:0}",
         ".empty-desc{font-size:var(--type-meta);color:var(--text-meta);max-width:360px;margin:0}",
         ".empty-notes{display:flex;gap:var(--space-3);flex-wrap:wrap}",
-        "@media(max-width:520px){body{padding:var(--space-3)}.tl-block{padding-inline:4px}.lrow{grid-template-areas:\"name fig\" \"sub sub\" \"strip strip\" \"tail tail\";column-gap:var(--space-2);padding:10px 4px}.l-sub{justify-self:start;text-align:left;white-space:normal}.bars{justify-self:stretch;width:auto!important;height:40px}.acct-lim{grid-template-columns:72px 40px 40px minmax(0,1fr);column-gap:var(--space-2)}.reserve-head{display:block}.reserve-age{text-align:left;margin-top:2px}.inspector,.accounts,.about-panel{padding:var(--space-3)}.acc-headrow{display:none}.acc-row{display:flex!important;flex-wrap:wrap;gap:2px var(--space-2);padding:6px 0}.acc-name{flex:1 1 100%}.acc-cell{text-align:left}.acc-cell:before{content:attr(data-limit) \" \";color:var(--text-meta)}.reserve-detail{grid-template-columns:minmax(0,1fr);gap:2px}.reserve-detail dd{margin-bottom:var(--space-2)}}",
-        "@media(max-width:360px){.lrow{grid-template-areas:\"name name\" \"fig sub\" \"strip strip\" \"tail tail\"}.l-fig{justify-self:start}}"
+        // Give dense strips a full row before the figure and fixed control
+        // column leave less room than their individual bars need.
+        "@media(max-width:640px){.lrow{grid-template-areas:\"name fig ctl\" \"sub sub ctl\" \"strip strip strip\" \"tail tail tail\";}.l-sub{justify-self:start;text-align:left;white-space:normal}.bars{justify-self:stretch;width:auto!important}}",
+        "@media(max-width:520px){body{padding:var(--space-3)}.tl-block{padding-inline:4px}.lrow{column-gap:var(--space-2);padding:10px 4px}.acct-lim{grid-template-columns:72px 40px 40px minmax(0,1fr);column-gap:var(--space-2)}.reserve-head{display:block}.reserve-age{text-align:left;margin-top:2px}.inspector,.accounts,.about-panel{padding:var(--space-3)}.acc-headrow{display:none}.acc-row{display:flex!important;flex-wrap:wrap;gap:2px var(--space-2);padding:6px 0}.acc-name{flex:1 1 100%}.acc-cell{text-align:left}.acc-cell:before{content:attr(data-limit) \" \";color:var(--text-meta)}.reserve-detail{grid-template-columns:minmax(0,1fr);gap:2px}.reserve-detail dd{margin-bottom:var(--space-2)}}",
+        // Narrower still, the figure and its caption each take a line of their
+        // own under the name (sharing one line left them overlapping at a
+        // 343 px card); the control spans the name and the figure.
+        "@media(max-width:360px){.lrow{grid-template-areas:\"name name ctl\" \"fig fig ctl\" \"sub sub sub\" \"strip strip strip\" \"tail tail tail\"}.l-fig{justify-self:start;white-space:normal}}"
     ].join('');
 
     function el(tag, cls, text) {
@@ -646,6 +664,21 @@
         if (typeof value !== 'number' || !isFinite(value)) return '';
         var text = value.toFixed(2);
         return text === '0.00' && value > 0 ? '<0.01' : text;
+    }
+
+    // Only the host's explicit quota projection omits catalog deliberately.
+    // Its not_read provenance stays intact; the same state on a legacy status
+    // answer remains a failure to read a requested facet.
+    function catalogOmitted(view, facet) {
+        return facet === 'catalog' && !!view && !!view.passive_read
+            && view.passive_read.mode === 'quota' && (view.facets || {}).catalog === 'not_read';
+    }
+
+    function unreadFacetsOf(view) {
+        var facets = (view && view.facets) || {};
+        return FACET_ORDER.filter(function (f) {
+            return !catalogOmitted(view, f) && (facets[f] || 'indeterminate') !== 'ok';
+        });
     }
 
     function facetTone(state) {
@@ -941,8 +974,18 @@
         return { text: holds.length + ' ' + noun, full: holds.length + ' ' + noun + ': ' + holds.map(sentence).join('; ') };
     }
 
+    // Presentation labels from the host's web/modules/harness_presentation.js,
+    // the existing source for our family marks. A passive read omits the
+    // catalog; its raw id fallback must not displace the known display name.
+    var FAMILY_LABELS = Object.assign(Object.create(null), {
+        codex: 'Codex', claude: 'Claude Code', cursor: 'Cursor',
+        opencode: 'OpenCode', agy: 'Antigravity'
+    });
+
     function familyName(group) {
-        return group.family_label || group.harness_id;
+        var label = String(group.family_label || '').trim();
+        return label && label !== group.harness_id ? label
+            : FAMILY_LABELS[group.harness_id] || label || group.harness_id;
     }
 
     // "claude_max" beside "Claude Code" says Claude twice: the vendor prefix
@@ -979,7 +1022,7 @@
         if (group.harness_enabled === false) {
             parent.appendChild(dotLabel('harness disabled', 'warn'));
         }
-        if (group.catalog_known === false) {
+        if (group.catalog_known === false && !catalogOmitted(currentView, 'catalog')) {
             parent.appendChild(dotLabel('catalog ' + facetWord(facets.catalog), facetTone(facets.catalog)));
         }
     }
@@ -1897,31 +1940,34 @@
             + '.';
     }
 
-    // One row per limit: its name (which shows it in the timeline), one bar
-    // per account, the current figure with the average or the dated
-    // last-known line under it, and the next reported reset.
+    // One row per limit: its name, one bar per account, the current figure
+    // with the average or the dated last-known line under it, the next
+    // reported reset — and one control, in the same slot of every row, that
+    // shows its chart below (on the charted row, hides it).
     function limitRow(g, name, chartKey, index, markTightest) {
         var inChart = timelineOpen && g.key === chartKey;
-        var row = el('div', 'lrow' + (g.key === chartKey ? ' sel' : ''));
+        var row = el('div', 'lrow' + (inChart ? ' sel' : ''));
         var fig = rowFigure(g);
         var m = g.measured || {};
         var words = limitTail(g, index);
 
-        var nameBtn = el('button', 'l-name');
-        nameBtn.setAttribute('type', 'button');
-        nameBtn.setAttribute('data-focus', 'limit:' + g.key);
-        nameBtn.setAttribute('aria-pressed', inChart ? 'true' : 'false');
-        nameBtn.appendChild(el('span', 'l-name-text', name));
+        var nameBox = el('div', 'l-name');
+        nameBox.appendChild(el('span', 'l-name-text', name));
         if (markTightest) {
             var badge = el('span', 'rs-tight', 'lowest left');
             badge.title = tightWords(g);
-            nameBtn.appendChild(badge);
+            nameBox.appendChild(badge);
         }
-        // What the name does, where it is seen: the timeline's chart mark and
-        // two words, quiet, inside the same button.
-        var cue = el('span', 'l-chart', inChart ? 'Hide chart' : 'Show chart');
-        cue.insertBefore(icon('chart', 12), cue.firstChild);
-        nameBtn.appendChild(cue);
+        row.appendChild(nameBox);
+
+        // The row's one control carries the row's whole spoken summary: a
+        // reader tabbing through the limits hears each one, then what the
+        // control does.
+        var nameBtn = el('button', 'l-chart' + (inChart ? ' on' : ''), inChart ? 'Hide chart' : 'Show chart');
+        nameBtn.insertBefore(icon('chart', 12), nameBtn.firstChild);
+        nameBtn.setAttribute('type', 'button');
+        nameBtn.setAttribute('data-focus', 'limit:' + g.key);
+        nameBtn.setAttribute('aria-pressed', inChart ? 'true' : 'false');
         var spoken = [name];
         if (scopeWords(g)) spoken.push(scopeWords(g));
         spoken.push(fig.any ? fig.text + ' of ' + fig.of + ' account-windows left now' : 'no current reading');
@@ -1938,14 +1984,15 @@
         coverageWords(g).forEach(function (w) { spoken.push(w); });
         if (markTightest) spoken.push('lowest average share left in this family, a ranking, not a verdict');
         var picked = g.key === chartKey;
-        nameBtn.setAttribute('aria-label', spoken.join(' — ')
+        nameBtn.setAttribute('aria-label', (inChart ? 'Hide chart' : 'Show chart') + ' — ' + spoken.join(' — ')
             + (inChart ? ' — its timeline is shown below' : ' — show its timeline'));
-        nameBtn.title = inChart ? name + ': its timeline is below' : 'Show the timeline of ' + name;
+        nameBtn.title = inChart ? 'Hide the timeline of ' + name : 'Show the timeline of ' + name;
         nameBtn.addEventListener('click', function (e) {
             e.stopPropagation();
             if (!picked) scheduleAll = false;
             chartKeys[g.harness] = g.key;
-            // The selected limit's name folds its timeline or unfolds it.
+            // On the charted limit the control folds its timeline or unfolds
+            // it; on another it shows that limit's instead.
             timelineOpen = picked ? !timelineOpen : true;
             chartAsked = '';
             chartCursor = null;
@@ -1953,9 +2000,11 @@
         });
         row.appendChild(nameBtn);
 
+        // The figure says its unit by itself: account-windows of the accounts
+        // the limit applies to — "10.35 of 19 accounts".
         var figure = el('div', 'l-fig');
         figure.appendChild(el('b', null, fig.text));
-        figure.appendChild(el('span', 'of', ' of ' + fig.of));
+        figure.appendChild(el('span', 'of', ' of ' + plural(fig.of, 'account')));
         figure.title = (fig.any ? '' : 'No current reading — not zero. ')
             + 'Account-windows left now: the share each account read now has left of this limit, added up (a '
             + 'full account counts 1), of the ' + plural(fig.of, 'account') + ' it applies to. Last-known and '
@@ -2091,19 +2140,82 @@
         return '';
     }
 
+    // Manual reset credits are the provider's separate count. They are never
+    // converted to a window, a currency balance, or a promised refill.
+    function creditCount(value) {
+        return typeof value === 'number' && isFinite(value) && value >= 0;
+    }
+
+    function creditProvenance(credits) {
+        var text = credits.observed_at ? 'observed ' + whenWords(credits.observed_at) : 'observation time unavailable';
+        if (credits.source) text += ' · source ' + credits.source;
+        if (credits.label) text += ' · reported “' + credits.label + '”';
+        return text + '. The count does not say which limit a manual reset restores.';
+    }
+
+    function renderFamilyCredits(parent, family) {
+        var c = family && family.reset_credits;
+        if (!c || !(c.current_accounts || c.last_known_accounts || c.unreadable_accounts || c.conflict_accounts)) return;
+        var row = el('div', 'reset-credits family-credits');
+        row.appendChild(el('strong', null, 'Manual reset credits'));
+        var parts = [];
+        if (c.current_accounts && creditCount(c.count)) {
+            parts.push(String(c.count) + ' reported across ' + plural(c.current_accounts, 'account'));
+        }
+        if (c.last_known_accounts && creditCount(c.last_known_count)) {
+            var age = ageWords(c.last_known_oldest_observed_at);
+            parts.push('last known ' + c.last_known_count + ' across ' + plural(c.last_known_accounts, 'account')
+                + (age ? ' (' + age + (age === 'just now' ? '' : ' ago') + ')' : ' (age unknown)'));
+        }
+        if (c.unreadable_accounts) parts.push(c.unreadable_accounts + ' unreadable');
+        if (c.conflict_accounts) parts.push(c.conflict_accounts + ' with sources disagreeing');
+        if (c.unknown_accounts) parts.push(c.unknown_accounts + ' unknown');
+        row.appendChild(document.createTextNode(' · ' + (parts.join(' · ') || 'not reported')));
+        row.title = 'Provider-reported manual reset credits, separate from automatic resets. Unknown, unreadable '
+            + 'and last-known counts are not included in the current count. No refill amount or currency is assumed.';
+        parent.appendChild(row);
+    }
+
+    function renderAccountCredits(parent, quota) {
+        var c = quota && quota.reset_credits;
+        if (!c || c.reason === 'not_reported') return;
+        var row = el('div', 'reset-credits account-credits');
+        row.appendChild(el('strong', null, 'Manual reset credits'));
+        var text;
+        if ((c.state === 'current' || c.state === 'last_known') && creditCount(c.count)) {
+            text = (c.state === 'last_known' ? 'last known ' : '') + c.count;
+            text += c.observed_at ? ' · observed ' + (relTime(c.observed_at) || whenWords(c.observed_at)) : ' · age unknown';
+            if (c.state === 'last_known') text += ', not current';
+        } else if (c.state === 'unreadable') {
+            text = 'count unreadable' + (c.label ? ' · reported “' + c.label + '”' : '');
+        } else if (c.state === 'conflict') {
+            text = 'unknown · sources disagree';
+        } else {
+            text = c.reason === 'not_reported' ? 'not reported' : 'unknown · no current reading';
+        }
+        row.appendChild(document.createTextNode(' · ' + text));
+        row.title = creditProvenance(c);
+        parent.appendChild(row);
+    }
+
     // The family's limits. Returns what the timeline, the selected account
     // and the account list read from — or null when there is no overview.
     function renderReserve(parent, reserve, family, view) {
-        if (!reserve || typeof reserve !== 'object') return null;
+        if (!reserve || typeof reserve !== 'object') reserve = {};
         var section = el('section', 'reserve');
         section.setAttribute('aria-label', 'Reserve overview');
         var head = el('div', 'reserve-head');
         var title = el('h3', 'reserve-title', 'Reserve');
         if (family) title.appendChild(el('span', 'reserve-family', ' · ' + familyName(family)));
+        // The unit, once, where the figures are read from — not a line of its
+        // own above every row; About says it in full.
+        title.title = 'Account-windows left: the share each account read now has left of a limit, added up — '
+            + 'a full account counts 1, whatever its plan. Limits are never added together.';
         head.appendChild(title);
         var summary = reserve.summary;
         if (!summary) {
             section.appendChild(head);
+            renderFamilyCredits(section, family);
             section.appendChild(el('div', 'reserve-note', 'Reserve overview unavailable'
                 + (reserve.error ? ' (' + reserve.error + ')' : '') + '. The account list below is unaffected.'));
             parent.appendChild(section);
@@ -2118,8 +2230,7 @@
         stamp.title = status.detail || '';
         head.appendChild(stamp);
         section.appendChild(head);
-        section.appendChild(el('div', 'reserve-note reserve-unit',
-            'Account-windows left · a full account counts 1 · limits are never added'));
+        renderFamilyCredits(section, family);
         var reads = summary.reads || {};
         var ctx = { reserve: reserve, summary: summary, groups: groups, names: {}, index: accountIndex(view) };
         if (reads.quota && reads.quota !== 'ok' && !(summary.cached || {}).quota && !groups.length) {
@@ -2142,8 +2253,9 @@
         table.setAttribute('aria-label', 'Limits of ' + (family ? familyName(family) : 'this family'));
         groups.forEach(function (g) {
             table.appendChild(limitRow(g, ctx.names[g.key], chartKey, ctx.index, g.tightest && measuredGroups > 1));
-            // The timeline of the selected limit stands right under its row.
-            if (g.key === chartKey) table.appendChild(timelineBlock(ctx, g));
+            // The timeline of the charted limit stands right under its row;
+            // folded, it leaves nothing behind — the row's control says "Show chart".
+            if (g.key === chartKey && timelineOpen) table.appendChild(timelineBlock(ctx, g));
         });
         section.appendChild(table);
         var keptAt = (view && view.kept) || summary.roster === 'cached'
@@ -2219,52 +2331,35 @@
         return seg;
     }
 
-    // The timeline of the selected limit, right under its row: its span and
-    // its future beside a Hide; the chart; then the numbers — where it stands
-    // a few moments ahead — one line of what it assumes, the next reported
+    // The timeline of the charted limit, right under its row (its one toggle
+    // is the row's control): its span and its future; the chart; under it
+    // the legend — whose total each line is, and what the future assumes —
+    // where that future stands a few moments ahead, the next reported
     // resets, and the details folded.
     function timelineBlock(ctx, g) {
-        var box = el('div', 'tl-block' + (timelineOpen ? '' : ' folded'));
+        var box = el('div', 'tl-block');
         box.setAttribute('role', 'group');
         box.setAttribute('aria-label', 'Timeline of ' + ctx.names[g.key]);
         var name = ctx.names[g.key];
         var horizon = horizonFor(g);
         var controls = el('div', 'tl-controls');
-        if (timelineOpen) {
-            controls.appendChild(segControl('Span', HORIZONS.map(function (h) {
-                return { key: h, name: h === '24h' ? '24 h' : '7 days',
-                         spoken: (h === '24h' ? '24 hours' : '7 days') + ' back and ahead' };
-            }), horizon, 'horizon:', function (picked) {
-                horizonChoice = picked;
-                chartCursor = null;
-                rerender();
-            }));
-            controls.appendChild(segControl('Future', SCENARIOS.map(function (s) {
-                return { key: s.key, name: s.name, title: s.key === 'no_new_use'
-                    ? 'Every account read now keeps its share and refills once at its next reported reset'
-                    : 'The accounts with a measured recent pace keep it; the others are held' };
-            }), scenario, 'scenario:', function (picked) {
-                scenario = picked;
-                rerender();
-            }));
-        }
-        var toggle = el('button', 'pill-btn chart-toggle' + (timelineOpen ? '' : ' on'),
-            timelineOpen ? 'Hide timeline' : 'Show timeline');
-        toggle.insertBefore(icon('chart', 12), toggle.firstChild);
-        toggle.setAttribute('type', 'button');
-        toggle.setAttribute('aria-expanded', timelineOpen ? 'true' : 'false');
-        toggle.setAttribute('aria-label', (timelineOpen ? 'Hide' : 'Show') + ' the timeline of ' + name);
-        toggle.setAttribute('data-focus', 'chart-toggle');
-        toggle.addEventListener('click', function (e) {
-            e.stopPropagation();
-            timelineOpen = !timelineOpen;
-            chartAsked = '';
-            if (!timelineOpen) chartCursor = null;
+        controls.appendChild(segControl('Span', HORIZONS.map(function (h) {
+            return { key: h, name: h === '24h' ? '24 h' : '7 days',
+                     spoken: (h === '24h' ? '24 hours' : '7 days') + ' back and ahead' };
+        }), horizon, 'horizon:', function (picked) {
+            horizonChoice = picked;
+            chartCursor = null;
             rerender();
-        });
-        controls.appendChild(toggle);
+        }));
+        controls.appendChild(segControl('Future', SCENARIOS.map(function (s) {
+            return { key: s.key, name: s.name, title: s.key === 'no_new_use'
+                ? 'Every account read now keeps its share and refills once at its next reported reset'
+                : 'The accounts with a measured recent pace keep it; the others are held' };
+        }), scenario, 'scenario:', function (picked) {
+            scenario = picked;
+            rerender();
+        }));
         box.appendChild(controls);
-        if (!timelineOpen) return box;
         if (scopeWords(g)) box.appendChild(el('div', 'tl-scope', scopeWords(g)));
 
         var chart = ctx.reserve.chart;
@@ -2278,15 +2373,17 @@
         }
         var sc = scenarioOf(chart);
         drawChart(box, name, chart, sc);
-        box.appendChild(chartLegend(chart, sc));
         var facts = timelineFacts(g, chart, sc, ctx);
+        box.appendChild(chartLegend(chart, sc, facts.lead));
+        if (facts.shown.length) {
+            var said = el('div', 'tl-facts');
+            facts.shown.forEach(function (f) { said.appendChild(el('div', f[1] || null, f[0])); });
+            box.appendChild(said);
+        }
         if (sc) {
             var cp = checkpointLine(sc, chart);
             if (cp) box.appendChild(cp);
         }
-        var said = el('div', 'tl-facts');
-        facts.shown.forEach(function (f) { said.appendChild(el('div', f[1] || null, f[0])); });
-        box.appendChild(said);
         if (sc) {
             box.appendChild(scheduleTable(sc, chart, horizon));
             var note = scheduleNote(g, sc, ctx, horizon);
@@ -2296,10 +2393,11 @@
         return box;
     }
 
-    // Who each line sums, in one short line under the chart — the record's
-    // accounts and the future's, so a step between them at now is read as
-    // two bases, never as use.
-    function chartLegend(chart, sc) {
+    // Who each line sums, one line each under the chart — the record's
+    // accounts, and the future's with what it assumes (timelineFacts) — so a
+    // step between them at now is read as two bases, never as use. With no
+    // future drawn, the second line says why.
+    function chartLegend(chart, sc, lead) {
         var legend = el('div', 'chart-legend');
         function item(cls, text) {
             var li = el('span', 'legend-item');
@@ -2308,16 +2406,15 @@
             legend.appendChild(li);
         }
         var recorded = chart.past_accounts || 0;
-        if (recorded && recordDrawn(chart.past)) {
+        if (chart.history && recordDrawn(recordLine(chart))) {
+            item('line-observed', 'history · solid: recorded; dashed: carried · breaks: membership changes');
+        } else if (!chart.history && recorded && recordDrawn(chart.past)) {
             item('line-observed', 'recorded · ' + plural(recorded, 'account')
                 + (chart.past_basis === 'last_known' ? ', none current now' : ''));
         } else {
             item('', 'no record in this span yet');
         }
-        if (sc) {
-            item('line-scenario', scenarioName(scenario).toLowerCase() + ' · '
-                + (scenario === 'recent_pace' ? sc.at_pace + ' of ' : '') + sc.accounts + ' current');
-        }
+        item(sc ? 'line-scenario' : '', lead);
         return legend;
     }
 
@@ -2338,30 +2435,38 @@
         return svg;
     }
 
-    // What the future line assumes and whom it covers, in one line (and in
-    // pace mode one more: who runs out, when). Every longer caveat is a note
-    // under Details.
+    // The future line's legend entry (lead): its name, whom it covers and what
+    // it assumes, in one line — the only place that says so; in pace mode one
+    // more line: who runs out, when. Every longer caveat is a note under
+    // Details. With no future drawn, the lead says why.
     function timelineFacts(g, chart, sc, ctx) {
         var shown = [];
         var notes = [];
+        var lead;
         var notCurrent = Math.max(0, (chart.y_max || 0) - (chart.accounts || 0));
         if (!sc) {
-            shown.push([chart.kept
-                ? 'Nothing read since ' + clockAt(isoOf(chart.now)) + ': no future is drawn.'
-                : 'No current reading: no future is drawn; the line is the dated record of '
-                    + plural(chart.past_accounts || 0, 'account') + ' shown as last known.', 'lead']);
-            return { shown: shown, notes: notes };
+            lead = chart.kept
+                ? 'no future · nothing read since ' + clockAt(isoOf(chart.now))
+                : chart.history ? 'no future · no current reading; history stays dated'
+                    : 'no future · no current reading; the record is of '
+                        + plural(chart.past_accounts || 0, 'account') + ' shown as last known';
+            return { lead: lead, shown: shown, notes: notes };
         }
         var span = spanWords((g.recent_pace || {}).span_min_seconds, (g.recent_pace || {}).span_max_seconds);
+        var scenarioWord = scenarioName(scenario).toLowerCase() + ' · ';
         if (scenario === 'no_new_use') {
-            shown.push(['Each of the ' + plural(sc.accounts, 'current account') + ' keeps its share and is refilled '
-                + 'once, at its next reported reset; no later reset is assumed.', 'lead']);
+            lead = scenarioWord + plural(sc.accounts, 'current account') + (sc.accounts === 1
+                ? ' keeps its share, refilled once at its next reported reset; no later reset is assumed'
+                : ' keep their share, each refilled once at its next reported reset; no later reset is assumed');
         } else if (!sc.at_pace) {
-            shown.push(['No account has a measured pace yet (' + paceStateWords(g) + '): the same as no new use.', 'lead']);
+            lead = scenarioWord + plural(sc.accounts, 'current account')
+                + (sc.accounts === 1 ? ' held at its share' : ' held at their shares')
+                + '; each refilled once at its next reported reset; no later reset is assumed. '
+                + 'No account has a measured pace yet (' + paceStateWords(g) + '): the same as no new use';
         } else {
-            shown.push([sc.at_pace + ' of ' + sc.accounts + ' current at their pace of the last ' + span
-                + (sc.held ? ', ' + sc.held + ' held' : '') + '; each refilled once at its next reported reset, '
-                + 'no later reset assumed.', 'lead']);
+            lead = scenarioWord + sc.at_pace + ' of ' + sc.accounts + ' current at their pace of the last ' + span
+                + (sc.held ? ', ' + sc.held + ' held' : '') + '; each refilled once at its next reported reset; '
+                + 'no later reset is assumed';
             var runs = runsOutWords(sc, ctx);
             if (runs) shown.push([runs, 'warn']);
             notes.push('Recent pace is a condition, not an estimate of use nobody observed: the accounts whose pace '
@@ -2377,14 +2482,19 @@
                 + (notCurrent === 1 ? 'is' : 'are') + ' in no future: nothing is projected from a last-known value.');
         }
         var recorded = chart.past_accounts || 0;
-        if (chart.past_basis !== 'current' || recorded !== chart.accounts) {
+        if (chart.history && !recordDrawn(recordLine(chart))) {
+            notes.push('No record in this span yet: the future starts from the row’s figure at now.');
+        } else if (chart.history) {
+            notes.push('History keeps the last known value of each recorded account through temporary missing readings. '
+                + 'The future starts separately from the fresh-only row figure; a difference at now is not consumption.');
+        } else if (chart.past_basis !== 'current' || recorded !== chart.accounts) {
             notes.push(recorded
                 ? 'The record sums ' + plural(recorded, 'account') + ' with a record in this span; the future starts '
                     + 'from the ' + plural(chart.accounts, 'account') + ' read now (the row’s figure), so the two '
                     + 'lines need not meet at now.'
                 : 'No record in this span yet: the future starts from the row’s figure at now.');
         }
-        return { shown: shown, notes: notes };
+        return { lead: lead, shown: shown, notes: notes };
     }
 
     function paceStateWords(g) {
@@ -2647,21 +2757,36 @@
         var history = ctx.summary.history || {};
         var watched = watchWords(history);
         notes.appendChild(el('p', null, recordWords(history) + (watched ? '; ' + watched : '') + ' · times in ' + tzWords() + '.'));
-        notes.appendChild(el('p', null, 'The record sums every account of this limit with a record in this range ('
-            + (chart.past_accounts || 0) + ' of ' + (chart.y_max || 0) + '), whatever its reading now, and stops '
-            + 'wherever any of them was not vouched for — an outage, a sweep that did not see it, a reset, a stale '
-            + 'reading — never drawing a zero there. The scale is every account the limit applies to.'));
-        if (chart.past_clipped_before) {
-            notes.appendChild(el('p', null, 'Changes before ' + momentWords(chart.past_clipped_before)
+        if (chart.history) {
+            notes.appendChild(el('p', null, 'History starts each account at its first recorded value; older values are '
+                + 'never invented. A dashed segment carries dated readings through missing or stale answers. A '
+                + 'reported reset passing keeps its dated pre-reset value, not an assumed refill. Hover or use the '
+                + 'arrow keys for the count, age and provenance at a moment. Carried values never teach recent pace.'));
+            if (chart.history.membership_note) notes.appendChild(el('p', null, chart.history.membership_note));
+        } else {
+            notes.appendChild(el('p', null, 'The record sums every account of this limit with a record in this range ('
+                + (chart.past_accounts || 0) + ' of ' + (chart.y_max || 0) + '), whatever its reading now, and stops '
+                + 'wherever any of them was not vouched for — an outage, a sweep that did not see it, a reset, a stale '
+                + 'reading — never drawing a zero there. The scale is every account the limit applies to.'));
+        }
+        var clippedBefore = chart.history ? chart.history.clipped_before : chart.past_clipped_before;
+        if (clippedBefore) {
+            notes.appendChild(el('p', null, 'Changes before ' + momentWords(clippedBefore)
                 + ' are not drawn: more were recorded in this range than one chart holds.'));
         }
         var points = chart.points || [];
-        if (points.length) {
+        if (points.length && chart.history) {
+            notes.appendChild(el('p', null, plural(points.length, 'total') + ' seen at one sweep only are listed '
+                + 'separately below. A settled value can be carried in history; unsettled sources supply no replacement value.'));
+        } else if (points.length) {
             notes.appendChild(el('p', null, plural(points.length, 'total') + ' seen at one sweep only — a reading seen '
                 + 'once, or sources that disagree at one sweep — are listed in the table, not drawn: each holds for '
                 + 'no stretch of time.'));
         }
-        (chart.assumptions || []).forEach(function (a) { notes.appendChild(el('p', null, a)); });
+        (chart.assumptions || []).forEach(function (a) {
+            if (chart.history && (a === chart.history.membership_note || /^History:/.test(a))) return;
+            notes.appendChild(el('p', null, a));
+        });
         details.appendChild(notes);
         details.appendChild(dataTable(chart));
         var seen = sightingsTable(chart);
@@ -2675,6 +2800,7 @@
     // chart.table are only the newest few: every one of them is in the
     // sightings table instead.
     function dataTable(chart) {
+        if (chart.history) return historyDataTable(chart);
         var rows = (chart.table || []).filter(function (row) {
             return row.observed !== undefined && row.event !== 'now' && !row.sighting;
         });
@@ -2708,6 +2834,45 @@
         });
         table.appendChild(body);
         box.appendChild(table);
+        return box;
+    }
+
+    function historyDataTable(chart) {
+        var details = chart.history.details || [];
+        var stride = Math.max(1, Math.ceil(details.length / 60));
+        var recorded = details.filter(function (d, i) {
+            return d && (i % stride === 0 || i === details.length - 1 || d.change);
+        });
+        var rows = recorded.map(function (d) {
+            return { at: d.at, history: d, event: historyWords(d, d.at).join('; ') };
+        });
+        (chart.table || []).forEach(function (row) {
+            var at = Date.parse(String(row.at || '')) / 1000;
+            if (!isFinite(at) || at < chart.now
+                    || (row.scenario_no_new_use === undefined && row.scenario_recent_pace === undefined)) return;
+            rows.push({ at: at, noUse: row.scenario_no_new_use, pace: row.scenario_recent_pace,
+                event: row.event === 'now' ? 'Future starts from current readings only' : (row.event || '') });
+        });
+        rows.sort(function (a, b) { return a.at - b.at; });
+        var box = el('div');
+        box.appendChild(el('p', 'chart-notes', 'The table lists ' + recorded.length + ' of ' + details.length
+            + ' recorded changes; the chart and its cursor use all of them. Carried ages are at the listed time.'));
+        var table = el('table'), thead = el('thead'), head = el('tr');
+        ['Time', 'History', 'No new use', 'Recent pace', 'Context'].forEach(function (text) {
+            var th = el('th', null, text); th.setAttribute('scope', 'col'); head.appendChild(th);
+        });
+        thead.appendChild(head); table.appendChild(thead);
+        var body = el('tbody');
+        rows.forEach(function (row) {
+            var d = row.history;
+            var tr = el('tr');
+            [momentWords(row.at), d ? (d.value === null ? 'gap' : num(d.value, 2) + ' of ' + d.accounts) : '',
+             num(row.noUse, 2), num(row.pace, 2), row.event].forEach(function (text) {
+                tr.appendChild(el('td', null, text));
+            });
+            body.appendChild(tr);
+        });
+        table.appendChild(body); box.appendChild(table);
         return box;
     }
 
@@ -2803,8 +2968,12 @@
 
     // The recorded total at t: each vertex holds until the next; null is a
     // gap; before the first vertex there is no record.
-    function observedAt(chart, t) {
-        var past = chart.past || [];
+    function recordLine(chart) {
+        return chart.history ? (chart.history.line || []) : (chart.past || []);
+    }
+
+    function recordIndex(line, t) {
+        var past = line || [];
         var lo = 0;
         var hi = past.length - 1;
         var found = -1;
@@ -2812,7 +2981,51 @@
             var mid = (lo + hi) >> 1;
             if (past[mid][0] <= t) { found = mid; lo = mid + 1; } else { hi = mid - 1; }
         }
-        return found < 0 ? null : past[found][1];
+        return found;
+    }
+
+    function observedAt(chart, t) {
+        var line = recordLine(chart);
+        var found = recordIndex(line, t);
+        return found < 0 ? null : line[found][1];
+    }
+
+    function historyDetailAt(chart, t) {
+        if (!chart.history) return null;
+        var found = recordIndex(recordLine(chart), t);
+        return found < 0 ? null : (chart.history.details || [])[found] || null;
+    }
+
+    function historyWords(detail, t) {
+        if (!detail || (!detail.accounts && !detail.change)) return [];
+        var words = [plural(detail.accounts || 0, 'account') + ' · ' + (detail.measured || 0) + ' recorded'
+            + (detail.carried ? ', ' + detail.carried + ' carried' : '')
+            + (detail.unknown ? ', ' + detail.unknown + ' unknown' : '')];
+        if (detail.unknown) words.push((detail.reasons || {}).sources_disagree
+            ? 'Sources disagree · no settled value to carry' : 'No settled value yet · no partial sum or zero inferred');
+        if (detail.carried) {
+            var age = typeof detail.age_seconds === 'number' ? detail.age_seconds + Math.max(0, t - detail.at) : null;
+            words.push('Oldest carried reading ' + (age !== null ? minutesWords(age) + ' old at this moment' : 'age unknown')
+                + (detail.oldest_observed_at ? ' · observed ' + whenWords(detail.oldest_observed_at) : ''));
+            var origins = Object.keys(detail.origins || {}).map(function (origin) { return originWords(origin); });
+            if (origins.length) words.push(origins.join(', '));
+        }
+        if ((detail.sources || []).length) words.push('Source: ' + detail.sources.join(', '));
+        if (detail.reset_passed) words.push(plural(detail.reset_passed, 'account')
+            + ' past a reported reset · pre-reset reading retained; refill not measured');
+        if (detail.change === 'first_recorded') {
+            words.push('First recorded value' + (detail.added ? ' of ' + plural(detail.added, 'account') : '')
+                + ' · no earlier value inferred');
+            if (detail.added && detail.accounts > detail.added) words.push('Membership changed · not consumption');
+        }
+        if (detail.change === 'membership_changed') {
+            var changes = [];
+            if (detail.added) changes.push(plural(detail.added, 'account') + ' first recorded');
+            if (detail.removed) changes.push(plural(detail.removed, 'account') + ' removed from the current roster');
+            words.push('Membership changed' + (changes.length ? ': ' + changes.join(', ') : '') + ' · not consumption');
+        }
+        if (detail.removal_time_unknown) words.push('The exact removal time was not recorded');
+        return words;
     }
 
     // What the chart says at one moment, as rows of [series, value].
@@ -2829,7 +3042,9 @@
     // Whose total a recorded value is: the accounts with a record in the
     // span, whatever their reading now — or, with no record at all, the
     // current figure alone at now, of the accounts read now (never "of 0").
-    function recordedCount(chart) {
+    function recordedCount(chart, t) {
+        var detail = historyDetailAt(chart, t);
+        if (detail) return detail.accounts || 0;
         return chart.past_accounts || chart.accounts || 0;
     }
 
@@ -2838,12 +3053,14 @@
         var words = at.rows.map(function (r) {
             if (r[0] === 'recorded') {
                 return 'recorded ' + (r[1] === null ? 'no record (gap)'
-                    : num(r[1], 2) + ' of ' + plural(recordedCount(chart), 'account'));
+                    : num(r[1], 2) + ' of ' + plural(recordedCount(chart, t), 'account'));
             }
             return r[0] + ' ' + (r[1] === null ? 'not drawn' : num(r[1], 2) + ' of ' + plural(sc.accounts, 'current account'));
         });
         if (!words.length) words.push(at.future ? 'no future drawn' : 'no record');
-        return momentWords(t) + (at.future ? ' · scenario' : '') + ' — ' + name + ': ' + words.join(', ');
+        var provenance = t <= chart.now ? historyWords(historyDetailAt(chart, t), t) : [];
+        return momentWords(t) + (at.future ? ' · scenario' : '') + ' — ' + name + ': ' + words.join(', ')
+            + (provenance.length ? '. ' + provenance.join('. ') : '');
     }
 
     function niceStep(max) {
@@ -2894,6 +3111,32 @@
         return runs;
     }
 
+    function historyRuns(chart, x, y, t0) {
+        var out = { recorded: [], carried: [] };
+        if (!chart.history) { out.recorded = stepRuns(chart.past || [], x, y, t0); return out; }
+        var line = recordLine(chart);
+        var details = chart.history.details || [];
+        var cur = null, prev = null, kind = '';
+        function finish() { if (cur) out[kind].push(cur); cur = null; }
+        line.forEach(function (p, i) {
+            var px = x(Math.max(p[0], t0));
+            if (p[1] === null || p[1] === undefined) {
+                if (cur && prev) cur.push([px, y(prev[1])]);
+                finish(); prev = null; return;
+            }
+            var nextKind = details[i] && details[i].carried ? 'carried' : 'recorded';
+            if (cur && kind !== nextKind) {
+                cur.push([px, y(prev[1])]); finish();
+                cur = [[px, y(prev[1])], [px, y(p[1])]];
+            } else if (cur) {
+                cur.push([px, y(prev[1])]); cur.push([px, y(p[1])]);
+            } else cur = [[px, y(p[1])]];
+            kind = nextKind; prev = p;
+        });
+        finish();
+        return out;
+    }
+
     function runPath(runs) {
         return runs.map(function (run) {
             return 'M' + run.map(function (pt) { return pt[0].toFixed(1) + ' ' + pt[1].toFixed(1); }).join('L');
@@ -2922,7 +3165,7 @@
         var now = chart.now;
         var t0 = Math.floor(chart.start / 3600) * 3600;
         var t1 = t0 + Math.ceil((chart.end - t0) / 3600) * 3600;
-        var ymax = Math.max(1, chart.y_max || 1);
+        var ymax = Math.max(1, chart.y_max || 1, chart.history ? chart.history.max_accounts || 0 : 0);
         function x(t) { return pl + (t - t0) / (t1 - t0) * (W - pl - pr); }
         function y(v) { return pt + (1 - v / ymax) * (H - pt - pb); }
         var bottom = H - pb;
@@ -2976,11 +3219,14 @@
         nowLab.textContent = chart.kept ? 'read ' + clockAt(isoOf(now)) : 'now';
         svg.appendChild(nowLab);
 
-        var runs = stepRuns(chart.past || [], x, y, t0);
+        var history = historyRuns(chart, x, y, t0);
+        var runs = history.recorded;
         var area = runArea(runs, bottom);
         if (area) svg.appendChild(svgEl('path', { d: area, 'class': 'area-observed' }));
         var d = runPath(runs);
         if (d) svg.appendChild(svgEl('path', { d: d, 'class': 'line-observed' }));
+        var carried = runPath(history.carried);
+        if (carried) svg.appendChild(svgEl('path', { d: carried, 'class': 'line-carried' }));
         if (sc && sc.line && sc.line.length) {
             var path = sc.line.map(function (p, j) {
                 return (j ? 'L' : 'M') + x(p[0]).toFixed(1) + ' ' + y(p[1]).toFixed(1);
@@ -3027,9 +3273,10 @@
             at.rows.forEach(function (r) {
                 var row = el('div', 'tip-row');
                 var none = r[1] === null || r[1] === undefined;
-                row.appendChild(legendSwatch(r[0] === 'recorded' ? 'line-observed' : 'line-scenario'));
+                var detail = r[0] === 'recorded' ? historyDetailAt(chart, t) : null;
+                row.appendChild(legendSwatch(r[0] === 'recorded' ? (detail && detail.carried ? 'line-carried' : 'line-observed') : 'line-scenario'));
                 row.appendChild(el('span', 'tip-val', none ? (r[0] === 'recorded' ? 'no record' : 'not drawn') : num(r[1], 2)));
-                row.appendChild(el('span', 'tip-name', r[0]));
+                row.appendChild(el('span', 'tip-name', r[0] === 'recorded' && detail && detail.carried ? 'last-known history' : r[0]));
                 tip.appendChild(row);
                 if (!none) {
                     var dot = r[0] === 'recorded' ? dots.recorded : dots.scenario;
@@ -3038,7 +3285,10 @@
                     dot.setAttribute('visibility', 'visible');
                 }
             });
-            tip.appendChild(el('div', 'tip-foot', name + ' · account-windows left, scale ' + chart.y_max));
+            if (t <= chart.now) historyWords(historyDetailAt(chart, t), t).forEach(function (words) {
+                tip.appendChild(el('div', 'tip-foot', words));
+            });
+            tip.appendChild(el('div', 'tip-foot', name + ' · account-windows left, scale ' + ymax));
             tip.style.display = 'block';
             var rect = svg.getBoundingClientRect ? svg.getBoundingClientRect() : null;
             var scale = rect && rect.width ? rect.width / W : 1;
@@ -3238,6 +3488,7 @@
         if (!echoes && !(quota.state === 'cooling' && cooldownsOf(quota, 'account').length)) {
             box.appendChild(renderQuotaVerdict(quota));
         }
+        renderAccountCredits(box, quota);
         if (overview) accountLimits(box, ctx, account);
         renderAbsence(box, account, quota.absence);
         renderCooldowns(box, quota);
@@ -3458,7 +3709,9 @@
         state.appendChild(dRow);
         FACET_ORDER.forEach(function (f) {
             var s = facets[f] || 'indeterminate';
-            state.appendChild(dotLabel(s === 'ok' ? f : f + ' ' + facetWord(s), facetTone(s)));
+            state.appendChild(catalogOmitted(view, f)
+                ? dotLabel('catalog not requested for this quota read', 'muted')
+                : dotLabel(s === 'ok' ? f : f + ' ' + facetWord(s), facetTone(s)));
         });
         // "next up" is a fact about routing: with no verdict on the wire the
         // widget shows no marker, and says so here.
@@ -3489,10 +3742,12 @@
         item('Figure', 'Account-windows left now, of the accounts the limit applies to: current readings only. '
             + 'Last-known values are never in it — they stay hatched bars and the dated “Last known” line under it. '
             + 'With no current reading the figure is “—”, never 0.');
-        item('Timeline', 'Behind now, the record of every account with one in that span, broken wherever it is not '
-            + 'vouched for. Ahead, one condition on the accounts read now: no new use (each keeps its share and refills '
+        item('Timeline', 'Behind now, each account starts at its first recorded value. Dashed portions carry older '
+            + 'readings through missing answers; hover for age and provenance. Membership changes break the line, '
+            + 'and passing a reported reset never fabricates a past refill. Ahead, one condition on the accounts read now: no new use (each keeps its share and refills '
             + 'once at its next reported reset), or recent pace (the accounts with a measured pace keep it, the others '
-            + 'are held). Neither is a forecast, and no reset nobody reported is assumed.');
+            + 'are held). Neither is a forecast, and no reset nobody reported is assumed. Each row’s “Show chart” puts '
+            + 'its limit in the timeline; on the charted row the same control hides it.');
         item('Lowest left', 'The limit whose measured accounts have the lowest average share left: a ranking, not a '
             + 'verdict on what can run. A limit scoped to models binds only the models it names, never the family’s '
             + 'other models' + (scoped ? ' — “' + names[scoped.key] + '” covers '
@@ -3701,7 +3956,9 @@
         var summary = view.reserve && view.reserve.summary;
         var readAt = (summary && summary.status_read_at) || (lastGoodAt ? new Date(lastGoodAt).toISOString() : '');
         var cached = Object.assign({}, (summary && summary.cached) || {}, view.cached || {});
-        FACET_ORDER.forEach(function (f) { if (!cached[f] && readAt) cached[f] = readAt; });
+        FACET_ORDER.forEach(function (f) {
+            if (!cached[f] && readAt && !catalogOmitted(view, f)) cached[f] = readAt;
+        });
         var facets = {};
         FACET_ORDER.forEach(function (f) { facets[f] = 'indeterminate'; });
         var out = Object.assign({}, view, {
@@ -3710,6 +3967,7 @@
             daemon: { state: '', last_state: daemon.state || daemon.last_state || '',
                       engine_version: daemon.engine_version || '', read_at: daemon.read_at || readAt }
         });
+        if (view.passive_read) out.passive_read = { mode: 'unavailable', timings_ms: {}, read_errors: {} };
         if (view.reserve && typeof view.reserve === 'object') {
             var reserve = Object.assign({}, view.reserve);
             if (summary && typeof summary === 'object') {
@@ -3725,9 +3983,34 @@
         out.groups = (view.groups || []).map(function (group) {
             if (!group || !Array.isArray(group.accounts)) return group;
             return Object.assign({}, group, { routing_read: false,
+                reset_credits: keptFamilyCredits(group.reset_credits),
                 accounts: group.accounts.map(function (a) { return keptAccount(a, nowMs); }) });
         });
         return out;
+    }
+
+    function keptFamilyCredits(c) {
+        if (!c) return c;
+        var accounts = (c.current_accounts || 0) + (c.last_known_accounts || 0);
+        var dates = [c.oldest_observed_at, c.last_known_oldest_observed_at].filter(Boolean).sort();
+        var newest = [c.newest_observed_at, c.last_known_newest_observed_at].filter(Boolean).sort();
+        return Object.assign({}, c, {
+            count: null, current_accounts: 0, oldest_observed_at: null, newest_observed_at: null,
+            last_known_count: accounts ? (creditCount(c.count) ? c.count : 0)
+                + (creditCount(c.last_known_count) ? c.last_known_count : 0) : null,
+            last_known_accounts: accounts,
+            last_known_oldest_observed_at: dates[0] || null,
+            last_known_newest_observed_at: newest[newest.length - 1] || null
+        });
+    }
+
+    function keptCredits(c, nowMs) {
+        if (!c || (c.state !== 'current' && c.state !== 'last_known')) return c;
+        var observed = Date.parse(String(c.observed_at || ''));
+        return Object.assign({}, c, {
+            state: 'last_known', reason: 'screen_not_read',
+            age_seconds: isFinite(observed) ? Math.max(0, Math.round((nowMs - observed) / 1000)) : null
+        });
     }
 
     function keptAccount(a, nowMs) {
@@ -3818,7 +4101,7 @@
         var scope = chart.recent_pace_scope || {};
         return Object.assign({}, chart, {
             kept: true,
-            past: past, accounts: 0, past_current_accounts: 0, current_windows: null,
+            past: past, history: keptHistory(chart.history), accounts: 0, past_current_accounts: 0, current_windows: null,
             past_basis: chart.past_accounts ? 'last_known' : 'none',
             scenarios: null,
             no_new_use: null, recent_pace: null, recent_pace_refill_scenario: null, cohort_past: null,
@@ -3828,6 +4111,17 @@
                 return row && row.observed !== undefined && row.event !== 'now';
             })
         });
+    }
+
+    function keptHistory(history) {
+        if (!history) return history;
+        var line = (history.line || []).map(function (p) { return p.slice(); });
+        var details = (history.details || []).slice();
+        if (line.length) {
+            line[line.length - 1][1] = null;
+            if (details.length) details[details.length - 1] = Object.assign({}, details[details.length - 1], { value: null });
+        }
+        return Object.assign({}, history, { line: line, details: details });
     }
 
     // An account's readings on a kept screen: its windows are last known; a
@@ -3843,6 +4137,7 @@
         var stale = (Array.isArray(q.stale) ? q.stale : []).slice();
         if (current.length) stale.unshift({ observed_at: q.observed_at || '', freshness: 'stale', source: '', constraints: current });
         var out = Object.assign({}, q, {
+            reset_credits: keptCredits(q.reset_credits, nowMs),
             constraints: [],
             stale: stale,
             resets_at: '',
@@ -4051,7 +4346,8 @@
         var selection = syncSelection(groups);
         var daemon = view.daemon || {};
         var daemonDown = !!(daemon.state && daemon.state !== 'running');
-        var facetProblem = FACET_ORDER.some(function (f) { return (facets[f] || 'indeterminate') !== 'ok'; });
+        var unreadFacets = unreadFacetsOf(view);
+        var facetProblem = unreadFacets.length > 0;
         // Before the first answer nothing has been read and nothing has failed.
         var hasAnswer = !!(daemon.state || groups.length || Object.keys(facets).length || view.transport_error);
         var statusProblem = hasAnswer && (daemonDown || facetProblem || !!view.transport_error);
@@ -4119,8 +4415,7 @@
                 ? 'Claudexor status could not be read. Everything below is last known from '
                     + (relTime(lastAt) || clockAt(lastAt)) + ' — nothing is current.'
                 : 'Endpoint unreachable. No quota claims made.', true).appendChild(retryButton());
-        } else if (view.facet_note) {
-            var unreadFacets = FACET_ORDER.filter(function (f) { return (facets[f] || 'indeterminate') !== 'ok'; });
+        } else if (view.facet_note && facetProblem) {
             var keptFacets = unreadFacets.filter(function (f) { return !!cachedFacets[f]; });
             banner(banners, 'info', 'Not read now: ' + view.facet_note + '. '
                 + (keptFacets.length ? keptFacets.join(', ') + ' shown as last known from '
@@ -4145,7 +4440,7 @@
             renderAccounts(root, selection.group, ctx, facets, !(ctx && ctx.groups.length));
         }
         if (!hasAnswer) {
-            emptyCard('refresh', 'Reading accounts…', 'Asking the Claudexor daemon for catalog, accounts and quota.');
+            emptyCard('refresh', 'Reading accounts…', 'Asking the Claudexor daemon for accounts and quota.');
         } else if (!selection.group) {
             // No family came back at all: not "you have no accounts".
             emptyCard('warn', 'No agent family reported', view.transport_error
@@ -4153,7 +4448,9 @@
                 : 'The answer carried no agent family. Nothing is claimed about accounts.');
         } else if (!(selection.group.accounts || []).length) {
             var card = emptyCard('info', 'No accounts in ' + familyName(selection.group),
-                'The catalog lists this agent family, but no account is set up for it yet.');
+                catalogOmitted(view, 'catalog')
+                    ? 'This answer names the agent family but reports no accounts for it.'
+                    : 'The catalog lists this agent family, but no account is set up for it yet.');
             var notes = el('div', 'empty-notes');
             appendHarnessNotes(notes, selection.group, facets);
             if (notes.childNodes.length) card.appendChild(notes);

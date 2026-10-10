@@ -263,13 +263,16 @@ NODE_R4 = r"""
   }
 
   if (section === 'readout') {
-    // 2. With no record in the range the line is the current figure alone,
-    // of the accounts read now — never "of 0".
+    // 2. With no older record there is no historical line yet. The reading
+    // at now names its own accounts (including carried), separately from the fresh-only future.
     env = bootClock();
     await respond(env, fx.k1_chart);
     byFocus(env.root, 'chart-plot').listeners.focus[0]();
     const readout = classes(env.root, 'chart-readout')[0].textContent;
-    assert.match(readout, /recorded 1\.20 of 2 accounts/, readout);
+    const nowHistory = fx.k1_chart.reserve.chart.history.details.at(-1);
+    assert.match(readout, new RegExp('recorded ' + nowHistory.value.toFixed(2) + ' of '
+      + nowHistory.accounts + ' accounts'), readout);
+    assert.match(readout, /no new use 1\.20 of 2 current accounts/, readout);
     assert.doesNotMatch(readout, /of 0 accounts/);
     // The legend says there is no record rather than imply a line.
     assert.match(classes(env.root, 'chart-legend')[0].textContent, /no record in this span yet/);
@@ -315,7 +318,7 @@ NODE_R4 = r"""
     assert.match(text(env), /3 shown as last known, not current/);
     assert.equal(nowLabels(env).length, 1);
     assert.match(nowLabels(env)[0], /^read \d\d:\d\d$/);
-    assert.match(text(env), /Nothing read since \d\d:\d\d: no future is drawn/);
+    assert.match(classes(env.root, 'chart-legend')[0].textContent, /no future · nothing read since \d\d:\d\d/);
     click(env, 'about');
     await settle();
     assert.match(text(env), /Nothing was read on the latest attempt: nothing below is current/);

@@ -278,8 +278,11 @@ NODE_REPAIR = r"""
   // (The timeline is folded here: one read per poll, never a chart.)
   env = bootControlled();
   await drain(env, fx.weekly_tightest);
-  click(env, 'chart-toggle');
-  assert.equal(byFocus(env.root, 'chart-toggle').getAttribute('aria-expanded'), 'false');
+  // 0.8.1: the charted row's own control folds the timeline.
+  const charted = fx.weekly_tightest.reserve.summary.groups.find((g) => g.tightest).key;
+  click(env, 'limit:' + charted);
+  assert.equal(byFocus(env.root, 'limit:' + charted).getAttribute('aria-pressed'), 'false');
+  assert.equal(classes(env.root, 'tl-block').length, 0);
   env.poll();
   await settle();
   assert.match(env.requests.at(-1).url, /chart=0/, 'a folded timeline is not asked for');

@@ -624,15 +624,37 @@ def test_the_chart_keeps_a_short_outage_between_two_samples(tmp_path):
 
 def test_a_reported_reset_is_an_edge_of_the_observed_line(tmp_path):
     store = quota_history.HistoryStore(tmp_path)
-    # A 5-hour window resets at -3000; the new cycle's first reading is at -2900.
+    # A 5-hour window resets at -3060, between two sweeps; the new cycle's first
+    # reading (-3030) is seen by the very next sweep (-3000): the watch is unbroken.
+    timeline = {"a": [(-7200, 0.60, -3060), (-3030, 0.05, -3060 + FIVE_H)]}
+    sweep(store, timeline, -7200, 0, window=FIVE_H)
+    data = host_at(NOW, timeline, window=FIVE_H)
+    past = plugin.reserve_view(store, data, NOW, NOW)["chart"]["past"]
+    assert observed(past, -3061) == pytest.approx(0.4)
+    assert [round(NOW) - 3060, None] in past               # the old cycle ends at its reset
+    assert observed(past, -3001) is None                   # not a slope from 0.4 to 0.95
+    assert observed(past, -3000) == pytest.approx(0.95)
+    assert observed(past, -2800) == pytest.approx(0.95)
+
+
+def test_a_sweep_at_its_reset_never_vouches_for_the_ended_cycle(tmp_path):
+    store = quota_history.HistoryStore(tmp_path)
+    # The 5-hour window resets at -3000, exactly on a sweep. This host still
+    # calls the old reading fresh there (an engine ages it at its own reset):
+    # that sweep cannot vouch for it, so the line ends at the last sighting
+    # before the reset and the ended cycle's value is never carried to it.
     timeline = {"a": [(-7200, 0.60, -3000), (-2900, 0.05, -3000 + FIVE_H)]}
     sweep(store, timeline, -7200, 0, window=FIVE_H)
     data = host_at(NOW, timeline, window=FIVE_H)
     past = plugin.reserve_view(store, data, NOW, NOW)["chart"]["past"]
-    assert observed(past, -3001) == pytest.approx(0.4)
-    assert [round(NOW) - 3000, None] in past               # the old cycle ends at its reset
+    assert observed(past, -3121) == pytest.approx(0.4)
+    assert [round(NOW) - 3120, None] in past               # vouched to its last sighting before the reset
+    assert observed(past, -3001) is None
     assert observed(past, -2950) is None                   # not a slope from 0.4 to 0.95
     assert observed(past, -2800) == pytest.approx(0.95)
+    last_seen = sqlite3.connect(store.path).execute(
+        "SELECT max(last_seen) FROM run WHERE ratio = 0.6").fetchone()[0]
+    assert last_seen == NOW - 3120
 
 
 def test_pace_needs_fifteen_minutes_within_the_trailing_hour(tmp_path):
@@ -1554,8 +1576,11 @@ const paths = (env) => walk(env.root).filter((n) => n.tagName === 'PATH').map((n
     // The figure is the skill's own current windows alone, of the accounts it
     // applies to; last-known windows are said under it, never added in.
     const row = rowOf(env, g.key);
+    // 0.8.1: the figure says its unit itself — "of N accounts" — in place of
+    // the unit line the overview no longer carries above the rows.
     assert.equal(classes(row, 'l-fig')[0].textContent,
-                 (g.measured.accounts ? g.measured.windows.toFixed(2) : '—') + ' of ' + g.slots);
+                 (g.measured.accounts ? g.measured.windows.toFixed(2) : '—') + ' of ' + g.slots
+                 + (g.slots === 1 ? ' account' : ' accounts'));
     if (g.last_known && g.last_known.accounts) {
       assert.match(classes(row, 'l-sub')[0].textContent, new RegExp('^Last known ' + g.last_known.windows.toFixed(2) + ' · '));
     }
@@ -1566,7 +1591,17 @@ const paths = (env) => walk(env.root).filter((n) => n.tagName === 'PATH').map((n
   assert.match(stamp.title, /status read \d\d:\d\d/);
   assert.match(stamp.title, /times in /);
   assert.ok(hasSvg(env.root), 'the timeline is open on every mount');
-  assert.equal(byFocus(env.root, 'chart-toggle').getAttribute('aria-expanded'), 'true');
+  // 0.8.1: the timeline has one toggle, the charted row's own control; no
+  // second one inside the timeline, and no unit line above the rows.
+  assert.equal(byFocus(env.root, 'chart-toggle'), undefined);
+  assert.equal(classes(env.root, 'chart-toggle').length, 0);
+  assert.equal(classes(env.root, 'reserve-unit').length, 0);
+  assert.doesNotMatch(text, /a full account counts 1/);
+  assert.match(classes(env.root, 'reserve-title')[0].title, /a full account counts 1/);
+  assert.equal(classes(env.root, 'l-chart').length, groups.length, 'one control per row');
+  assert.equal(classes(env.root, 'l-chart').filter((b) => has(b, 'on')).length, 1);
+  assert.equal(byFocus(env.root, 'limit:' + tight.key).textContent, 'Hide chart');
+  assert.equal(byFocus(env.root, 'limit:' + other.key).textContent, 'Show chart');
   assert.equal(env.calls.length, 1, env.calls.map((c) => c.url).join());
   assert.ok(env.calls[0].url.startsWith(PREFIX + 'quotas?'));
   assert.doesNotMatch(env.calls[0].url, /chart=0|reuse=1/);
@@ -1604,7 +1639,11 @@ const paths = (env) => walk(env.root).filter((n) => n.tagName === 'PATH').map((n
   assert.ok(!paths(env).some((c) => /line-pace|line-hold|line-cohort|line-refill|gap-band/.test(c)), paths(env).join());
   assert.equal(walk(env.root).filter((n) => /point-mark|rail-line/.test(String(n.getAttribute('class') || ''))).length, 0);
   text = env.root.textContent;
-  assert.match(text, /Each of the 2 current accounts keeps its share and is refilled once, at its next reported reset; no later reset is assumed/);
+  // 0.8.1: the future's assumption is said once, in its legend line.
+  assert.match(classes(env.root, 'chart-legend')[0].textContent,
+               /no new use · 2 current accounts keep their share, each refilled once at its next reported reset/);
+  assert.equal((text.match(/refilled once at its next reported reset/g) || []).length, 1, 'said once on the open screen');
+  assert.equal(classes(env.root, 'lead').length, 0);
   assert.match(text, /Reported resets · no new use/);
   assert.match(text, /Left if nothing more is used: in 24 h ≈ /);
   assert.match(text, /Details, notes and data/);
@@ -1618,19 +1657,21 @@ const paths = (env) => walk(env.root).filter((n) => n.tagName === 'PATH').map((n
     assert.match(schedule.textContent, new RegExp('\\+' + sc.schedule[0].adds.toFixed(2) + sc.schedule[0].total_after.toFixed(2)
       + ' of ' + chart.y_max));
   }
-  // The legend names whose total each line is.
+  // History explains its carry style; the future names its fresh-only basis.
   assert.match(classes(env.root, 'chart-legend')[0].textContent,
-               new RegExp('recorded · ' + chart.past_accounts + ' accounts?.*no new use · ' + chart.accounts + ' current'));
+               new RegExp('history · solid: recorded; dashed: carried.*no new use · ' + chart.accounts + ' current'));
 
   // The keyboard cursor and the spoken read-out say what the chart says, for
-  // the limit on screen: at now the recorded total is the row's figure here.
+  // the limit on screen: history may carry accounts excluded from the fresh-only figure.
   const plot = byFocus(env.root, 'chart-plot');
   const readout = classes(env.root, 'chart-readout')[0];
   plot.listeners.focus[0]();
   const name = classes(rowOf(env, tight.key), 'l-name-text')[0].textContent;
   assert.ok(readout.textContent.includes(name), readout.textContent);
-  assert.match(readout.textContent, new RegExp('recorded ' + tight.measured.windows.toFixed(2) + ' of '
-    + chart.past_accounts + ' accounts?\\b'));
+  const historyNow = chart.history.details.at(-1);
+  assert.match(readout.textContent, new RegExp('recorded ' + historyNow.value.toFixed(2) + ' of '
+    + historyNow.accounts + ' accounts?\\b'));
+  assert.match(readout.textContent, /carried|recorded/);
   assert.match(readout.textContent, new RegExp('no new use ' + tight.measured.windows.toFixed(2) + ' of '
     + chart.accounts + ' current accounts?'));
   const tipText = classes(env.root, 'chart-tip')[0].textContent;
@@ -1672,16 +1713,23 @@ const paths = (env) => walk(env.root).filter((n) => n.tagName === 'PATH').map((n
   const noChart = JSON.parse(JSON.stringify(fixture.view));
   delete noChart.reserve.chart;
   env = await boot((url) => (/chart=0/.test(url) ? noChart : fixture.view));
-  click(env, 'chart-toggle');
+  // 0.8.1: the charted row's own control folds it; folded, nothing stands
+  // under the row and no row is drawn as charted.
+  click(env, 'limit:' + tight.key);
   assert.ok(!hasSvg(env.root));
-  assert.equal(byFocus(env.root, 'chart-toggle').getAttribute('aria-expanded'), 'false');
+  assert.equal(classes(env.root, 'tl-block').length, 0);
+  assert.equal(byFocus(env.root, 'limit:' + tight.key).textContent, 'Show chart');
+  assert.equal(byFocus(env.root, 'limit:' + tight.key).getAttribute('aria-pressed'), 'false');
+  assert.equal(classes(env.root, 'sel').length, 0);
+  assert.equal(classes(env.root, 'l-chart').filter((b) => has(b, 'on')).length, 0);
   env.interval()();
   await settle();
   assert.match(env.calls.at(-1).url, /chart=0/);
-  click(env, 'chart-toggle');
+  click(env, 'limit:' + tight.key);
   await settle();
   assert.match(env.calls.at(-1).url, /reuse=1/);
   assert.ok(hasSvg(env.root));
+  assert.ok(has(rowOf(env, tight.key), 'sel'));
 
   // 4. The limit's details, notes and data table sit under the timeline;
   // open, they survive the timed redraw, with the keyboard on them. About
@@ -1733,7 +1781,8 @@ const paths = (env) => walk(env.root).filter((n) => n.tagName === 'PATH').map((n
   assert.match(classes(env.root, 'chart-table')[0].textContent, /warming up/);
   assert.match(classes(env.root, 'chart-table')[0].textContent, /at least 15 minutes.*trailing hour/);
   click(env, 'scenario:recent_pace');
-  assert.match(env.root.textContent, /No account has a measured pace yet \(warming up: .*\): the same as no new use/);
+  assert.match(classes(env.root, 'chart-legend')[0].textContent,
+               /recent pace · 2 current accounts held at their shares; each refilled once at its next reported reset; no later reset is assumed\. No account has a measured pace yet \(warming up: .*\): the same as no new use/);
   env = await boot(fixture.failed);
   assert.match(env.root.textContent, /Reserve overview unavailable/);
   assert.match(env.root.textContent, /The account list below is unaffected/);
@@ -1745,7 +1794,8 @@ const paths = (env) => walk(env.root).filter((n) => n.tagName === 'PATH').map((n
   env = await boot(fixture.scoped);
   const rows = classes(env.root, 'lrow');
   assert.equal(rows.length, 2);
-  const heard = rows.map((r) => classes(r, 'l-name')[0].getAttribute('aria-label'));
+  // 0.8.1: the row's spoken summary is on its one control (.l-chart).
+  const heard = rows.map((r) => classes(r, 'l-chart')[0].getAttribute('aria-label'));
   assert.match(heard[0], /models: fable-a, fable-b/);
   assert.match(heard[1], /models: fable-c, fable-d/);
   const names = rows.map((r) => classes(r, 'l-name-text')[0].textContent);
@@ -1755,12 +1805,13 @@ const paths = (env) => walk(env.root).filter((n) => n.tagName === 'PATH').map((n
   assert.match(heard[0], /2 other accounts: no reading, limit may not apply/);
   const scopedTight = fixture.scoped.reserve.summary.groups.find((x) => x.tightest);
   assert.match(classes(env.root, 'tl-scope')[0].textContent, new RegExp('models: ' + scopedTight.models.join(', ')));
-  // A gap in the record breaks the recorded line: two pieces, not one, and
-  // the piece before the gap runs up to it. Nothing is drawn across it.
+  // The outage is carried as a dashed interval, while the solid intervals
+  // remain separate. No band or repeated marker rail is added.
   const observedLine = walk(env.root).find((n) => n.getAttribute('class') === 'line-observed' && n.tagName === 'PATH');
   const pieces = observedLine.getAttribute('d').split('M').filter(Boolean);
-  assert.equal(pieces.length, 2);
+  assert.ok(pieces.length >= 2);
   assert.match(pieces[0], /L/);
+  assert.ok(paths(env).includes('line-carried'));
   assert.ok(!walk(env.root).some((n) => /gap-band/.test(String(n.getAttribute('class') || ''))));
 
   // 7. The legend names a recorded line only where one is drawn: a value
@@ -1768,6 +1819,7 @@ const paths = (env) => walk(env.root).filter((n) => n.tagName === 'PATH').map((n
   // after it, draws nothing — the legend says there is no record.
   const lone = JSON.parse(JSON.stringify(fixture.view));
   const lc = lone.reserve.chart;
+  delete lc.history; // Legacy answer compatibility: strict measured-only series.
   const mid = lc.now - 600;
   lc.past = [[lc.start, null], [mid, 1.2], [mid, null], [lc.now, null]];
   env = await boot(lone);
@@ -1777,6 +1829,29 @@ const paths = (env) => walk(env.root).filter((n) => n.tagName === 'PATH').map((n
   env = await boot(lone);
   assert.match(classes(env.root, 'chart-legend')[0].textContent,
                new RegExp('recorded · ' + lc.past_accounts + ' accounts?'));
+
+  // Zero qualified pace still draws a future of all current accounts. Its
+  // visible legend must name that count and the held/refill assumptions even
+  // when a different cohort produced the recorded line.
+  for (const count of [1, 2]) {
+    const noPace = JSON.parse(JSON.stringify(fixture.warming));
+    const c = noPace.reserve.chart;
+    delete c.history; // Older API response still renders its named cohort.
+    c.scenarios.recent_pace.accounts = count;
+    c.scenarios.recent_pace.held = count;
+    assert.equal(c.scenarios.recent_pace.at_pace, 0);
+    c.past_accounts = count + 1;
+    c.past = [[c.now - 600, 1], [c.now, 1]];
+    env = await boot(noPace);
+    click(env, 'scenario:recent_pace');
+    const legend = classes(env.root, 'chart-legend')[0].textContent;
+    assert.ok(legend.includes('recorded · ' + (count + 1) + ' accounts'), legend);
+    assert.ok(legend.includes('recent pace · ' + count + ' current account'
+      + (count === 1 ? ' held at its share' : 's held at their shares')), legend);
+    assert.match(legend, /each refilled once at its next reported reset; no later reset is assumed/);
+    assert.match(legend, /No account has a measured pace yet/);
+    assert.equal((legend.match(/refilled once/g) || []).length, 1);
+  }
 })().catch((error) => {
   console.error(error && error.stack ? error.stack : error);
   process.exitCode = 1;
@@ -2729,7 +2804,7 @@ async function opened(view, sid) {
     assert.doesNotMatch(classes(env.root, 'chart-readout')[0].textContent, /this sweep|disagree/);
   }
   const table = classes(env.root, 'chart-table')[0].textContent;
-  assert.match(table, /3 totals seen at one sweep only .* are listed in the table, not drawn/);
+  assert.match(table, /3 totals seen at one sweep only are listed separately below/);
   assert.match(table, /2\.10seen at this sweep only/);
   assert.match(table, /not settled.*sources disagree at this sweep/);
   assert.match(table, /2\.02seen at this sweep only/);
@@ -2818,7 +2893,7 @@ async function bootThemed(view) {
   // to, and the row says how many of them are current.
   groups.forEach((g) => {
     const name = byFocus(env.root, 'limit:' + g.key);
-    assert.match(classes(name.parentNode, 'l-fig')[0].textContent, new RegExp(' of ' + g.slots + '$'));
+    assert.match(classes(name.parentNode, 'l-fig')[0].textContent, new RegExp(' of ' + g.slots + ' accounts?$'));
     assert.match(name.getAttribute('aria-label'), new RegExp(g.measured.accounts + ' current of ' + g.slots + ' accounts'));
   });
   // "lowest left": a ranking of averages, and said so.
@@ -3480,6 +3555,7 @@ def test_a_disagreeing_sighting_where_the_line_has_no_value_is_still_a_point(tmp
 NODE_GAP_SINGLETON = r"""
 (async () => {
   const view = JSON.parse(process.env.GAP_FIXTURE);
+  delete view.reserve.chart.history; // Legacy strict-series fallback remains supported.
   const env = await boot(view);
   const svg = walk(env.root).find((n) => n.getAttribute('class') === 'chart-svg');
   assert.ok(svg, 'the chart is drawn');
@@ -3806,7 +3882,7 @@ function expectPage(env, points, lo, hi) {
   const valued = points.slice(lo, hi).filter((p) => p[1] !== null).length;
   assert.equal((text.match(/seen at this sweep only/g) || []).length, valued);
   assert.equal((text.match(/sources disagree at this sweep/g) || []).length, hi - lo - valued);
-  assert.match(text, new RegExp(points.length + ' totals seen at one sweep only .* are listed in the table, not drawn'));
+  assert.match(text, new RegExp(points.length + ' totals seen at one sweep only are listed separately below'));
 }
 const at = (env, key) => byFocus(env.root, key);
 const disabled = (env, key) => at(env, key).getAttribute('aria-disabled') === 'true';
@@ -3952,7 +4028,8 @@ def _five_hour_and_weekly(directory):
 NODE_FIVE_HOUR_TO_WEEKLY = r"""
 const nameOf = (env, key) => byFocus(env.root, 'limit:' + key);
 const rowOf = (env, key) => nameOf(env, key).parentNode;
-const cueOf = (env, key) => classes(nameOf(env, key), 'l-chart')[0];
+const cueOf = (env, key) => classes(rowOf(env, key), 'l-chart')[0];
+const has = (c, name) => String(c.className).split(/\s+/).includes(name);
 const below = (env, key) => {
   const row = rowOf(env, key);
   const next = row.parentNode.childNodes[row.parentNode.childNodes.indexOf(row) + 1];
@@ -3963,8 +4040,12 @@ function expectCharted(env, shown, other) {
   assert.equal(nameOf(env, other).getAttribute('aria-pressed'), 'false');
   assert.equal(cueOf(env, shown).textContent, 'Hide chart');
   assert.equal(cueOf(env, other).textContent, 'Show chart');
+  assert.ok(has(cueOf(env, shown), 'on') && !has(cueOf(env, other), 'on'));
+  assert.ok(has(rowOf(env, shown), 'sel') && !has(rowOf(env, other), 'sel'));
   assert.match(nameOf(env, shown).getAttribute('aria-label'), / — its timeline is shown below$/);
   assert.match(nameOf(env, other).getAttribute('aria-label'), / — show its timeline$/);
+  assert.ok(nameOf(env, shown).getAttribute('aria-label').startsWith(cueOf(env, shown).textContent + ' — '));
+  assert.ok(nameOf(env, other).getAttribute('aria-label').startsWith(cueOf(env, other).textContent + ' — '));
   assert.ok(below(env, shown), 'the timeline stands under the charted limit');
   assert.equal(below(env, other), null);
   assert.equal(classes(env.root, 'tl-block').length, 1);
@@ -3976,19 +4057,25 @@ function expectCharted(env, shown, other) {
   const env = await boot((url) => (asked(url).includes('group=' + fx.week_key) ? fx.week : fx.five));
   const five = fx.five_key, week = fx.week_key;
 
-  // The name is a visible control: the chart mark and two words inside the
-  // one button, which keeps its one handler and its spoken label.
+  // 0.8.1: the row's one control is the chart toggle in its own slot — a
+  // button with the chart mark and two words, one handler, the spoken
+  // summary — a direct child of the row beside the name, which is text.
   [five, week].forEach((key) => {
     const btn = nameOf(env, key);
     assert.equal(btn.tagName, 'BUTTON');
     assert.equal(btn.listeners.click.length, 1);
-    const cue = cueOf(env, key);
-    assert.equal(cue.parentNode, btn);
-    assert.equal(cue.getAttribute('data-focus'), null);
-    assert.equal(walk(cue).filter((n) => n.tagName === 'SVG').length, 1, 'the chart mark');
+    assert.equal(cueOf(env, key), btn, 'the control is the cue');
+    assert.ok(has(btn.parentNode, 'lrow'));
+    assert.equal(classes(btn.parentNode, 'l-chart').length, 1, 'one control per row');
+    assert.equal(walk(btn).filter((n) => n.tagName === 'SVG').length, 1, 'the chart mark');
     assert.equal(walk(btn).filter((n) => n !== btn && n.tagName === 'BUTTON').length, 0);
-    assert.match(classes(btn, 'l-name-text')[0].textContent, key === five ? /^5-hour$/ : /^Weekly$/);
+    assert.equal(classes(btn, 'l-name-text').length, 0, 'the name is not inside the control');
+    const name = classes(btn.parentNode, 'l-name')[0];
+    assert.notEqual(name.tagName, 'BUTTON');
+    assert.equal(name.listeners.click, undefined);
+    assert.match(classes(name, 'l-name-text')[0].textContent, key === five ? /^5-hour$/ : /^Weekly$/);
   });
+  assert.equal(classes(env.root, 'chart-toggle').length, 0, 'no second toggle inside the timeline');
   // The family's lowest-left limit, the 5-hour one, is charted first.
   expectCharted(env, five, week);
   assert.equal(env.calls.length, 1);
@@ -4017,11 +4104,17 @@ function expectCharted(env, shown, other) {
   expectCharted(env, five, week);
   assert.equal(env.document.activeElement.getAttribute('data-focus'), 'limit:' + five);
 
-  // On the charted limit the same button folds the timeline, and says so.
+  // On the charted limit the same button folds the timeline, and says so;
+  // folded, nothing stands under any row and no row is drawn as charted.
   nameOf(env, five).listeners.click[0]({ stopPropagation() {} });
   assert.equal(cueOf(env, five).textContent, 'Show chart');
+  assert.match(nameOf(env, five).getAttribute('aria-label'), /^Show chart — /);
   assert.equal(nameOf(env, five).getAttribute('aria-pressed'), 'false');
+  assert.ok(!has(cueOf(env, five), 'on'));
   assert.equal(walk(env.root).filter((n) => n.getAttribute('class') === 'chart-svg').length, 0);
+  assert.equal(below(env, five), null);
+  assert.equal(classes(env.root, 'tl-block').length, 0);
+  assert.equal(classes(env.root, 'sel').length, 0);
 })().catch((error) => {
   console.error(error && error.stack ? error.stack : error);
   process.exitCode = 1;
