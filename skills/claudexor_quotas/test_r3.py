@@ -1237,12 +1237,13 @@ NODE_ADVISORY_MATRIX = r"""
   // are; the scope words say how many are not listed. Two scopes whose
   // listed names are the same still get two names on screen.
   assert.match(text, /m00 \+24/);
-  // 0.8.0: one .lrow per limit; its whole spoken summary is on its name
-  // button (.l-name), which shows the limit in the timeline.
+  // 0.8.0: one .lrow per limit; its whole spoken summary is on the row's one
+  // control (0.8.1: the chart toggle, .l-chart), which shows the limit in
+  // the timeline.
   const rows = classes(env.root, 'lrow');
   const names = rows.map((r) => classes(r, 'l-name-text')[0].textContent);
   assert.equal(new Set(names).size, names.length, names.join(' | '));
-  const heard = rows.map((r) => classes(r, 'l-name')[0].getAttribute('aria-label')).join(' ');
+  const heard = rows.map((r) => classes(r, 'l-chart')[0].getAttribute('aria-label')).join(' ');
   assert.match(heard, /models: m00, m01, .*m23 \+1 more/);
   // With a restriction present, the unrestricted account-windows stand beside it.
   assert.match(heard, /1 cooldown reported \(0\.70\)/);

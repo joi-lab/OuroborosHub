@@ -1,6 +1,8 @@
 """Claudexor Quotas — quota/limit projection for authorized accounts.
 
-Cached reads use the existing host status endpoint. The owner's explicit
+Cached reads request the host's passive quota view. Older hosts may answer
+with their full status projection; the response marker distinguishes them
+without another GET. The owner's explicit
 Refresh action uses the dedicated host quota-refresh endpoint. No daemon token
 is touched and quota policy remains in Claudexor.
 
@@ -45,7 +47,7 @@ except ImportError:  # imported directly from the skill directory (tests)
 
 STATUS_TIMEOUT_SEC = 25.0
 REFRESH_TIMEOUT_SEC = 180.0
-STATUS_PATH = "/api/claudexor/status"
+STATUS_PATH = "/api/claudexor/status?view=quota"
 # The status of a request that may have reached the host but whose answer was
 # not read: a timeout, a connection closed after the request went out, an
 # answer that broke off. For a POST its outcome is unknown. 0 is a request
@@ -54,9 +56,10 @@ STATUS_PATH = "/api/claudexor/status"
 NO_ANSWER_STATUS = -1
 REFRESH_PATH = "/api/claudexor/quota/refresh"
 
-# The collector. Every status read makes the daemon probe the agent CLIs for a
-# few seconds (see the host's claudexor_accounts._status_payload), so two
-# minutes keeps the background cost small. A source reading superseded within
+# The collector requests the passive quota view, without the host's outer
+# subsystem diagnostics. The engine's account read may still run cold CLI
+# discovery. An older host may ignore that query and answer its
+# full status; no second request is sent to guess which. A source superseded within
 # two minutes may go unseen; that costs the pace a point, never adds one, since
 # only the readings actually seen are kept. A read the widget route made
 # moments ago is recorded instead of issuing another.
@@ -197,7 +200,12 @@ def _fetch_status(
     port: int,
     timeout_sec: float = STATUS_TIMEOUT_SEC,
 ) -> Tuple[Optional[Dict[str, Any]], str]:
-    """Return the passive cached status projection."""
+    """One request for the quota view; never a provider-refresh action.
+
+    A supporting core marks its envelope ``view: quota``. An older core may
+    ignore the query and run its legacy full-status diagnostics; passive_read_info
+    reports that compatibility path explicitly. Never probe a second URL.
+    """
     payload, error, _status = _request_json(port, STATUS_PATH, timeout_sec=timeout_sec)
     return payload, error
 
@@ -230,6 +238,43 @@ def facet_note(states: Dict[str, str]) -> str:
     """Name exactly which facets did not answer; empty when all are ok."""
     bad = [f"{facet}: {state}" for facet, state in states.items() if state != READ_OK]
     return "; ".join(bad)
+
+
+def passive_read_info(payload: Optional[Dict[str, Any]], error: str = "") -> Dict[str, Any]:
+    """Small response provenance, separate from quota source freshness.
+
+    The marker is required to claim the dedicated view. Safe phase codes
+    and numeric durations are useful diagnostics; arbitrary error bodies,
+    paths and additional response metadata are not forwarded.
+    """
+    mode = ("unavailable" if error or not isinstance(payload, dict) else
+            "quota" if payload.get("view") == "quota" else "legacy_status")
+    out: Dict[str, Any] = {"mode": mode, "timings_ms": {}, "read_errors": {}}
+    if mode != "quota":
+        return out
+    raw_timings = payload.get("timings_ms")
+    timings = raw_timings if isinstance(raw_timings, dict) else {}
+    for phase in ("discovery", "accounts", "quota", "total"):
+        value = timings.get(phase)
+        if not isinstance(value, bool) and isinstance(value, (int, float)) \
+                and 0 <= value <= 86400000 and math.isfinite(float(value)):
+            out["timings_ms"][phase] = value
+    raw_errors = payload.get("read_errors")
+    errors = raw_errors if isinstance(raw_errors, dict) else {}
+    for phase in ("discovery", "accounts", "quota"):
+        entry = errors.get(phase)
+        if not isinstance(entry, dict):
+            continue
+        code = entry.get("code")
+        if not isinstance(code, str) or not 0 < len(code) <= 80 \
+                or any(c not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.:-" for c in code):
+            continue
+        safe: Dict[str, Any] = {"code": code}
+        status = entry.get("status_code")
+        if not isinstance(status, bool) and isinstance(status, int) and 100 <= status <= 599:
+            safe["status_code"] = status
+        out["read_errors"][phase] = safe
+    return out
 
 
 def _subject_key(value: Any) -> str:
@@ -427,13 +472,14 @@ def _cooldown_view(cooldown: qs.Cooldown, now: float) -> Dict[str, Any]:
 
 
 def _cooldowns(rows: List[Dict[str, Any]], harness_id: str, subject_id: str,
-               now: float) -> List[Dict[str, Any]]:
+               now: float, projection: Optional[str] = None) -> List[Dict[str, Any]]:
     """Every cooldown the account's readings report that holds now, by the
     reserve's own rule (quota_summary.cooldowns_of): from whichever source,
     fresh or stale, whatever number is drawn. One cooldown reported twice
     (by the row's state and its constraint, or by two sources) is one fact,
     kept from its freshest, newest report."""
-    found = [cooldown for row in rows for cooldown in qs.cooldowns_of(row, harness_id, subject_id, now)]
+    found = [cooldown for row in rows
+             for cooldown in qs.cooldowns_of(row, harness_id, subject_id, now, projection)]
     found.sort(key=lambda c: (not c.fresh, -(c.observed_at or -math.inf), c.kind != "constraint"))
     out: List[Dict[str, Any]] = []
     seen = set()
@@ -538,7 +584,13 @@ def quota_for(
 
     Model-scoped exhaustions the availability reports are read the same way
     (quota_summary.exhaustions_of) and carried as facts of their own
-    (``model_exhaustions``): a model's limit, never the account's state."""
+    (``model_exhaustions``): a model's limit, never the account's state.
+
+    Each window is current or not by its own freshness
+    (quota_summary.constraint_freshness, over the whole answer): one snapshot
+    can give a current weekly window and a stale 5-hour one. A snapshot with
+    no window speaks by its own word."""
+    moment = time.time() if now is None else float(now)
     if quota_read != READ_OK:
         return {
             "state": "not_checked",
@@ -546,6 +598,7 @@ def quota_for(
             "resets_at": "",
             "note": "",
             "constraints": [],
+            "reset_credits": qs.reset_credits_of([], harness_id, moment, quota_read),
             "stale": [],
             "cooldowns": [],
             "model_exhaustions": [],
@@ -563,8 +616,9 @@ def quota_for(
             and str((row.get("subject") or {}).get("harness") or "") == harness_id
             and _subject_key((row.get("subject") or {}).get("subject_id")) == subject_id
         ]
-    moment = time.time() if now is None else float(now)
-    cooldowns = _cooldowns(rows, harness_id, subject_id, moment)
+    projection = attributed.freshness if attributed is not None else qs.freshness_projection(snapshots)
+    reset_credits = qs.reset_credits_of(rows, harness_id, moment, projection=projection)
+    cooldowns = _cooldowns(rows, harness_id, subject_id, moment, projection)
     exhaustions = _exhaustions(rows, harness_id, subject_id, moment)
     # Held as a whole: "Cooling down" (unless a window is at its limit),
     # whatever the numbers say and however fresh they are — the reserve
@@ -574,8 +628,33 @@ def quota_for(
     if cooling and all(c["until"] for c in cooling):
         # Unavailable until the last of them ends, if every end is known.
         cooling_until = max(cooling, key=lambda c: qs.parse_instant(c["until"]) or 0.0)["until"]
-    fresh = [row for row in rows if str(row.get("freshness") or "") == "fresh"]
-    other = [row for row in rows if row not in fresh]
+    # Each snapshot's windows by their own freshness: the current ones, and
+    # the rest by their word, in the order they were reported.
+    current: List[Tuple[Dict[str, Any], List[Dict[str, Any]]]] = []
+    held: List[Tuple[Dict[str, Any], str, List[Dict[str, Any]]]] = []
+    for row in rows:
+        listed = row.get("constraints")
+        windows = [c for c in (listed if isinstance(listed, list) else []) if isinstance(c, dict)]
+        if not windows:
+            word = str(row.get("freshness") or "")
+            if word == "fresh":
+                current.append((row, []))
+            else:
+                held.append((row, word or "unknown", []))
+            continue
+        words: Dict[str, List[Dict[str, Any]]] = {}
+        for constraint in windows:
+            words.setdefault(qs.constraint_freshness(row, constraint, projection), []).append(constraint)
+        if "fresh" in words:
+            current.append((row, words.pop("fresh")))
+        held.extend((row, word, items) for word, items in words.items())
+    # Fresh credits/cooldowns are facts of their own, not evidence of a
+    # current quota window. Keep their projections without hiding stale usage.
+    fresh = [row for row, windows in current if not held or not windows or any(
+        qs.reading_of(c, harness_id, subject_id, source=str(row.get("source") or "unnamed"),
+                      fresh=True, observed=qs.parse_instant(row.get("observed_at"))) is not None
+        for c in windows)]
+    other = [row for row, _word, _windows in held]
     absence = _absence_view(
         absences,
         harness_id,
@@ -585,14 +664,11 @@ def quota_for(
     stale_views = [
         {
             "observed_at": str(row.get("observed_at") or ""),
-            "freshness": str(row.get("freshness") or "unknown"),
+            "freshness": word,
             "source": str(row.get("source") or ""),
-            "constraints": [
-                _constraint_view(c) for c in (row.get("constraints") or [])
-                if isinstance(c, dict)
-            ],
+            "constraints": [_constraint_view(c) for c in windows],
         }
-        for row in other
+        for row, word, windows in held
     ]
 
     if not fresh:
@@ -606,6 +682,7 @@ def quota_for(
                     "live cooldown evidence may still deny or rank."
                 ),
                 "constraints": [],
+                "reset_credits": reset_credits,
                 "stale": stale_views,
                 "cooldowns": cooldowns,
                 "model_exhaustions": exhaustions,
@@ -620,6 +697,7 @@ def quota_for(
             "resets_at": "",
             "note": "",
             "constraints": [],
+            "reset_credits": reset_credits,
             "stale": [],
             "cooldowns": cooldowns,
             "model_exhaustions": exhaustions,
@@ -637,17 +715,21 @@ def quota_for(
     order: List[Any] = []
     by_key: Dict[str, List[qs.Reading]] = {}
     origin: Dict[int, Tuple[Dict[str, Any], Dict[str, Any]]] = {}
-    for row in fresh:
-        availability = availability or str((row.get("availability") or {}).get("state") or "")
+    for row, windows in current:
+        # The availability word is the snapshot's own: only a fresh one speaks for now.
+        if str(row.get("freshness") or "") == "fresh":
+            availability = availability or str((row.get("availability") or {}).get("state") or "")
         observed = qs.parse_instant(row.get("observed_at"))
         source = str(row.get("source") or "").strip()[:64] or "unnamed"
-        for constraint in row.get("constraints") or []:
-            if not isinstance(constraint, dict):
-                continue
+        for constraint in windows:
             reading = qs.reading_of(constraint, harness_id, subject_id, source=source,
                                     fresh=True, observed=observed)
             if reading is None:
-                order.append(_constraint_view(constraint))
+                # A manual credit counter is never a percentage or an
+                # automatic refill, even if malformed window fields appear.
+                shown = (dict(constraint, used_ratio=None, window_seconds=None, resets_at="")
+                         if qs.is_reset_credit(constraint, harness_id) else constraint)
+                order.append(_constraint_view(shown))
                 continue
             if reading.key not in by_key:
                 order.append(reading.key)
@@ -729,6 +811,7 @@ def quota_for(
         "resets_at": str(resets_at or ""),
         "note": note,
         "constraints": views,
+        "reset_credits": reset_credits,
         # Readings that are not current — fresh ones the reserve does not
         # count (each says why), then stale ones — as last-known facts.
         "stale": not_current + stale_views,
@@ -865,12 +948,15 @@ def build_groups(payload: Dict[str, Any], states: Dict[str, str],
         groups.append({
             "harness_id": hid,
             "family_label": str(meta.get("display_name") or meta.get("displayName") or hid),
-            "harness_status": str(meta.get("status") or ""),
-            "harness_enabled": bool(meta.get("enabled")) if meta else None,
+            # A cached catalog can still name a family, but cannot say
+            # whether its harness is healthy or enabled now.
+            "harness_status": str(meta.get("status") or "") if states.get("catalog") == READ_OK else "",
+            "harness_enabled": bool(meta.get("enabled")) if meta and states.get("catalog") == READ_OK else None,
             "provider_family": str(meta.get("provider_family") or meta.get("providerFamily") or ""),
             "catalog_known": states.get("catalog") == READ_OK and bool(meta),
             "routing_read": routing_read,
             "accounts": accounts,
+            "reset_credits": qs.family_reset_credits([a["quota"]["reset_credits"] for a in accounts]),
             "accounts_signed_in": sum(1 for a in accounts if a["signed_in"]),
             "accounts_unavailable": accounts_read != READ_OK,
         })
@@ -1023,16 +1109,25 @@ def build_view(payload: Optional[Dict[str, Any]], transport_error: str,
     # account list was not read now.
     group_states = dict(effective)
     group_states["accounts"] = states.get("accounts", "indeterminate")
+    group_states["catalog"] = states.get("catalog", "indeterminate")
     daemon = (payload or {}).get("daemon")
     daemon = daemon if isinstance(daemon, dict) else {}
     runtime = daemon.get("runtime") if isinstance(daemon.get("runtime"), dict) else {}
+    passive = passive_read_info(payload, transport_error)
+    # The dedicated envelope deliberately omits catalog diagnostics. Keep
+    # its truthful not_read state, without treating that omission as a failed
+    # quota read or preventing a healthy screen from becoming the fallback.
+    required = tuple(f for f in FACETS if not (
+        f == "catalog" and passive["mode"] == "quota" and states.get(f) == "not_read"))
     view: Dict[str, Any] = {
         "ok": bool(payload) and not transport_error,
         "transport_error": transport_error,
         "facets": states,
-        "facet_note": facet_note(states),
+        "facet_note": facet_note({f: states.get(f, "indeterminate") for f in required}),
+        "passive_read": passive,
         "daemon": {
-            "state": str(daemon.get("state") or ("unknown" if payload and not transport_error else "")),
+            "state": str(daemon.get("state") or (
+                "unknown" if payload and not transport_error and passive["mode"] != "quota" else "")),
             "engine_version": str(daemon.get("engine_version") or ""),
             "self_started": bool(daemon.get("self_started")),
             "last_error": str(runtime.get("last_error") or daemon.get("last_error") or ""),
@@ -1040,10 +1135,10 @@ def build_view(payload: Optional[Dict[str, Any]], transport_error: str,
         "groups": build_groups(payload, group_states, now) if isinstance(payload, dict) else [],
         # Facets shown from the last read that answered them: facet -> when.
         "cached": {facet: qs.iso(at) for facet, at in sorted((cached or {}).items())},
-        # Every facet read now and nothing failed on the way: the only kind
-        # of answer the widget keeps as its own fallback.
+        # Every requested facet read now and nothing failed on the way: the
+        # only kind of answer the widget keeps as its own fallback.
         "complete": bool(payload) and not transport_error
-        and all(states.get(facet) == READ_OK for facet in FACETS),
+        and all(states.get(facet) == READ_OK for facet in required),
     }
     return view
 
@@ -1230,7 +1325,7 @@ class LatestRead:
         for facet, (parts, read_at) in kept.items():
             for key, value in parts.items():
                 if facet == "quota" and key == "quota" and isinstance(value, list):
-                    value = [dict(row, freshness="stale") if isinstance(row, dict) else row
+                    value = [qs.stale_snapshot(row) if isinstance(row, dict) else row
                              for row in value]
                 out[key] = value
             reads[facet] = READ_OK
@@ -1279,6 +1374,8 @@ def reserve_view(
             lambda salt: qs.history_requests(groups, salt, now, chart_for, horizon, norm=norm), now,
             latest=lambda salt: qs.latest_requests(norm, groups, salt),
             roster=lambda salt: qs.roster_requests(norm, salt),
+            chart_series=(chart_for.key, now - qs.HORIZONS.get(horizon, qs.HORIZONS["24h"]))
+            if chart_for is not None else None,
         )
 
     norm, groups = qs.prepare(payload, now, cached)
@@ -1602,6 +1699,7 @@ def tool_answer(
     result = reserve_view(history_store(api), effective, None if error else read_at, moment,
                           chart=False, cached=cached, reads=qs.facet_reads(payload))
     answer = qs.compact(result["summary"], wanted, detail is True)
+    answer["passive_read"] = passive_read_info(payload, error)
     if len(answer["groups"]) > TOOL_MAX_GROUPS:
         answer["groups_omitted"] = len(answer["groups"]) - TOOL_MAX_GROUPS
         answer["groups"] = answer["groups"][:TOOL_MAX_GROUPS]

@@ -23,8 +23,8 @@ What this module refuses to do:
   sources of one account unless the subject, limit, duration, scope and reset
   agree — and when two sources measured the same moment, their values too;
 - invent a reset the provider did not report, infer that a window "has not
-  started" from how its numbers look, or draw a history point for a moment
-  this skill's collector was not watching.
+  started" from how its numbers look, or call a carried display value a
+  measurement of a moment this skill's collector was not watching.
 """
 
 from __future__ import annotations
@@ -495,6 +495,8 @@ class Attributed:
     unattributed: Counter
     superseded: Counter
     malformed: int
+    # How this answer's windows carry freshness (freshness_projection).
+    freshness: str = "legacy"
 
     def rows_of(self, harness: str, subject_id: str) -> List[Dict[str, Any]]:
         return [row for hid, sid, row in self.rows if hid == harness and sid == subject_id]
@@ -539,6 +541,66 @@ def facet_reads(payload: Any) -> Dict[str, str]:
     return out
 
 
+# The engine's opted-in quota read (``GET /v2/quota?view=constraint_freshness``,
+# passed on unchanged by the host's passive quota view) gives every window its
+# own freshness: a weekly window can be fresh while its 5-hour sibling's reset
+# has passed and the snapshot as a whole is stale. All or nothing per answer.
+CONSTRAINT_FRESHNESS = ("fresh", "stale", "unknown")
+
+
+def freshness_projection(snapshots: Any) -> str:
+    """How one answer's snapshots speak for their windows' freshness:
+    ``legacy`` (no constraint carries its own), ``explicit`` (every one does,
+    exactly) or ``invalid`` (anything in between, or a word outside
+    CONSTRAINT_FRESHNESS). Judged over the whole answer, the host's own rule:
+    a snapshot without it beside one with it is a mixed answer."""
+    rows = [row for row in snapshots if isinstance(row, dict)] if isinstance(snapshots, list) else []
+    groups = [row.get("constraints", []) for row in rows]
+    items = [item for group in groups if isinstance(group, list) for item in group]
+    if not any(isinstance(item, dict) and "freshness" in item for item in items):
+        return "legacy"
+    if all(isinstance(group, list) for group in groups) and all(
+            isinstance(item, dict) and item.get("freshness") in CONSTRAINT_FRESHNESS for item in items):
+        return "explicit"
+    return "invalid"
+
+
+def constraint_freshness(row: Dict[str, Any], constraint: Any, projection: str) -> str:
+    """The one freshness of one window of one snapshot, which every reader of
+    a window asks: the reserve and the tool (normalize), the account view
+    (plugin.quota_for), cooldowns, the reset-credit counter and the collector.
+
+    In a legacy answer the snapshot's conservative word speaks for each of its
+    windows: absence never makes a window fresh. In an explicit one each window
+    has its own. In an invalid one no window is fresh, and none is stripped
+    back to legacy. The engine keeps a snapshot's stale or unknown on every
+    window and only ages a fresh one, so a fresh window under any other
+    snapshot word contradicts it and is not fresh either."""
+    aggregate = row.get("freshness")
+    if projection == "legacy":
+        return aggregate if aggregate in CONSTRAINT_FRESHNESS else "unknown"
+    own = constraint.get("freshness") if projection == "explicit" and isinstance(constraint, dict) else None
+    if own not in CONSTRAINT_FRESHNESS:
+        return "unknown"
+    if own == "fresh" and aggregate not in ("fresh", "stale"):
+        return "unknown"
+    return own
+
+
+def stale_snapshot(row: Dict[str, Any]) -> Dict[str, Any]:
+    """A snapshot answered from a kept quota facet: never fresh, as a whole or
+    in any window. A copy; the kept answer itself is never changed. A window's
+    own word is only aged (fresh to stale), so the answer keeps its kind: a
+    legacy one stays legacy and a malformed one stays malformed."""
+    out = dict(row, freshness="stale")
+    constraints = row.get("constraints")
+    if isinstance(constraints, list):
+        out["constraints"] = [dict(item, freshness="stale")
+                              if isinstance(item, dict) and item.get("freshness") == "fresh" else item
+                              for item in constraints]
+    return out
+
+
 def _models_of(raw: Any) -> Tuple[str, ...]:
     """Every model a limit applies to, sorted, each name in full: what the
     scope's identity is taken from. Display bounds are applied afterwards."""
@@ -553,6 +615,135 @@ def _shown_models(scope_models: Tuple[str, ...]) -> Tuple[str, ...]:
     return tuple(name[:MAX_TEXT] for name in scope_models[:MAX_MODELS])
 
 
+def is_reset_credit(constraint: Dict[str, Any], harness: str) -> bool:
+    """Only the engine's reset_credits constraint, with its optional namespace.
+
+    A label mentioning credits does not turn another constraint into this
+    counter. Its count has no relationship to a used ratio or a quota window.
+    """
+    return meaning_of(harness, _text(constraint.get("id"), 120), "") == "reset_credits"
+
+
+_CREDIT_NOUN = r"(?:manual\s+)?reset\s+credits?"
+_CREDIT_LABELS = tuple(re.compile(pattern, re.IGNORECASE) for pattern in (
+    rf"([0-9]+)\s+{_CREDIT_NOUN}(?:\s+(?:available|remaining|left))?",
+    rf"{_CREDIT_NOUN}(?:\s+(?:available|remaining|left))?\s*:\s*([0-9]+)"
+    r"(?:\s+(?:available|remaining|left))?",
+    rf"{_CREDIT_NOUN}\s*\(\s*([0-9]+)\s+(?:available|remaining|left)\s*\)",
+))
+
+
+def reset_credit_count(label: Any) -> Optional[int]:
+    """Read one explicit whole count from the provider's label, or no count.
+
+    The wire constraint currently carries its count in text. Full matches
+    avoid reading a price, a date, a fraction, a negative or one of several
+    numbers as available credits. An unfamiliar label stays visible verbatim
+    (bounded) with an unreadable count. No other constraint field is guessed.
+    """
+    if not isinstance(label, str) or len(label) > 512:
+        return None
+    for pattern in _CREDIT_LABELS:
+        match = pattern.fullmatch(label.strip())
+        if match:
+            count = int(match.group(1))
+            # Output travels through JavaScript; never publish a rounded count.
+            return count if count <= 2 ** 53 - 1 else None
+    return None
+
+
+def reset_credits_of(rows: Sequence[Dict[str, Any]], harness: str, now: float,
+                     quota_read: str = "ok", projection: Optional[str] = None) -> Dict[str, Any]:
+    """One account's manual counter, apart from quota ratios and timed resets.
+
+    Exact account attribution belongs to the caller (attribute/quota_for).
+    Newest fresh evidence wins, otherwise newest stale evidence stays dated.
+    Same-moment reports must agree exactly; a malformed newest label never
+    falls back silently to an older readable one. An unknown count is None,
+    never zero. Each report's freshness is its own counter's, as the engine
+    reported it (constraint_freshness, over the whole answer's ``projection``;
+    without one, over ``rows``).
+    """
+    if projection is None:
+        projection = freshness_projection(list(rows))
+    out: Dict[str, Any] = {
+        "state": "unknown", "count": None, "observed_at": None,
+        "age_seconds": None, "source": "", "label": "", "count_origin": None,
+        "reason": "not_reported" if quota_read == "ok" else "quota_" + quota_read,
+        "reports": [],
+    }
+    if quota_read != "ok":
+        return out
+    reports: List[Dict[str, Any]] = []
+    for row in rows[:MAX_SNAPSHOTS]:
+        if not isinstance(row, dict):
+            continue
+        constraints = row.get("constraints")
+        observed = parse_instant(row.get("observed_at"))
+        for constraint in (constraints if isinstance(constraints, list) else [])[:MAX_CONSTRAINTS]:
+            if not isinstance(constraint, dict) or not is_reset_credit(constraint, harness):
+                continue
+            label = constraint.get("label")
+            count = reset_credit_count(label)
+            reports.append({
+                "label": _text(label, 512),
+                "source": _text(row.get("source"), 64) or "unnamed",
+                "freshness": constraint_freshness(row, constraint, projection),
+                "observed_at": iso_exact(observed) if observed is not None else None,
+                "count": count, "count_origin": "label" if count is not None else None,
+            })
+    out["reports"] = reports
+    if not reports:
+        return out
+    fresh = [r for r in reports if r["freshness"] == "fresh"]
+    candidates = fresh or reports
+    chosen = max(candidates, key=lambda r: (
+        parse_instant(r["observed_at"]) if r["observed_at"] else -math.inf, r["source"], r["label"]))
+    observed = parse_instant(chosen["observed_at"])
+    out.update({key: chosen[key] for key in ("observed_at", "source", "label")})
+    if observed is None:
+        out["reason"] = "no_observation_time"
+        return out
+    if observed > now + FUTURE_SKEW_SEC:
+        out["reason"] = "observed_in_future"
+        return out
+    out["age_seconds"] = max(0, round(now - observed))
+    newest = [r for r in candidates if r["observed_at"]
+              and observed - parse_instant(r["observed_at"]) <= SAME_INSTANT_SEC]
+    if any(r["count"] is None for r in newest):
+        out.update(state="unreadable", reason="count_unreadable")
+    elif len({r["count"] for r in newest}) > 1:
+        out.update(state="conflict", reason="sources_disagree")
+    else:
+        out.update(state="current" if fresh else "last_known", count=chosen["count"],
+                   count_origin="label", reason="" if fresh else "not_fresh")
+    return out
+
+
+def family_reset_credits(credits: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+    """An attributed account counted once, with dated counts kept separate.
+
+    Totals are counters reported by these profiles, not a promise of usable
+    resets, distinct vendor pools, restored quota or currency value.
+    """
+    current = [c for c in credits if c["state"] == "current"]
+    known = [c for c in credits if c["state"] == "last_known"]
+    out: Dict[str, Any] = {
+        "accounts": len(credits), "count": sum(c["count"] for c in current) if current else None,
+        "current_accounts": len(current),
+        "last_known_count": sum(c["count"] for c in known) if known else None,
+        "last_known_accounts": len(known),
+        "unknown_accounts": sum(c["state"] == "unknown" for c in credits),
+        "unreadable_accounts": sum(c["state"] == "unreadable" for c in credits),
+        "conflict_accounts": sum(c["state"] == "conflict" for c in credits),
+    }
+    for prefix, values in (("", current), ("last_known_", known)):
+        observed = [parse_instant(c["observed_at"]) for c in values]
+        out[prefix + "oldest_observed_at"] = iso(min(observed)) if observed else None
+        out[prefix + "newest_observed_at"] = iso(max(observed)) if observed else None
+    return out
+
+
 def reading_of(constraint: Dict[str, Any], harness: str, subject_id: str, *, source: str,
                fresh: bool, observed: Optional[float], plan: str = "",
                plan_key: str = "") -> Optional[Reading]:
@@ -560,6 +751,8 @@ def reading_of(constraint: Dict[str, Any], harness: str, subject_id: str, *, sou
     it — the reserve overview and the account view both call this. None for
     a constraint that is not a quota window (a cooldown or a credit counter:
     no window length and no ratio)."""
+    if is_reset_credit(constraint, harness):
+        return None
     window = window_of(constraint.get("window_seconds"))
     raw_ratio = constraint.get("used_ratio")
     if window is None and raw_ratio is None:
@@ -645,6 +838,7 @@ def attribute(payload: Any) -> Attributed:
     accounts = _accounts_of(payload, unified) if accounts_known else {}
 
     snapshots = payload.get("quota") if quota_known else []
+    projection = freshness_projection(snapshots)
     snapshots = [row for row in (snapshots if isinstance(snapshots, list) else [])
                  if isinstance(row, dict)][:MAX_SNAPSHOTS]
     malformed = 0
@@ -692,11 +886,12 @@ def attribute(payload: Any) -> Attributed:
     return Attributed(
         reads=reads, unified=unified, accounts=accounts, accounts_known=accounts_known,
         quota_known=quota_known, rows=rows, unattributed=unattributed,
-        superseded=superseded, malformed=malformed,
+        superseded=superseded, malformed=malformed, freshness=projection,
     )
 
 
-def cooldowns_of(row: Dict[str, Any], harness: str, subject_id: str, now: float) -> List[Cooldown]:
+def cooldowns_of(row: Dict[str, Any], harness: str, subject_id: str, now: float,
+                 projection: Optional[str] = None) -> List[Cooldown]:
     """The cooldowns one attributed snapshot reports that hold at ``now`` —
     what the reserve's "cooling" restriction and the account view both read.
 
@@ -710,13 +905,18 @@ def cooldowns_of(row: Dict[str, Any], harness: str, subject_id: str, now: float)
     reading carried past that end would otherwise hold the account after the
     engine let it go. Each is typed evidence of its own — never inferred from a
     share, and never a share or a reset itself. A model-scoped exhaustion the
-    availability reports is not a cooldown: :func:`exhaustions_of` reads it."""
+    availability reports is not a cooldown: :func:`exhaustions_of` reads it.
+    Which reading reported it: the snapshot's own word for its availability,
+    the window's own freshness for a ``cooldown_until`` (constraint_freshness)."""
     fresh = str(row.get("freshness") or "") == "fresh"
+    if projection is None:
+        projection = freshness_projection([row])
     observed = parse_instant(row.get("observed_at"))
     source = _text(row.get("source"), 64) or "unnamed"
     out: List[Cooldown] = []
 
-    def fact(raw: Any, scope_models: Tuple[str, ...], kind: str, label: str) -> Cooldown:
+    def fact(raw: Any, scope_models: Tuple[str, ...], kind: str, label: str,
+             fresh: bool = fresh) -> Cooldown:
         reported = raw not in (None, "")
         shown = _shown_models(scope_models)
         return Cooldown(
@@ -743,7 +943,8 @@ def cooldowns_of(row: Dict[str, Any], harness: str, subject_id: str, now: float)
         if until is not None and until <= now:
             continue
         label = _text(constraint.get("label") or constraint.get("id")) or "cooldown"
-        out.append(fact(raw, _models_of(constraint.get("applies_to_models")), "constraint", label))
+        out.append(fact(raw, _models_of(constraint.get("applies_to_models")), "constraint", label,
+                        constraint_freshness(row, constraint, projection) == "fresh"))
     return out
 
 
@@ -818,6 +1019,7 @@ def normalize(payload: Any, now: float,
             harness_order.append(hid)
 
     malformed = attributed.malformed
+    projection = attributed.freshness
     readings: List[Reading] = []
     cooling_all: Set[Tuple[str, str]] = set()
     cooling_scoped: Dict[Tuple[str, str], Set[str]] = {}
@@ -827,13 +1029,12 @@ def normalize(payload: Any, now: float,
         if hid not in harness_order:
             harness_order.append(hid)
 
-        fresh = str(row.get("freshness") or "") == "fresh"
         observed = parse_instant(row.get("observed_at"))
         source = _text(row.get("source"), 64) or "unnamed"
         plan = _text((row.get("subject") or {}).get("plan_label"))
         account = accounts.get((hid, sid))
         plan_key = plan_evidence(plan, account.plan if account is not None else None)
-        for cooldown in cooldowns_of(row, hid, sid, now):
+        for cooldown in cooldowns_of(row, hid, sid, now, projection):
             if cooldown.scope == "-":
                 cooling_all.add((hid, sid))
             else:
@@ -848,6 +1049,7 @@ def normalize(payload: Any, now: float,
             if not isinstance(constraint, dict):
                 malformed += 1
                 continue
+            fresh = constraint_freshness(row, constraint, projection) == "fresh"
             reading = reading_of(constraint, hid, sid, source=source, fresh=fresh,
                                  observed=observed, plan=plan, plan_key=plan_key)
             if reading is not None:  # else a cooldown or a credit counter
@@ -865,13 +1067,24 @@ def normalize(payload: Any, now: float,
 
 
 def recordable(norm: Normalized, now: float) -> List[Reading]:
-    """The readings the collector may keep: fresh, numeric, placed in time.
-    Every source is kept — which one to believe is decided at read time."""
+    """The readings the collector may keep: fresh, numeric, placed in time,
+    of a cycle still running at the sweep. Every source is kept — which one to
+    believe is decided at read time. Freshness is each window's own
+    (constraint_freshness): a weekly window the engine still reports fresh is
+    kept beside a 5-hour sibling whose own reset has passed, which is not.
+
+    A reading whose own reported reset is at or before the sweep never vouches
+    for that sweep, whatever freshness it carries: freshness was judged when
+    the engine read it, and a reported reset ends the cycle that reading
+    describes (the reserve's rule in resolve_member, the engine's own per-window
+    rule). Kept, it would carry the ended cycle's value to the sweep."""
     out = []
     for reading in norm.readings:
         if not reading.fresh or reading.ratio is None or reading.observed_at is None:
             continue
         if reading.observed_at > now + FUTURE_SKEW_SEC:
+            continue
+        if reading.resets_at is not None and reading.resets_at <= now:
             continue
         out.append(reading)
     return out
@@ -2176,6 +2389,170 @@ def _hold_value(member: Member, at: float, right: bool) -> float:
     return member.remaining
 
 
+def _last_known_history(calc: GroupCalc, state: SummaryState, start: float) -> Dict[str, Any]:
+    """Display history only; never an input to measured pace or headlines.
+
+    Each subject enters at its first recorded sighting. A failed/stale/missing
+    reading carries its last resolved value, even beyond a reported reset,
+    with dated provenance. No full refill is inferred. Source disagreement
+    keeps the last resolved fact dated, or a gap if none has ever resolved.
+
+    The database has no historical rosters. A subject absent from the known
+    roster (current or kept) needs a sighting inside this window to enter it;
+    an older seed alone cannot establish its membership here. In-window
+    history remains, and a current roster confirms removal only at the read
+    boundary, whose metadata says the actual removal time is unknown. An
+    unanswered or cached roster never establishes a removal time.
+    """
+    now, view = state.now, state.view
+    roster = {pseudo_id(view.salt, h, sid) for h, sid in state.norm.accounts} if view and view.salt else set()
+    roster_known = roster_state(state.norm) != "unknown" and bool(view and view.salt)
+    runs = {subject: list(values) for (subject, key), values in (view.runs.items() if view else [])
+            if key == calc.key and values and (not roster_known or subject in roster
+                                               or any(run.last_seen >= start for run in values))}
+    slots = {m.pseudo or account_key(m.harness, m.subject_id): m for m in calc.slots}
+    for subject in slots:
+        runs.setdefault(subject, [])
+    covers = {subject: _member_cover(values, now, view) for subject, values in runs.items()}
+    changes: Dict[float, Set[str]] = {start: set(runs), now: set(runs)}
+    for subject, cover in covers.items():
+        for _starts, spans in cover:
+            for run, end in spans:
+                for at in (run.first_seen, run.last_seen, end, run.resets_at):
+                    if at is not None and at <= now:
+                        changes.setdefault(at, set()).add(subject)
+    can_remove = roster_state(state.norm) == "current" and bool(view and view.salt)
+    facts: Dict[str, Dict[str, Any]] = {}
+    members: Set[str] = set()
+    measured: Set[str] = set()
+    unresolved: Dict[str, str] = {}
+    line: List[List[Any]] = []
+    details: List[Dict[str, Any]] = []
+    previous_members: Set[str] = set()
+    max_accounts = 0
+
+    for at in sorted(changes):
+        for subject in changes[at]:
+            cover = covers[subject]
+            available = []
+            for starts, spans in cover:
+                index = bisect.bisect_right(starts, at) - 1
+                if index >= 0:
+                    available.append(spans[index][0])
+            if available:
+                members.add(subject)
+            active = _active(cover, at, True)
+            candidates = active or available
+            # Ended cycles cannot veto a newly observed current cycle.
+            running = [r for r in candidates if r.resets_at is None or r.resets_at > at]
+            candidates = running or candidates
+            chosen, reason = _resolve_sources([
+                (r.ratio, r.resets_at, r.first_obs if at < r.last_seen else r.last_obs,
+                 r.source, r) for r in candidates])
+            if active and _member_ratio(cover, at, True) is None:
+                chosen, reason = None, "sources_disagree"
+            if chosen is not None:
+                observed = chosen.first_obs if at < chosen.last_seen else chosen.last_obs
+                old = facts.get(subject)
+                if old is None or observed >= old["observed"]:
+                    facts[subject] = {"ratio": chosen.ratio, "observed": observed,
+                                      "reset": chosen.resets_at, "source": chosen.source,
+                                      "origin": "history"}
+            fact = facts.get(subject)
+            if (chosen is not None and fact is not None and fact["source"] == chosen.source
+                    and fact["ratio"] == chosen.ratio
+                    and fact["observed"] == (chosen.first_obs if at < chosen.last_seen else chosen.last_obs)
+                    and _member_ratio(cover, at) == fact["ratio"]):
+                measured.add(subject)
+                unresolved.pop(subject, None)
+            else:
+                measured.discard(subject)
+                unresolved[subject] = reason or "not_observed"
+            if at == now and subject in slots:
+                member = slots[subject]
+                if member.status == "measured" and member.reading is not None:
+                    reading = member.reading
+                    facts[subject] = {"ratio": reading.ratio, "observed": reading.observed_at,
+                                      "reset": reading.resets_at, "source": reading.source,
+                                      "origin": "payload"}
+                    members.add(subject)
+                    measured.add(subject)
+                    unresolved.pop(subject, None)
+                else:
+                    measured.discard(subject)
+                    lk = member.last_known
+                    if lk is not None and (subject not in facts or lk.observed_at >= facts[subject]["observed"]):
+                        facts[subject] = {"ratio": lk.ratio, "observed": lk.observed_at,
+                                          "reset": lk.resets_at, "source": lk.source, "origin": lk.origin}
+                        members.add(subject)
+                    unresolved[subject] = member.reason or member.status
+        removed = set()
+        if at == now and can_remove:
+            removed = members - roster
+            members -= removed
+            measured -= removed
+        if at < start:
+            continue
+        # At the left edge only the facts learned by then are used. Later
+        # members cannot blank those hours or acquire invented earlier values.
+        added = members - previous_members if line else set()
+        lost = previous_members - members if line else set()
+        changed = bool(added or lost)
+        selected = [facts[s] for s in sorted(members) if s in facts]
+        carried = members - measured
+        carried_facts = [facts[s] for s in sorted(carried) if s in facts]
+        unknown = len(members) - len(selected)
+        value = round(sum(1 - fact["ratio"] for fact in selected), 4) if members and not unknown else None
+        oldest = min((fact["observed"] for fact in carried_facts), default=None)
+        detail = {
+            "at": _instant(at), "value": value, "accounts": len(members),
+            "measured": len(members & measured), "carried": len(carried_facts), "unknown": unknown,
+            "oldest_observed_at": iso(oldest),
+            "age_seconds": max(0, round(at - oldest)) if oldest is not None else None,
+            "origins": dict(sorted(Counter(f["origin"] for f in carried_facts).items())),
+            "sources": sorted({f["source"] for f in carried_facts}),
+            "reset_passed": sum(1 for f in carried_facts if f["reset"] is not None and f["reset"] <= at),
+            "reasons": dict(sorted(Counter(unresolved.get(s, "not_observed") for s in carried).items())),
+            "change": ("membership_changed" if lost else "first_recorded") if changed else None,
+            "added": len(added), "removed": len(lost),
+            "removal_time_unknown": bool(removed),
+        }
+        if changed and line and line[-1][1] is not None:
+            # A break, never a vertical consumption/refill step. Same-time
+            # vertices keep the old segment all the way to the boundary.
+            line.append([_instant(at), None])
+            details.append(dict(detail, value=None, change=None))
+        comparable = {k: v for k, v in detail.items() if k not in ("at", "age_seconds")}
+        previous = {k: v for k, v in details[-1].items() if k not in ("at", "age_seconds")} if details else None
+        if comparable != previous or at in (start, now):
+            line.append([_instant(at), value])
+            details.append(detail)
+        max_accounts = max(max_accounts, len(members))
+        previous_members = set(members)
+    clipped = None
+    if len(line) > MAX_PAST_VERTICES:
+        line, details = line[-MAX_PAST_VERTICES:], details[-MAX_PAST_VERTICES:]
+        clipped = line[0][0]
+    table_rows = details[:-1][::max(1, len(details) // TABLE_PAST_ROWS)]
+    table_rows += [d for d in details[:-1] if d["change"] and d not in table_rows][:TABLE_PAST_ROWS]
+    table_rows.append(details[-1])
+    table = [{"at": iso_exact(d["at"]), "observed": d["value"],
+              "accounts": d["accounts"], "carried": d["carried"],
+              "oldest_observed_at": d["oldest_observed_at"], "sources": d["sources"],
+              "event": ("membership change; actual removal time unknown" if d["removed"] else
+                        "first recorded member" if d["added"] else
+                        "dated pre-reset value; refill not observed" if d["reset_passed"] else
+                        "last known" if d["carried"] else "recorded")}
+             for d in sorted(table_rows, key=lambda d: d["at"])]
+    return {"line": line, "details": details, "max_accounts": max_accounts,
+            "clipped_before": clipped, "table": table,
+            "membership_note": "Accounts enter at their first recorded value, not an inferred creation time. "
+            "Accounts absent from the known roster need a sighting inside this window; older seeds alone "
+            "do not establish membership. "
+            "Historical rosters were not recorded; a removal confirmed by the current roster is shown "
+            "only at this read, with its actual time unknown. Missing quota readings never remove an account."}
+
+
 def _pace_value(member: Member, now: float, at: float, right: bool) -> float:
     rate = member.rate["windows_per_hour"] / 3600.0
     reset = member.reading.resets_at
@@ -2417,6 +2794,7 @@ def build_chart(state: SummaryState, key: str = "", harness: str = "",
     past_basis = ("current" if members else "none") if not basis else (
         "current" if len(current_basis) == len(basis)
         else "last_known" if not current_basis else "recorded")
+    history = _last_known_history(calc, state, start)
 
     # The reported resets inside the horizon, grouped one way for the marks,
     # the table and both scenarios' schedules (horizon_events: split at the
@@ -2570,7 +2948,7 @@ def build_chart(state: SummaryState, key: str = "", harness: str = "",
         "end": round(end),
         # The scale is every account this limit is known to apply to (see
         # GroupCalc.slots), so it does not move when a reading goes stale.
-        "y_max": max(len(calc.slots), len(members)),
+        "y_max": max(len(calc.slots), len(members), history["max_accounts"]),
         "accounts": len(members),
         # The row's figure, unrounded: where both scenarios start at now.
         "current_windows": round(current, 4) if members else None,
@@ -2578,6 +2956,9 @@ def build_chart(state: SummaryState, key: str = "", harness: str = "",
         # _scenario). None with no current reading: nothing is projected
         # from last-known values.
         "scenarios": scenarios,
+        # Display history. ``past`` below remains the legacy strict record;
+        # neither carry nor changing membership enters the rate estimator.
+        "history": history,
         "past": past,
         # How many recorded values the observed line has before ``now``,
         # and — only when the vertex ceiling cut the oldest part away — the
@@ -2626,13 +3007,12 @@ def build_chart(state: SummaryState, key: str = "", harness: str = "",
         # the widget shows. The older lines' own wording is apart, in
         # ``legacy_assumptions``: it describes fields that are not drawn.
         "assumptions": [
-            "Observed: every account of this limit with a record in this range, "
-            "whatever its reading now, while this skill's collector was "
-            "watching, every recorded change drawn; a gap means at least one of "
-            "them had no reading vouched for then (an outage, a sweep that did "
-            "not see it, a reset, a stale reading). "
-            "A total seen at one sweep only is a point of its own, never held "
-            "over time or across a gap.",
+            "History: each account enters at its first recorded value. Temporary missing, stale or "
+            "failed readings retain its dated last known value, dashed with age and source. "
+            "Passing a reported reset retains the pre-reset value; it does not prove a refill. "
+            "Membership changes break the line and are not consumption. The current figure and "
+            "future use only fresh readings; carry never enters measured pace.",
+            history["membership_note"],
             "No new use: each account keeps its current reading and refills to "
             "a full window only at its own next reported reset.",
             "Recent pace: every account read now, the ones whose pace "
