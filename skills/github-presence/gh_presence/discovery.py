@@ -62,13 +62,17 @@ def discovery_event(eid, revision, old, *, config, notification, recipient, repo
            ". Public subject discovered outside the selected repositories.\n\n" +
            dump({"notification": notification, "subject": target}),
            "html_url": target.get("html_url") or target.get("url")}
+    history_gap = "history_actor_unavailable" if any(
+        not row.get("_actor_id") and ("user" in row or "author" in row) for row in history
+    ) else None
     value = make_event(eid, revision, old, account=connection_account(config),
                        repo=repo, thread=route["thread_kind"] + "." + str(route["number"]),
                        kind="notification", raw=raw, actor={"platform": "github", "attribution": "notification_service"},
-                       route=route, watched=[], history=history)
+                       route=route, watched=[], history=history, history_gap=history_gap)
     # A sticky notification reason is never a fresh mention, assignment or
     # review request. Setup uses any_message on the owner-created Silent place.
     value["facts"] = ["any_message"]
-    value["message"].update(discovery_only=True, notification=notification, recipient_id=recipient,
-                             coverage_gaps=[{"scope": "permission", "code": "repository_not_selected_for_writes"}])
+    value["message"].update(discovery_only=True, notification=notification, recipient_id=recipient)
+    value["message"]["coverage_gaps"].append(
+        {"scope": "permission", "code": "repository_not_selected_for_writes"})
     return value

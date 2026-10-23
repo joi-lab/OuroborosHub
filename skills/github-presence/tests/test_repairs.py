@@ -307,6 +307,30 @@ class DiscoveryTests(Case):
                 "output_ref": e["source_event_id"], "delivery_reporting_version": 1})
         self.assertFalse(self.store.rows("SELECT * FROM outbox"))
 
+    def test_discovery_preserves_missing_numeric_author_gap(self):
+        self.provider.actor = lambda row: {"platform": "github", "attribution": "unknown"}
+        repo, target, reply_route, history = public_subject(self.provider, self.notification())
+        value = discovery_event("discovery-unknown", 1, None, config=CONFIG,
+                                notification=self.notification(), recipient=11, repo=repo,
+                                target=target, route=reply_route, history=history)
+        self.assertFalse(value["conversation"]["history"]["complete"])
+        self.assertEqual(value["message"]["coverage_gaps"], [
+            {"scope": "history", "code": "history_actor_unavailable"},
+            {"scope": "permission", "code": "repository_not_selected_for_writes"},
+        ])
+        self.assertEqual(value["facts"], ["any_message"])
+        self.assertTrue(value["message"]["discovery_only"])
+
+    def test_discovery_with_known_authors_keeps_complete_history(self):
+        repo, target, reply_route, history = public_subject(self.provider, self.notification())
+        value = discovery_event("discovery-known", 1, None, config=CONFIG,
+                                notification=self.notification(), recipient=11, repo=repo,
+                                target=target, route=reply_route, history=history)
+        self.assertTrue(value["conversation"]["history"]["complete"])
+        self.assertEqual(value["message"]["coverage_gaps"], [
+            {"scope": "permission", "code": "repository_not_selected_for_writes"},
+        ])
+
     def test_private_external_notification_never_fetches_subject(self):
         self.provider.repository = lambda *_: self.fail("private outside selection")
         with self.assertRaisesRegex(TransportError, "visibility_unproven"):
