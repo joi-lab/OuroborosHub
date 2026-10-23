@@ -31,6 +31,8 @@ SUITES = {
     'slack-bridge': {'skills': ['slack-bridge'],
                      'tests': ['skills/slack-bridge/tests', 'tests/test_slack_presence_core_consumer.py'],
                      'dependencies': ['httpx', 'starlette', 'websockets']},
+    'github-presence': {'skills': ['github-presence'], 'tests': ['skills/github-presence/tests'],
+                        'dependencies': ['PyJWT[crypto]>=2.13,<3', 'httpx', 'starlette']},
     'telegram-bot': {'skills': ['telegram-bot'], 'tests': ['skills/telegram-bot/tests'],
                      'dependencies': ['httpx', 'starlette', 'websockets']},
     '2gis': {'skills': ['2gis'], 'tests': ['tests/test_2gis.py']},

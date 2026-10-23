@@ -51,6 +51,11 @@
       "recommended": false
     },
     {
+      "digest": "e9cff5cf22756001e46f54414eac4e398489f29c88f4220b8399525f82485465",
+      "name": "github-presence",
+      "recommended": false
+    },
+    {
       "digest": "f7332f5fc9bb2d84e98a71bd594de62f8fc3ee215cba7e72a9a8988be73e20b3",
       "name": "google-workspace",
       "recommended": false

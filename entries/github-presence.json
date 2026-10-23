@@ -1,0 +1,23 @@
+{
+  "category": [
+    "messaging"
+  ],
+  "connects": [
+    "GitHub"
+  ],
+  "description": "GitHub places for issues, pull requests, reviews and Discussions, with separate Notifications readers, owner questions in Main and durable reply receipts.",
+  "digest": "e9cff5cf22756001e46f54414eac4e398489f29c88f4220b8399525f82485465",
+  "install_specs": [
+    "PyJWT[crypto]>=2.13,<3"
+  ],
+  "name": "github-presence",
+  "owner": "ouroboros-agent",
+  "schema_version": 2,
+  "source": {
+    "kind": "hosted",
+    "path": "skills/github-presence"
+  },
+  "type": "extension",
+  "version": "0.1.0",
+  "withdrawn": null
+}
