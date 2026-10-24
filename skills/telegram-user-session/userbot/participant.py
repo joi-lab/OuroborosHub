@@ -393,17 +393,29 @@ async def serve(root, host_url, token, adapter_factory, login, verify, health):
                         await asyncio.sleep(max(1,exc.seconds))
                     except (ConnectionError,TimeoutError,errors.RPCError):
                         health(root,'provider_retry');await asyncio.sleep(30)
-                while True:
-                    if faults: raise RuntimeError('ingress unavailable; reconcile before restart')
-                    engine.current()
-                    if (Path(root)/'login-request.json').exists() or (Path(root)/'auth-handoff.json').exists():
-                        await login(root,cfg,adapter)
-                    health(root,'running')
-                    await engine.hydrate_once()
-                    await engine.incoming_once()
-                    if asyncio.get_running_loop().time() >= engine.next_send:
-                        await engine.dispatch_one()
-                    await engine.reports_once()
-                    await asyncio.sleep(1)
+                intake = None
+                try:
+                    while True:
+                        if faults: raise RuntimeError('ingress unavailable; reconcile before restart')
+                        if intake is not None and intake.done():
+                            intake.result()  # Surface unexpected intake/storage failures.
+                            intake = None
+                        engine.current()
+                        if (Path(root)/'login-request.json').exists() or (Path(root)/'auth-handoff.json').exists():
+                            await login(root,cfg,adapter)
+                        health(root,'running')
+                        await engine.hydrate_once()
+                        # A Host turn can await a model that needs our outbound tools.
+                        # Keep one owned intake worker, never block those tools on it.
+                        if intake is None:
+                            intake = asyncio.create_task(engine.incoming_once(), name='telegram-host-intake')
+                        if asyncio.get_running_loop().time() >= engine.next_send:
+                            await engine.dispatch_one()
+                        await engine.reports_once()
+                        await asyncio.sleep(1)
+                finally:
+                    if intake is not None:
+                        intake.cancel()
+                        await asyncio.gather(intake, return_exceptions=True)
         finally:
             await adapter.disconnect()
