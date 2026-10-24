@@ -1,7 +1,7 @@
 {
   "description": "Official Ouroboros skills catalog.",
   "name": "OuroborosHub",
-  "raw_base_url": "https://raw.githubusercontent.com/razzant/OuroborosHub/28d753935c36e2b6d741796f2753542870f220c9",
+  "raw_base_url": "https://raw.githubusercontent.com/razzant/OuroborosHub/294a8730607059c949f9fa851bcbad2e54839a05",
   "schema_version": 1,
   "skills": [
     {
@@ -2880,23 +2880,33 @@
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "0b4195e92d5e5249c1829c781e0ce00f6bc528e29c1411d8fb7b9e5b731cc093",
-          "size": 4958
+          "sha256": "cf6a39c4894271d62b42335cb7cb861adfef2d5208cb647fd3d8e708eb1c3a89",
+          "size": 6233
+        },
+        {
+          "path": "attachment_tool.py",
+          "sha256": "bf0267c6fcec238d811a8e6a2f8f87a9272ff2a42ea2d9cace2786174d3a6c53",
+          "size": 2624
         },
         {
           "path": "plugin.py",
-          "sha256": "5722d322d5c2b27a5906131ebbcfcc9d4b0b95488cb0cbe3e9ea13c470bc6474",
-          "size": 7411
+          "sha256": "898dafc7b398bef14f30dc0ef3311678d0412bd499428c904f2399247bc2be28",
+          "size": 8248
         },
         {
           "path": "scripts/companion.py",
-          "sha256": "671bb1e5efaf0d6850b179663044420eb1a1f76d616f0b60854419daa4a9bed7",
-          "size": 12273
+          "sha256": "3093ec4f0c73d05a62905111cd8b9feeca1b6cac595ab9ba7da04d55104cbf77",
+          "size": 14128
+        },
+        {
+          "path": "tests/test_attachment.py",
+          "sha256": "fbfd201f597560271f22cbad9ddeefab7efa081d83a2e0c7cb58151808bf6445",
+          "size": 3560
         },
         {
           "path": "tests/test_voice.py",
-          "sha256": "e023d89fec3369ba21c99d8e28626d921259d3c25eb8fe6c0ce897142caddc36",
-          "size": 15333
+          "sha256": "318b8f83f77b6b4a0966b4b378f14c74f177b6368415ab1bd4eb705e37a6fe32",
+          "size": 19284
         },
         {
           "path": "whisper_runtime.py",
@@ -2917,7 +2927,7 @@
       "name": "whisper-voice",
       "slug": "whisper-voice",
       "type": "extension",
-      "version": "0.2.0",
+      "version": "0.2.1",
       "when_to_use": "The owner explicitly enables optional local voice input in the composer."
     },
     {
