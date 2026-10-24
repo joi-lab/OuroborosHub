@@ -577,9 +577,10 @@ def _make_status_route(api: Any):
             health = status_record(state / "companion-health.json")
             category = health.get("category", "unknown")
             if category not in {"running", "dependency_missing", "config_invalid",
+                                "login_required", "provider_retry", "ingress_failed",
                                 "login_failed", "transport_error", "companion_error", "session_mismatch"}:
                 category = "unknown"
-            if category == "running":
+            if category in {"running", "login_required", "provider_retry"}:
                 # A historical running row is not proof that its writer is
                 # alive. The companion refreshes it once per loop; the status
                 # route never upgrades a stale heartbeat into live health.
@@ -645,6 +646,8 @@ def _make_status_route(api: Any):
                                if code_request_status == "password_required" else "") +
                               (" Queue unavailable: inspect and back up private skill state before repair."
                                if queue_status == "storage_unavailable" else "") +
+                              (" Authorization required: use Login actions to request a code or submit the pending login input."
+                               if category == "login_required" else "") +
                               (" Session/config mismatch: stop the companion, inspect the private session, and reconcile credentials offline."
                                if category == "session_mismatch" else "")),
                           "configured": config is not None,

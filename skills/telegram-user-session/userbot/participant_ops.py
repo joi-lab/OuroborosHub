@@ -30,7 +30,7 @@ SPECS = {
  "avatar_set": ("write", {"asset": S}, {}),
  "send_text": ("message", {"peer": PEER, "text": S}, {"reply_id": I, "topic_id": I}),
  "send_media": ("message", {"peer": PEER, "asset": S}, {"text": S, "reply_id": I, "topic_id": I, "photo": B}),
- "send_sticker": ("message", {"peer": PEER, "source_peer": PEER, "message_id": I}, {"reply_id": I, "topic_id": I}),
+ "send_sticker": ("message", {"peer": PEER}, {"source_peer": PEER, "message_id": I, "short_name": S, "document_id": S, "reply_id": I, "topic_id": I}),
  "forward": ("message", {"peer": PEER, "source_peer": PEER, "message_id": I}, {"topic_id": I}),
  "edit": ("write", {"peer": PEER, "message_id": I, "text": S}, {"topic_id": I}),
  "delete": ("write", {"peer": PEER, "message_id": I}, {"topic_id": I}),
@@ -81,6 +81,11 @@ def validate(op, args):
         raise ValueError("limit must be 1..100")
     if len(args.get("text", "").encode("utf-8")) > 4096:
         raise ValueError("text max 4096 UTF-8 bytes; split deliberately")
+    if op == 'send_sticker':
+        source = 'source_peer' in args and 'message_id' in args
+        pack = 'short_name' in args and 'document_id' in args
+        if source == pack or (pack and ('source_peer' in args or 'message_id' in args)) or (source and ('short_name' in args or 'document_id' in args)):
+            raise ValueError('choose source_peer/message_id OR short_name/document_id')
     if op == "send_text" and not args["text"].strip():
         raise ValueError("empty message")
     if op == "react" and len(args["emoji"].encode()) > 64:
@@ -100,10 +105,18 @@ def public_entity(e):
     from telethon import utils
     return {"id": str(utils.get_peer_id(e)), "title": getattr(e, "title", None),
             "username": getattr(e, "username", None), "first_name": getattr(e, "first_name", None),
-            "bot": bool(getattr(e, "bot", False)), "forum": bool(getattr(e, "forum", False))}
+            "bot": bool(getattr(e, "bot", False)), "forum": bool(getattr(e, "forum", False)),
+            "default_restrictions": {k:bool(getattr(e.default_banned_rights,k,False)) for k in ('view_messages','send_messages','send_media','send_docs','send_stickers','send_photos','send_videos','send_audios','send_voices')} if getattr(e,'default_banned_rights',None) else None,
+            "my_admin_rights": {k:bool(getattr(e.admin_rights,k,False)) for k in ('change_info','delete_messages','ban_users','invite_users','pin_messages','add_admins','manage_topics')} if getattr(e,'admin_rights',None) else None}
+
+def public_document(d):
+    from telethon import types as T
+    return {'id': str(d.id), 'mime': d.mime_type,
+            'attributes': [type(x).__name__ for x in d.attributes],
+            'sticker': any(isinstance(x, T.DocumentAttributeSticker) for x in d.attributes)}
 
 def public_message(m):
-    return {"id": m.id, "text": getattr(m, "message", "") or "", "sender_id": getattr(m, "sender_id", None),
+    return {'document': public_document(m.document) if getattr(m, 'document', None) else None,"id": m.id, "text": getattr(m, "message", "") or "", "sender_id": getattr(m, "sender_id", None),
             "date": m.date.isoformat() if getattr(m, "date", None) else None,
             "media": type(m.media).__name__ if getattr(m, "media", None) else None,
             "reply_to_top_id": getattr(getattr(m, "reply_to", None), "reply_to_top_id", None)}
@@ -135,7 +148,8 @@ class Operations:
                     a[key] = None
                 else:
                     a[key] = await self.client.get_input_entity(peer_value(value))
-        a["resolved_peer"] = str(utils.get_peer_id(a["peer"])) if a.get("peer") is not None else ""
+                    a['resolved_'+key] = str(await self.adapter.get_me()) if isinstance(a[key],T.InputPeerSelf) else str(utils.get_peer_id(a[key]))
+        a['resolved_peer'] = a.get('resolved_peer','')
         if a.get('invite_hash'):
             inspection = await self.client(F.messages.CheckChatInviteRequest(a['invite_hash']))
             chat = getattr(inspection,'chat',None)
@@ -145,6 +159,15 @@ class Operations:
                 from .participant_state import policy
                 if policy(self.root)['blocked_peers']:
                     raise ValueError('invite identity unresolved: exclusions cannot be checked')
+        guard = getattr(self, 'guard', None)
+        if guard is not None:
+            # Resolve aliases before any content/participant reads, not only
+            # before the eventual mutation.
+            await guard(a['resolved_peer'], a.get('topic_id',''), SPECS[op][0] != 'read')
+            if a.get('source_peer') is not None:
+                await guard(a['resolved_source_peer'], '', False)
+            if a.get('user') is not None:
+                await guard(a['resolved_user'], '', SPECS[op][0] != 'read')
         if op in {'delete','edit','react','pin'}:
             target = await self.client.get_messages(a['peer'],ids=a['message_id'])
             actual = getattr(target,'peer_id',None)
@@ -160,9 +183,9 @@ class Operations:
         if guard is not None:
             await guard(a['resolved_peer'], a.get('topic_id',''), SPECS[op][0] != 'read')
             if a.get('source_peer') is not None:
-                await guard(str(utils.get_peer_id(a['source_peer'])), '', False)
+                await guard(a['resolved_source_peer'], '', False)
             if a.get('user') is not None:
-                await guard(str(utils.get_peer_id(a['user'])), '', SPECS[op][0] != 'read')
+                await guard(a['resolved_user'], '', SPECS[op][0] != 'read')
         if a.get("topic_id"):
             topics = await self.adapter.topic_ids(peer_value(args["peer"]))
             if a["topic_id"] not in topics:
@@ -182,6 +205,33 @@ class Operations:
             a["source"] = source
             if op != "forward":
                 a["document"] = utils.get_input_document(source.document)
+        if op == 'send_sticker':
+            if 'short_name' in a:
+                pack = await self.client(F.messages.GetStickerSetRequest(T.InputStickerSetShortName(a['short_name']), 0))
+                document = next((d for d in pack.documents if str(d.id) == a['document_id']), None)
+            else:
+                document = a['source'].document
+            if document is None or not any(isinstance(x, T.DocumentAttributeSticker) for x in document.attributes):
+                raise ValueError('selected document is not a Telegram sticker; select its canonical sticker-pack document')
+            a['document'] = utils.get_input_document(document)
+        if op in {'ban','unban','mute','unmute','admin'}:
+            from telethon import errors
+            try:
+                current = (await self.client(F.channels.GetParticipantRequest(utils.get_input_channel(a['peer']), a['user']))).participant
+            except errors.UserNotParticipantError:
+                current = None  # A definite absence, never a failed read.
+            if op == 'admin':
+                rights = getattr(current, 'admin_rights', None) or T.ChatAdminRights()
+                values = rights.to_dict(); values.pop('_', None)
+                values.update({k:a[k] for k in SPECS['admin'][2] if k != 'rank' and k in a})
+                a['admin_rights'] = T.ChatAdminRights(**values)
+                a['rank'] = a.get('rank', getattr(current, 'rank', '') or '')
+            else:
+                rights = getattr(current, 'banned_rights', None) or T.ChatBannedRights(None)
+                values = rights.to_dict(); values.pop('_', None)
+                values['view_messages' if op in {'ban','unban'} else 'send_messages'] = op in {'ban','mute'}
+                if 'until' in a: values['until_date'] = a['until'] or None
+                a['banned_rights'] = T.ChatBannedRights(**values)
         if "asset" in a:
             path = asset(self.root, a["asset"])
             uploaded = await self.client.upload_file(path)
@@ -250,7 +300,7 @@ class Operations:
         pack = T.InputStickerSetShortName(a.get("short_name", ""))
         if op == "sticker_pack":
             r = await c(F.messages.GetStickerSetRequest(pack, 0))
-            return {"title": r.set.title, "short_name": r.set.short_name, "documents": [{"id": str(d.id), "mime": d.mime_type} for d in r.documents]}
+            return {"title": r.set.title, "short_name": r.set.short_name, "documents": [public_document(d) for d in r.documents]}
         if op in {"send_text", "send_media", "send_sticker"}:
             if op == "send_text":
                 req = F.messages.SendMessageRequest(peer, a["text"], random_id=random_id, reply_to=reply)
@@ -289,12 +339,16 @@ class Operations:
             r = await c(F.channels.CreateChannelRequest(a["title"], a.get("about", ""), broadcast=a.get("broadcast", False), megagroup=not a.get("broadcast", False), forum=a.get("forum", False)))
         elif op == "invite":
             r = await c(F.channels.InviteToChannelRequest(utils.get_input_channel(peer), [utils.get_input_user(a["user"])]))
+            missing = [{'user_id':str(x.user_id), 'premium_would_allow_invite':bool(x.premium_would_allow_invite),
+                        'premium_required_for_pm':bool(x.premium_required_for_pm)} for x in r.missing_invitees]
+            requested = a['resolved_user']
+            return {'ack_type':type(r).__name__, 'requested_user_id':requested,
+                    'invitation_outcome':'not_invited' if any(x['user_id']==requested for x in missing) else 'accepted',
+                    'missing_invitees':missing}
         elif op in {"ban", "unban", "mute", "unmute"}:
-            rights = T.ChatBannedRights(a.get("until") or None, view_messages=op == "ban", send_messages=op == "mute")
-            r = await c(F.channels.EditBannedRequest(utils.get_input_channel(peer), a["user"], rights))
+            r = await c(F.channels.EditBannedRequest(utils.get_input_channel(peer), a["user"], a['banned_rights']))
         elif op == "admin":
-            rights = {k: a.get(k, False) for k in SPECS["admin"][2] if k != "rank"}
-            r = await c(F.channels.EditAdminRequest(utils.get_input_channel(peer), utils.get_input_user(a["user"]), T.ChatAdminRights(**rights), a.get("rank", "")))
+            r = await c(F.channels.EditAdminRequest(utils.get_input_channel(peer), utils.get_input_user(a["user"]), a['admin_rights'], a['rank']))
         elif op == "pin":
             r = await c(F.messages.UpdatePinnedMessageRequest(peer, a["message_id"], unpin=a.get("unpin", False), silent=not a.get("notify", False)))
         elif op == "chat_title":

@@ -22,14 +22,35 @@
     <header><span class="badge">OWN ACCOUNT · SHARED OUROBOROS MEMORY</span><h2>Telegram, as myself</h2>
       <p class="muted">An independent AI participant, not a public command service.</p>
       <p class="status" id="account" role="status">Reading account status…</p>
+      <p class="status" id="cooldown" role="status">Telegram wait: not checked.</p>
       <div class="actions"><button type="button" id="refresh">Check status</button></div></header>
-    <section class="rule"><h3>Participation</h3><form id="controls">
+    <section class="rule"><h3>1 · Connect the dedicated account</h3>
+      <p class="muted">Get your own API ID and hash at my.telegram.org. Saved secrets stay private; blank secret fields keep them. An existing session is preserved.</p>
+      <form id="setup"><div class="fields">
+        <label>Telegram API ID<input name="api_id" inputmode="numeric" disabled></label>
+        <label>API hash<input type="password" name="api_hash" autocomplete="off" disabled></label>
+        <label>Dedicated account phone<input type="password" name="phone" autocomplete="off" placeholder="+country code…" disabled></label>
+      </div><div class="actions"><button type="button" data-save-setup disabled>Save account setup</button></div><p class="status" data-result role="status"></p></form>
+      <p class="muted">Use Login actions here only if status asks for authorization. Saving does not request a code or log in.</p>
+    </section>
+    <section class="rule"><h3>2 · Permit participation</h3><form id="controls">
       <div class="fields"><label>Transport mode<select name="mode" disabled><option value="participant">Free participant</option><option value="legacy">Legacy scoped transport</option></select></label>
       <label class="check"><input type="checkbox" name="outgoing" disabled><span>Allow outgoing actions<br><small>Telegram rights and current Place controls still apply.</small></span></label></div>
+      <details><summary>Identity, exclusions and pacing</summary><div class="fields">
+        <label>Your numeric Telegram ID<input name="owner_id" disabled><small>Recognition only; confirm This is me in host Places.</small></label>
+        <label>Expected account ID<input name="expected_account_id" disabled></label>
+        <label>Excluded numeric chat IDs<input name="blocked_peers" disabled placeholder="Comma-separated; blank permits all"></label>
+        <label>Minimum seconds between actions<input type="number" min="1" max="60" name="interval" disabled></label>
+      </div></details>
       <div class="actions"><button type="button" data-save-controls disabled>Save controls</button></div><p class="status" data-result role="status"></p></form>
       <p class="muted">Free mode does not require enrolling each correspondent. It does not grant strangers owner authority.</p>
     </section>
-    <details id="guide"><summary>Addressed gate, conversation history and setup</summary>
+    <section class="rule"><h3>3 · Choose where and how I participate</h3>
+      <p><strong>Settings → Behavior → Consciousness → Places → Telegram</strong></p>
+      <p>Use the verified account ID above and leave conversation empty for the whole account. Set wakes, Active / Silent / Paused and behavior instructions there. That host-owned sheet is the single behavior editor, not another setting hidden in Advanced.</p>
+      <p class="muted">For selective groups choose mention / reply; private messages can wake directly. Write the desired tone and boundaries in Place notes. Names become available after the separate core update. Confirm your identity there with This is me.</p>
+    </section>
+    <details id="guide"><summary>Detailed connection and behavior guide</summary>
       <h3>Choose what wakes me</h3>
       <p>Open <strong>Settings → Behavior → Consciousness → Places</strong> and select Telegram. The host owns the live wake list; this widget does not keep another copy.</p>
       <ul><li><strong>Direct message:</strong> private correspondence is addressed to me.</li><li><strong>Mention / reply to me:</strong> selective group participation. A plain name in text is not a Telegram mention.</li><li><strong>Any message:</strong> every supported incoming message can wake me, if offered by the connector.</li></ul>
@@ -37,7 +58,7 @@
       <p>Active permits participation. Silent still permits thought, but holds outward actions. Paused hears without starting a new focus. Outgoing actions above is an additional local switch.</p>
       <p>The prepared host UI contribution adds a Places door on connector cards and a read-only conversation reader. Until that core change is applied, use the existing Places settings; a transport log is not a substitute for canonical conversation history.</p>
       <h3>Connect this account once</h3>
-      <ol><li>Save the API ID/hash and dedicated phone in Settings → Advanced → Ouroboros · Telegram participant. Blank secret fields keep saved values.</li>
+      <ol><li>Save the API ID/hash and dedicated phone in step 1 above. The same account settings remain available in Advanced. Blank secret fields keep saved values.</li>
       <li>Request one code below. A request is not proof the code arrived. If necessary use Telegram's explicit next delivery method; do not start a request loop.</li>
       <li>Enter the newest code, and a 2FA password only if requested. A staged login input is not successful authorization; Check status afterwards.</li>
       <li>Connect Telegram in Places using the verified account ID. An empty conversation means account-wide scope. Confirm your own numeric Telegram actor ID there; names and claims are not identity.</li>
@@ -53,6 +74,8 @@
       <label>2FA password, only if requested<input type="password" name="password" autocomplete="off"></label></div>
       <div class="actions"><button type="button" data-login>Submit private login input</button></div><p class="status" data-result role="status"></p></form>
     </details>`;
+  // Keep authorization next to credentials, before participation and behavior.
+  root.querySelector('#setup').closest('section').append(root.querySelector('#login').closest('details'));
   let disposed = false;
   let policyLoaded = false;
   let policyRead = null;
@@ -73,22 +96,40 @@
     } finally { active.delete(abort); }
   }
   function on(element, name, fn) { element.addEventListener(name, fn); cleanups.push(() => element.removeEventListener(name, fn)); }
+  let waitUntil=0, waitReason='', waitKnown=false;
+  function paintWait(){
+    if(disposed)return;
+    const seconds=Math.max(0,Math.ceil((waitUntil-Date.now())/1000));
+    tell($('#cooldown'),!waitKnown?'Telegram wait: unavailable — Check status.':seconds>0
+      ?`Telegram cooldown: ${seconds}s remaining (${waitReason}). The queue waits; this does not resend anything.`
+      :waitReason?'Last reported Telegram wait has elapsed. Check status for the next operation; elapsed time is not delivery.'
+      :'No active Telegram cooldown in the last status read.');
+  }
+  const waitTimer=setInterval(paintWait,1000);cleanups.push(()=>clearInterval(waitTimer));
   async function status() {
     try {
       const value = await call('participant/status');
-      const lines = [value.message || 'Status returned without a description.'];
+      const lines = [`Transport heartbeat: ${value.companion_category || 'unknown'}.`, value.message || 'Status returned without a description.'];
       if (value.login_attempt?.status) lines.push(`Last login request: ${value.login_attempt.status}${value.login_attempt.reason ? ' / '+value.login_attempt.reason : ''}`);
       if (value.code_delivery?.type) lines.push(`Code delivery method: ${value.code_delivery.type}; next: ${value.code_delivery.next_type || 'not reported'}; timeout: ${value.code_delivery.timeout ?? 'unknown'}`);
+      if (value.participant_queue?.inbox?.held) lines.push(`Captured inputs held by Host refusal or local policy: ${value.participant_queue.inbox.held}. They are retained, not delivered.`);
+      if (value.participant_queue?.inbound_retrying) lines.push(`Incoming messages awaiting safe routing/provider retry: ${value.participant_queue.inbound_retrying}. Their original source is retained; other chats can continue.`);
       if (value.last_companion_error?.error_type) lines.push(`Earlier companion diagnostic: ${value.last_companion_error.error_type} (${value.last_companion_error.at || 'time unrecorded'})`);
+      const cooldown=value.cooldown;
+      waitKnown=!!cooldown && Number.isFinite(cooldown.remaining_seconds);
+      waitUntil=Date.now()+Math.max(0,cooldown?.remaining_seconds || 0)*1000;
+      waitReason=cooldown?.reason || '';paintWait();
       tell($('#account'), lines.join('\n'));
-    } catch (error) { tell($('#account'), error.message, true); }
+    } catch (error) { waitKnown=false;paintWait();tell($('#account'), error.message, true); }
   }
   function loadPolicy() {
     if (policyRead) return policyRead;
     policyRead = call('participant/policy').then((value) => {
       if(disposed)return;
       const form=$('#controls');form.elements.mode.value=value.mode;
-      form.elements.outgoing.checked=value.outgoing==='true';policyLoaded=true;
+      form.elements.outgoing.checked=value.outgoing==='true';
+      for(const name of ['owner_id','expected_account_id','blocked_peers','interval'])form.elements[name].value=value[name] ?? '';
+      policyLoaded=true;
       form.querySelectorAll('input,select,button').forEach((el)=>{el.disabled=false;});
       tell(form.querySelector('[data-result]'),'');
     }).finally(()=>{policyRead=null;});
@@ -98,6 +139,7 @@
     if(!policyLoaded) {
       try { await loadPolicy(); } catch(error) { tell($('#controls [data-result]'),error.message+' — Check status retries this read.',true); }
     }
+    if(!setupLoaded)await loadSetup();
     await status();
   });
   // Module frames deliberately lack allow-forms. Use the bridge from a button
@@ -105,6 +147,7 @@
   on($('[data-save-controls]'), 'click', async (event) => {
     event.preventDefault(); const form = $('#controls'); const output = form.querySelector('[data-result]');
     const input = {mode:form.elements.mode.value, outgoing:String(form.elements.outgoing.checked)};
+    for(const name of ['owner_id','expected_account_id','blocked_peers','interval'])input[name]=form.elements[name].value;
     const fields = [...form.querySelectorAll('input,select,button')]; fields.forEach((el) => {el.disabled=true;});
     tell(output, 'Saving…');
     try {
@@ -132,6 +175,27 @@
     } catch(error) { tell(output,error.message,true); }
     finally { if(!disposed)fields.forEach((el)=>{el.disabled=false;}); }
   });
+  let setupLoaded=false;
+  async function loadSetup(){
+    const form=$('#setup');
+    try{
+      const value=await call('setup/config');if(disposed)return;
+      form.elements.api_id.value=value.api_id || '';setupLoaded=true;
+      form.querySelectorAll('input,button').forEach(el=>{el.disabled=false;});
+      tell(form.querySelector('[data-result]'),'Saved secrets are not returned.');
+    }catch(error){tell(form.querySelector('[data-result]'),error.message+' — Check status retries this read.',true);}
+  }
+  on($('[data-save-setup]'),'click',async(event)=>{
+    event.preventDefault();const form=$('#setup');const fields=[...form.querySelectorAll('input,button')];
+    const body={api_id:form.elements.api_id.value,api_hash:form.elements.api_hash.value,phone:form.elements.phone.value};
+    fields.forEach(el=>{el.disabled=true;});tell(form.querySelector('[data-result]'),'Saving privately…');
+    try{
+      const result=await call('setup/config',body);
+      if(!disposed){form.elements.api_hash.value='';form.elements.phone.value='';tell(form.querySelector('[data-result]'),result.message);}
+    }catch(error){tell(form.querySelector('[data-result]'),error.message,true);}
+    finally{if(!disposed)fields.forEach(el=>{el.disabled=false;});}
+  });
+  loadSetup();
   const disposeTheme = bridge.onTheme?.((theme) => { document.documentElement.dataset.theme=theme; });
   if (disposeTheme) cleanups.push(disposeTheme);
   window.__ouroWidgetOnDispose?.(() => { disposed=true;active.forEach((abort)=>abort.abort());cleanups.forEach((fn)=>fn());root.replaceChildren();style.remove(); });

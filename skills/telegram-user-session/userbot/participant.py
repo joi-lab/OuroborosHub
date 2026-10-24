@@ -92,6 +92,10 @@ class CurrentAuthorization:
             raise ValueError('destination is Silent or Paused')
         return place
 
+class TopicRoutingUnavailable(ValueError):
+    """Captured Telegram source lacks a currently provable forum destination."""
+
+
 class Participant:
     def __init__(self, root, adapter, host, journal, account):
         self.root, self.adapter, self.host, self.journal, self.account = Path(root), adapter, host, journal, str(account)
@@ -121,20 +125,33 @@ class Participant:
             # not evade a numeric muted/blocked place. Source reads are checked too.
             from telethon import utils
             if prepared.get('source_peer') is not None:
-                await self.authorize(str(utils.get_peer_id(prepared['source_peer'])), '', False)
+                await self.authorize(prepared['resolved_source_peer'], '', False)
             if prepared.get('user') is not None:
-                await self.authorize(str(utils.get_peer_id(prepared['user'])), '', write)
+                await self.authorize(prepared['resolved_user'], '', write)
             await self.authorize(prepared.get('resolved_peer',''), prepared.get('topic_id',''), write)
             self.current(prepared.get('resolved_peer',''), write)
         except errors.FloodWaitError as exc:
-            self.journal.set(row['seq'], 'queued', {'code':'flood_wait'}, max(1, exc.seconds))
-            self.journal.flood(self.account, exc.seconds)
+            self.journal.set(row['seq'], 'queued', {'code':'flood_wait','reason':type(exc).__name__,'retry_after_seconds':exc.seconds}, max(1, exc.seconds))
+            self.journal.flood(self.account, exc.seconds, type(exc).__name__)
             return True
         except (TimeoutError, OSError, RuntimeError):
             self.journal.set(row['seq'], 'queued', {'code':'preflight_unavailable'}, 30)
             return True
         except Exception as exc:
-            self.journal.set(row['seq'], 'failed', {'code':'preflight_refused', 'type':type(exc).__name__})
+            # Only our fixed validation sentences become public reason codes;
+            # arbitrary provider text may contain private request details.
+            reasons = {'outgoing actions paused locally':'outgoing_paused',
+                'destination is Silent or Paused':'destination_inactive',
+                'account or mode changed':'account_changed',
+                'authenticated account changed':'account_changed',
+                'unknown topic':'unknown_topic',
+                'selected document is not a Telegram sticker; select its canonical sticker-pack document':'not_a_sticker'}
+            reason = reasons.get(str(exc)) if type(exc) is ValueError else None
+            self.journal.set(row['seq'], 'failed', {'code':'preflight_refused', 'type':type(exc).__name__, 'reason':reason})
+            return True
+        remaining = self.journal.flood_remaining(self.account)
+        if remaining:
+            self.journal.set(row['seq'], 'queued', {'code':'flood_wait','retry_after_seconds':remaining}, remaining)
             return True
         self.journal.set(row['seq'], 'attempted')
         try:
@@ -145,15 +162,17 @@ class Participant:
         except (errors.FloodWaitError, errors.SlowModeWaitError) as exc:
             # A typed Telegram refusal proves no accepted operation; preserve ID
             # and pace the account, never bypass the provider's flood controls.
-            self.journal.set(row['seq'], 'queued', {'code':'flood_wait'}, max(1, exc.seconds))
-            self.journal.flood(self.account, exc.seconds)
+            self.journal.set(row['seq'], 'queued', {'code':'flood_wait','reason':type(exc).__name__,'retry_after_seconds':exc.seconds}, max(1, exc.seconds))
+            self.journal.flood(self.account, exc.seconds, type(exc).__name__)
             self.next_send = asyncio.get_running_loop().time() + max(1, exc.seconds)
             return True
         except (errors.ServerError, errors.TimeoutError, errors.TimedOutError, errors.RandomIdDuplicateError, TimeoutError, ConnectionError, OSError, RuntimeError) as exc:
             self.journal.set(row['seq'], 'unknown' if write else 'queued', {'code':'outcome_unknown', 'type':type(exc).__name__}, 30)
             return True
         except errors.RPCError as exc:
-            self.journal.set(row['seq'], 'failed', {'code':'telegram_refused', 'type':type(exc).__name__})
+            self.journal.set(row['seq'], 'failed', {'code':'telegram_refused', 'type':type(exc).__name__,
+                'rpc_code':exc.code, 'rpc_message':exc.message,
+                'request_type':type(exc.request).__name__ if exc.request is not None else None})
             return True
         except Exception as exc:
             self.journal.set(row['seq'], 'unknown' if write else 'failed', {'code':'execution_error', 'type':type(exc).__name__})
@@ -185,11 +204,11 @@ class Participant:
             raise RuntimeError('raw ingress too large')
         payload = bytes(m)
         key = digest([self.account,event.chat_id,m.id,kind,str(getattr(m,'edit_date',None)),hashlib.sha256(payload).hexdigest()])
-        self.journal.capture_raw(key,{'peer':event.chat_id,'actor':event.sender_id,'kind':kind,'private':bool(event.is_private)},payload)
+        self.journal.capture_raw(key,{'account_id':self.account,'peer':event.chat_id,'actor':event.sender_id,'kind':kind,'private':bool(event.is_private)},payload)
     async def hydrate_once(self):
         from telethon.extensions import BinaryReader
         from types import SimpleNamespace
-        for row in self.journal.raw_heads():
+        for row in self.journal.raw_heads(self.account):
             if self.journal.flood_remaining(self.account): return
             if row['due'] > time.time(): continue
             meta=json.loads(row['metadata'])
@@ -202,13 +221,19 @@ class Participant:
             event=SimpleNamespace(message=m,chat_id=meta['peer'],sender_id=meta['actor'],raw_text=getattr(m,'message','') or '',is_private=meta['private'],get_sender=get_sender,get_chat=get_chat)
             from telethon import errors
             try:
-                await self.capture(event,meta['kind'],raw_id=row['id'])
+                await asyncio.wait_for(self.capture(event,meta['kind'],raw_id=row['id']),90)
             except errors.FloodWaitError as exc:
                 self.journal.raw_defer(row['id'],max(1,exc.seconds),'flood_wait')
                 self.journal.flood(self.account,exc.seconds)
                 continue
-            except (ConnectionError,TimeoutError,errors.RPCError):
-                self.journal.raw_defer(row['id'],30,'provider_read_retry')
+            except TopicRoutingUnavailable:
+                # Retain this peer's exact raw head; other peers and tools keep moving.
+                self.journal.raw_defer(row['id'],60,'topic_routing_unavailable')
+                continue
+            except (ConnectionError,TimeoutError,asyncio.TimeoutError,errors.RPCError) as exc:
+                import traceback
+                frames='/'.join(frame.name for frame in traceback.extract_tb(exc.__traceback__)[-5:])
+                self.journal.raw_defer(row['id'],30,'provider_read_retry:'+type(exc).__name__+':'+frames)
                 continue
             self.journal.raw_done(row['id'])
     async def capture(self, event, kind='new', raw_id=None):
@@ -231,16 +256,7 @@ class Participant:
         chat = await event.get_chat()
         topic = getattr(getattr(m,'reply_to',None), 'reply_to_top_id', None)
         if getattr(chat,'forum',False):
-            from .topic import classify_message
-            try:
-                topic = classify_message(m, await self.adapter.topic_ids(event.chat_id))
-            except ValueError:
-                # A missing top field can be an ordinary General reply. Resolve
-                # ancestry rather than guess a different room. Unresolved fails visibly.
-                from .runtime import UserSessionBridge
-                dummy = object.__new__(UserSessionBridge)
-                dummy.adapter = self.adapter
-                topic = await dummy._resolve_forum_target(event.chat_id, m.reply_to.reply_to_msg_id, await self.adapter.topic_ids(event.chat_id))
+            topic = await self.forum_topic(event.chat_id, m)
         facts = ['any_message']
         if getattr(event,'is_private',False): facts.append('direct_message')
         if getattr(m,'mentioned',False): facts.append('mention')
@@ -266,8 +282,10 @@ class Participant:
                     temporary=path.with_name('.'+name+'.download')
                     if temporary.is_symlink(): raise ValueError('temporary media path redirected')
                     try:
-                        await self.adapter.client.download_media(m, file=str(temporary))
-                        if temporary.is_file(): os.replace(temporary,path)
+                        missing = await self.download_snapshot(event.chat_id,m,temporary)
+                        if missing:
+                            text += '\n[Original Telegram media unavailable: '+missing+'; newer media was not substituted. Original Telegram reference retained.]'
+                        elif temporary.is_file(): os.replace(temporary,path)
                     finally: temporary.unlink(missing_ok=True)
                 if path.is_file():
                     files.append(str(path))
@@ -282,12 +300,64 @@ class Participant:
                        'reply_to_message_id':getattr(getattr(m,'reply_to',None),'reply_to_msg_id',None)})
         e['facts'] = facts
         self.journal.capture(e, files, raw_id=raw_id)
+    async def download_snapshot(self, peer, message, temporary):
+        """Refresh expiring references, never a changed immutable media snapshot."""
+        from telethon import errors, utils
+        current = message
+        for attempt in range(2):
+            try:
+                await self.adapter.client.download_media(current,file=str(temporary))
+                return None
+            except (errors.FileReferenceExpiredError,errors.FilerefUpgradeNeededError):
+                if attempt: raise  # Refreshed reference still transiently unavailable.
+                fresh=await self.adapter.client.get_messages(peer,ids=message.id)
+                original=getattr(message,'document',None) or getattr(message,'photo',None)
+                media=getattr(fresh,'document',None) or getattr(fresh,'photo',None)
+                if (fresh is None or fresh.id!=message.id or original is None
+                        or str(utils.get_peer_id(fresh.peer_id))!=str(peer)
+                        or type(media) is not type(original) or media.id!=original.id):
+                    return 'retained snapshot removed or changed'
+                temporary.unlink(missing_ok=True)
+                current=fresh
+            except (errors.BadRequestError,errors.ForbiddenError) as exc:
+                # A provider-declared unsupported/inaccessible download is an
+                # explicit missing attachment, not a forever-blocked peer.
+                return type(exc).__name__
+
+    async def forum_topic(self, peer, message):
+        """Refresh once, preserving an explicit top over any reply ancestry."""
+        from .topic import classify_message
+        from .runtime import UserSessionBridge
+        try:
+            catalog = await self.adapter.topic_ids(peer)
+            try:
+                return classify_message(message, catalog)
+            except ValueError:
+                catalog = await self.adapter.topic_ids(peer)
+                try:
+                    return classify_message(message, catalog)
+                except ValueError:
+                    header = getattr(message, 'reply_to', None)
+                    if (getattr(header, 'reply_to_top_id', None) is not None
+                            or getattr(message, 'action', None) is not None):
+                        raise
+                    reply_id = getattr(header, 'reply_to_msg_id', None)
+                    if type(reply_id) is not int or reply_id <= 0:
+                        raise
+                    resolver = object.__new__(UserSessionBridge)
+                    resolver.adapter = self.adapter
+                    return await resolver._resolve_forum_target(peer, reply_id, catalog)
+        except ValueError as exc:
+            raise TopicRoutingUnavailable('forum destination unresolved; raw event retained') from exc
+
     def consume_outputs(self, body, event):
+        if str(event.get('account_id','')) != self.account:
+            raise ValueError('retained event belongs to another account')
         candidates = list(body.get('outputs') or [])
         if body.get('output_ref'):
             candidates.append(body)
         for out in candidates:
-            if out.get('outcome') != 'message' or not out.get('output_ref') or not out.get('text','').strip():
+            if out.get('outcome') not in {'message','deferred'} or not out.get('output_ref') or not out.get('text','').strip():
                 continue
             # Output identity, not text or producer work id, deduplicates speech.
             text = out['text']
@@ -305,15 +375,28 @@ class Participant:
                     origin={'kind':'automatic','source_event_id':event['source_event_id'], 'task_id':str(body.get('task_id') or body.get('turn_ref') or '')})
     async def incoming_once(self):
         blocked = set()
-        for row in self.journal.heads():
+        for row in self.journal.heads(self.account):
             e = json.loads(row['event']); room=e['conversation_key']
+            if str(e.get('account_id','')) != self.account:
+                self.journal.inbox_update(row['seq'],'held',json.loads(row['refs']))
+                continue
             if room in blocked: continue
             refs = json.loads(row['refs'])
             try:
                 self.current(e['conversation_id'])
                 if not refs:
                     code, body = await asyncio.to_thread(self.host.call,'POST','/presence/turn',{'event':e, 'staged_files':json.loads(row['files']), 'delivery_reporting_version':1, 'continuation_version':1})
-                    if body.get('disposition') in {'retained','retry'} and body.get('turn_ref'):
+                    self.journal.observe_inbox(row['seq'],code,body)
+                    if body.get('disposition') == 'retry':
+                        after=body.get('retry_after',30)
+                        if isinstance(after,str):
+                            try: after=max(1,datetime.fromisoformat(after.replace('Z','+00:00')).timestamp()-time.time())
+                            except ValueError: after=30
+                        delay=after if type(after) in (int,float) and after>0 else 30
+                        self.journal.inbox_update(row['seq'],'pending',[],delay)
+                        blocked.add(room)
+                        continue  # Same immutable POST after the Host's certified reset.
+                    if body.get('disposition') == 'retained' and body.get('turn_ref'):
                         refs.append(body['turn_ref'])
                     elif body.get('ok') is not True:
                         if body.get('disposition') in {'blocked','rejected'}:
@@ -328,7 +411,10 @@ class Participant:
                     live = []
                     for ref in list(refs):
                         code, body = await asyncio.to_thread(self.host.call,'GET','/presence/work/'+quote(ref,safe=''))
+                        self.journal.observe_inbox(row['seq'],code,body)
                         if body.get('ok') is not True:
+                            if body.get('disposition') in {'blocked','rejected'}:
+                                raise ValueError('host work reference refused; exact response retained')
                             raise RuntimeError('host work unavailable')
                         self.consume_outputs(body,e)
                         if body.get('child_work_ref') and body['child_work_ref'] not in refs+live: live.append(body['child_work_ref'])
@@ -394,17 +480,22 @@ async def serve(root, host_url, token, adapter_factory, login, verify, health):
                     except (ConnectionError,TimeoutError,errors.RPCError):
                         health(root,'provider_retry');await asyncio.sleep(30)
                 intake = None
+                hydration = None
                 try:
                     while True:
                         if faults: raise RuntimeError('ingress unavailable; reconcile before restart')
                         if intake is not None and intake.done():
                             intake.result()  # Surface unexpected intake/storage failures.
                             intake = None
+                        if hydration is not None and hydration.done():
+                            hydration.result()
+                            hydration = None
                         engine.current()
                         if (Path(root)/'login-request.json').exists() or (Path(root)/'auth-handoff.json').exists():
                             await login(root,cfg,adapter)
                         health(root,'running')
-                        await engine.hydrate_once()
+                        if hydration is None:
+                            hydration = asyncio.create_task(engine.hydrate_once(), name='telegram-media-hydration')
                         # A Host turn can await a model that needs our outbound tools.
                         # Keep one owned intake worker, never block those tools on it.
                         if intake is None:
@@ -414,8 +505,8 @@ async def serve(root, host_url, token, adapter_factory, login, verify, health):
                         await engine.reports_once()
                         await asyncio.sleep(1)
                 finally:
-                    if intake is not None:
-                        intake.cancel()
-                        await asyncio.gather(intake, return_exceptions=True)
+                    workers = [task for task in (intake, hydration) if task is not None]
+                    for task in workers: task.cancel()
+                    await asyncio.gather(*workers, return_exceptions=True)
         finally:
             await adapter.disconnect()

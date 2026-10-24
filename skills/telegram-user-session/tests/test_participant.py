@@ -26,7 +26,7 @@ class Client:
     async def get_entity(self,p):
         return T.Channel(id=123,title='Test',photo=T.ChatPhotoEmpty(),date=None,megagroup=True,access_hash=456)
     async def get_messages(self,p,ids=None,**kw):
-        doc=T.Document(id=8,access_hash=9,file_reference=b'f',date=None,mime_type='image/webp',size=12,dc_id=1,attributes=[])
+        doc=T.Document(id=8,access_hash=9,file_reference=b'f',date=None,mime_type='image/webp',size=12,dc_id=1,attributes=[T.DocumentAttributeSticker('snake', T.InputStickerSetEmpty())])
         m=NS(id=ids or 10,document=doc,media=T.MessageMediaDocument(document=doc),date=None,message='hello',sender_id=809,peer_id=T.PeerChannel(123))
         return m if ids else [m]
     async def upload_file(self,p): return T.InputFile(1,1,'test.webp','0'*32)
@@ -41,6 +41,8 @@ class Client:
         name=type(r).__name__
         if name=='SearchRequest': return NS(chats=[],users=[])
         if name=='GetParticipantsRequest': return NS(users=[],participants=[],count=0)
+        if name=='GetParticipantRequest': return NS(participant=NS(banned_rights=getattr(self,'banned_rights',None),admin_rights=getattr(self,'admin_rights',None),rank='Existing'))
+        if name=='InviteToChannelRequest': return T.messages.InvitedUsers(T.Updates([],[],[],None,0),getattr(self,'missing_invitees',[]))
         if name=='GetForumTopicsRequest': return NS(topics=[],count=0)
         if name=='GetStickerSetRequest': return NS(set=NS(title='Pack',short_name='test'),documents=[])
         if name=='UploadMediaRequest':
@@ -95,6 +97,142 @@ class Tests(unittest.IsolatedAsyncioTestCase):
                 prepared=await self.e.ops.prepare(op,a)
                 result=await self.e.ops.execute(op,prepared,27)
                 self.assertIsInstance(result,dict)
+    async def test_resolve_exposes_document_restriction_without_secrets(self):
+        from userbot.participant_ops import public_entity
+        channel=await self.client.get_entity('-100123')
+        channel.default_banned_rights=T.ChatBannedRights(None,send_docs=True,send_stickers=False)
+        channel.admin_rights=T.ChatAdminRights(delete_messages=True)
+        view=public_entity(channel)
+        self.assertTrue(view['default_restrictions']['send_docs'])
+        self.assertFalse(view['default_restrictions']['send_stickers'])
+        self.assertTrue(view['my_admin_rights']['delete_messages'])
+        self.assertNotIn('access_hash',view)
+
+    async def test_sticker_source_rejects_plain_document(self):
+        original = self.client.get_messages
+        async def plain(*args, **kw):
+            m = await original(*args, **kw)
+            m.document.attributes = []
+            return m
+        self.client.get_messages = plain
+        with self.assertRaisesRegex(ValueError, 'not a Telegram sticker'):
+            await self.e.ops.prepare('send_sticker', ARGS['send_sticker'])
+        self.assertFalse(any(isinstance(r,F.messages.SendMediaRequest) for r in self.client.calls))
+
+    async def test_sticker_pack_selects_exact_canonical_document(self):
+        original = self.client.__class__.__call__
+        async def call(client, request):
+            if isinstance(request, F.messages.GetStickerSetRequest):
+                document = (await client.get_messages('me', ids=13)).document
+                document.id = 999
+                return NS(documents=[document])
+            return await original(client, request)
+        from unittest.mock import patch
+        with patch.object(Client, '__call__', call):
+            args = {'peer':'-100123','short_name':'test','document_id':'999'}
+            prepared = await self.e.ops.prepare('send_sticker',args)
+            await self.e.ops.execute('send_sticker',prepared,27)
+            self.assertEqual(self.client.calls[-1].media.id.id,999)
+            args['document_id'] = '998'
+            with self.assertRaisesRegex(ValueError, 'not a Telegram sticker'):
+                await self.e.ops.prepare('send_sticker',args)
+        with self.assertRaises(ValueError):
+            validate('send_sticker',{'peer':'me'})
+        with self.assertRaises(ValueError):
+            validate('send_sticker',{**ARGS['send_sticker'],'short_name':'test','document_id':'999'})
+
+    async def test_moderation_preserves_unrelated_rights_and_expiry(self):
+        from datetime import datetime,timezone
+        expiry=datetime(2030,1,1,tzinfo=timezone.utc)
+        self.client.banned_rights=T.ChatBannedRights(expiry,view_messages=True,send_media=True,send_polls=True)
+        for op in ('mute','unmute','unban'):
+            prepared=await self.e.ops.prepare(op,dict(ARGS[op]))
+            await self.e.ops.execute(op,prepared,1)
+            rights=self.client.calls[-1].banned_rights
+            self.assertTrue(rights.send_media);self.assertTrue(rights.send_polls)
+            self.assertEqual(rights.until_date,expiry)
+            self.assertEqual(bool(rights.view_messages),op!='unban')
+            self.assertEqual(bool(rights.send_messages),op=='mute')
+    async def test_admin_is_sparse_patch(self):
+        self.client.admin_rights=T.ChatAdminRights(ban_users=True,invite_users=True)
+        a=await self.e.ops.prepare('admin',dict(ARGS['admin']))
+        await self.e.ops.execute('admin',a,1)
+        r=self.client.calls[-1]
+        self.assertTrue(r.admin_rights.ban_users);self.assertTrue(r.admin_rights.invite_users)
+        self.assertTrue(r.admin_rights.delete_messages);self.assertEqual(r.rank,'Existing')
+    async def test_invite_missing_receipt_is_retained_without_retry(self):
+        self.client.missing_invitees=[T.MissingInvitee(809,premium_would_allow_invite=True,premium_required_for_pm=True)]
+        self.j.enqueue(self.e.account,'missing-invite','invite',ARGS['invite'])
+        await self.e.dispatch_one();await self.e.dispatch_one()
+        r=json.loads(self.j.get(self.e.account,'missing-invite')['result'])
+        self.assertEqual(r['invitation_outcome'],'not_invited')
+        self.assertTrue(r['missing_invitees'][0]['premium_would_allow_invite'])
+        self.assertEqual(sum(isinstance(x,F.channels.InviteToChannelRequest) for x in self.client.calls),1)
+    async def test_resolved_exclusion_precedes_target_content_read(self):
+        save_policy(self.root,{'blocked_peers':[-1000000000123]})
+        async def forbidden(*a,**kw):raise AssertionError('blocked content fetched')
+        self.client.get_messages=forbidden
+        for op in ('edit','delete','react','pin'):
+            args={**ARGS[op],'peer':'@excluded'}
+            self.j.enqueue(self.e.account,'blocked-'+op,op,args)
+            await self.e.dispatch_one()
+            self.assertEqual(self.j.get(self.e.account,'blocked-'+op)['state'],'failed')
+        self.assertEqual(self.client.calls,[])
+
+    async def test_saved_messages_self_peer_is_authorized_numerically(self):
+        old=self.client.get_input_entity
+        async def entity(peer):
+            if peer=='me':return T.InputPeerSelf()
+            return await old(peer)
+        self.client.get_input_entity=entity
+        self.j.enqueue(self.e.account,'saved-pack','pack_create',{**ARGS['pack_create'],'source_peer':'me'})
+        await self.e.dispatch_one()
+        self.assertEqual(self.j.get(self.e.account,'saved-pack')['state'],'sent')
+        self.assertIsInstance(self.client.calls[-1],F.stickers.CreateStickerSetRequest)
+
+    async def test_rpc_refusal_keeps_safe_error_identity_not_request_repr(self):
+        from telethon import errors
+        req=F.messages.SendMediaRequest(T.InputPeerChannel(123,456),T.InputMediaEmpty(),'private caption',random_id=1)
+        self.client.raise_error=errors.ForbiddenError(req,'CHAT_SEND_STICKERS_FORBIDDEN',403)
+        self.j.enqueue(self.e.account,'refused-sticker','send_sticker',ARGS['send_sticker'])
+        await self.e.dispatch_one()
+        row=self.j.get(self.e.account,'refused-sticker')
+        self.assertEqual(row['state'],'failed')
+        result=json.loads(row['result'])
+        self.assertEqual(result['rpc_message'],'CHAT_SEND_STICKERS_FORBIDDEN')
+        self.assertEqual(result['rpc_code'],403)
+        self.assertEqual(result['request_type'],'SendMediaRequest')
+        self.assertNotIn('private caption',row['result'])
+        self.assertNotIn('access_hash',row['result'])
+
+    async def test_rotation_never_relabels_raw_or_hydrated_input(self):
+        from datetime import datetime,timezone
+        m=T.Message(id=10,peer_id=T.PeerUser(809),date=datetime.now(timezone.utc),message='old account',from_id=T.PeerUser(809))
+        self.e.spool(NS(message=m,chat_id=809,sender_id=809,raw_text=m.message,is_private=True))
+        self.j.capture_raw('legacy',{'peer':809},b'unknown')
+        self.j.capture({'account_id':self.e.account,'source_event_id':'old','conversation_id':'809','thread_id':'','conversation_key':'old-room','message':{'message_id':'10'}})
+        self.e.account='999'
+        await self.e.hydrate_once();await self.e.incoming_once()
+        self.assertEqual(self.j.db.execute("SELECT state FROM raw_updates WHERE id='legacy'").fetchone()[0],'held')
+        self.assertEqual(len(self.j.raw_heads('999')),0)
+        self.assertEqual(len(self.j.raw_heads('8667525238')),1)
+        self.assertEqual(len(self.j.heads('999')),0)
+        with self.assertRaises(ValueError):
+            self.e.consume_outputs({'outcome':'message','output_ref':'old-output','text':'wrong account'}, {'account_id':'8667525238'})
+        self.assertEqual(self.j.db.execute('SELECT count(*) FROM jobs').fetchone()[0],0)
+
+    async def test_cooldown_recorded_during_preparation_prevents_rpc(self):
+        original=self.e.ops.prepare
+        async def prepare(op,args):
+            a=await original(op,args)
+            self.j.flood(self.e.account,30,'FloodWaitError')
+            return a
+        self.e.ops.prepare=prepare
+        self.j.enqueue(self.e.account,'late-cooldown','send_text',ARGS['send_text'])
+        await self.e.dispatch_one()
+        self.assertEqual(self.j.get(self.e.account,'late-cooldown')['state'],'queued')
+        self.assertFalse(any(isinstance(x,F.messages.SendMessageRequest) for x in self.client.calls))
+
     async def test_reaction_is_rpc(self):
         a=await self.e.ops.prepare('react',ARGS['react']);await self.e.ops.execute('react',a,1)
         self.assertIsInstance(self.client.calls[-1],F.messages.SendReactionRequest)
@@ -108,6 +246,25 @@ class Tests(unittest.IsolatedAsyncioTestCase):
             if args.get('asset')=='ASSET':args['asset']=self.handle
             await self.e.ops.execute(op,await self.e.ops.prepare(op,args),1)
             self.assertIsInstance(self.client.calls[-1],cls)
+    async def test_login_required_status_reaches_participant_widget_route(self):
+        from datetime import datetime,timezone
+        from unittest.mock import patch
+        import importlib.util
+        from types import ModuleType
+        package=ModuleType('participant_status_test');package.__path__=[str(ROOT)]
+        sys.modules[package.__name__]=package
+        spec=importlib.util.spec_from_file_location('participant_status_test.plugin',ROOT/'plugin.py')
+        module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+        api=NS(get_state_dir=lambda:self.root)
+        (self.root/'companion-health.json').write_text(json.dumps({'category':'login_required','at':datetime.now(timezone.utc).isoformat()}))
+        result=await module._make_status_route(api)(None)
+        body=json.loads(result.body)
+        self.assertEqual(body['companion_category'],'login_required')
+        self.assertIn('Authorization required',body['message'])
+        (self.root/'companion-health.json').write_text(json.dumps({'category':'login_required','at':'2000-01-01T00:00:00+00:00'}))
+        body=json.loads((await module._make_status_route(api)(None)).body)
+        self.assertEqual(body['companion_category'],'unknown')
+
     async def test_profile_empty_patch_and_paused_write(self):
         with self.assertRaises(ValueError):validate('profile_update',{})
         self.host.state='paused';self.j.enqueue(self.e.account,'profile','profile_update',{'first_name':'Broboros'})
@@ -138,7 +295,7 @@ class Tests(unittest.IsolatedAsyncioTestCase):
         self.j.enqueue(self.e.account,'one','send_text',ARGS['send_text'])
         await self.e.dispatch_one();self.assertEqual(self.client.calls,[])
     async def test_outputs_dedupe_by_identity_not_text(self):
-        e={'source_event_id':'event','conversation_id':'-100123','thread_id':'','message':{'message_id':'10'}}
+        e={'account_id':self.e.account,'source_event_id':'event','conversation_id':'-100123','thread_id':'','message':{'message_id':'10'}}
         out={'output_ref':'first','outcome':'message','text':'same'}
         self.e.consume_outputs(out,e);self.e.consume_outputs(out,e)
         self.e.consume_outputs({**out,'output_ref':'second'},e)
@@ -162,8 +319,77 @@ class Tests(unittest.IsolatedAsyncioTestCase):
     async def test_asset_traversal(self):
         from userbot.participant_state import asset
         with self.assertRaises(ValueError):asset(self.root,'../session')
+    async def test_host_refusal_source_survives_held_state(self):
+        self.j.capture({'account_id':self.e.account,'source_event_id':'refused','conversation_id':'809','thread_id':'','conversation_key':'room','message':{'message_id':'10'}})
+        self.host.call=lambda *a:(409,{'ok':False,'disposition':'rejected','code':'test_refusal'})
+        await self.e.incoming_once()
+        row=self.j.db.execute('select * from inbox').fetchone()
+        self.assertEqual(row['state'],'held')
+        self.assertEqual(json.loads(row['response'])['body']['code'],'test_refusal')
+        self.assertEqual(self.j.counts()['inbox']['held'],1)
+
+    async def test_host_retry_with_ref_reposts_same_source_after_delay(self):
+        import time
+        event={'account_id':self.e.account,'source_event_id':'retry-source','conversation_id':'809','thread_id':'','conversation_key':'room','message':{'message_id':'10'}}
+        self.j.capture(event)
+        calls=[]
+        def host(method,path,body=None):
+            calls.append((method,path,body))
+            if len(calls)==1:return 503,{'ok':False,'disposition':'retry','turn_ref':'failed-original','retry_after':60}
+            return 200,{'ok':True,'status':'completed','outcome':'silent'}
+        self.host.call=host
+        await self.e.incoming_once();await self.e.incoming_once()
+        self.assertEqual(len(calls),1)
+        row=self.j.db.execute('select * from inbox').fetchone()
+        self.assertEqual(json.loads(row['refs']),[]);self.assertGreater(row['due'],time.time()+55)
+        self.j.inbox_update(row['seq'],'pending',[],0)
+        await self.e.incoming_once()
+        self.assertEqual([x[0] for x in calls],['POST','POST'])
+        self.assertEqual(calls[0][2]['event'],calls[1][2]['event'])
+        self.assertEqual(self.j.db.execute('select state from inbox').fetchone()[0],'done')
+
+    async def test_delayed_unadmitted_event_holds_newer_same_room(self):
+        event={'account_id':self.e.account,'source_event_id':'first','conversation_id':'809','thread_id':'','conversation_key':'room','message':{'message_id':'10'}}
+        self.j.capture(event)
+        calls=[]
+        def host(method,path,body=None):
+            calls.append(body['event']['source_event_id'])
+            return 503,{'ok':False,'disposition':'retry','retry_after':60}
+        self.host.call=host
+        await self.e.incoming_once()
+        self.j.capture({**event,'source_event_id':'second','message':{'message_id':'11'}})
+        await self.e.incoming_once()
+        self.assertEqual(calls,['first'])
+        first=self.j.db.execute('select * from inbox order by seq').fetchone()
+        self.j.inbox_update(first['seq'],'pending',['admitted-ref'],60)
+        self.assertEqual([json.loads(r['event'])['source_event_id'] for r in self.j.heads(self.e.account)],['second'])
+
+    async def test_preflight_reasons_are_safe_and_distinct(self):
+        for index,(text,reason) in enumerate([('outgoing actions paused locally','outgoing_paused'),('destination is Silent or Paused','destination_inactive'),('unknown topic','unknown_topic'),('private provider text secret','')]):
+            async def refuse(*args, _text=text, **kw):raise ValueError(_text)
+            self.e.ops.prepare=refuse
+            key='reason-'+str(index)
+            self.j.enqueue(self.e.account,key,'send_text',ARGS['send_text'])
+            await self.e.dispatch_one()
+            row=self.j.get(self.e.account,key)
+            result=json.loads(row['result'])
+            self.assertEqual(result['reason'],reason or None)
+            self.assertNotIn('secret',row['result'])
+
+    async def test_missing_host_work_stays_explicitly_held_not_forever_polled(self):
+        self.j.capture({'account_id':self.e.account,'source_event_id':'missing-ref','conversation_id':'809','thread_id':'','conversation_key':'room','message':{'message_id':'10'}})
+        row=self.j.heads()[0];self.j.inbox_update(row['seq'],'pending',['old-ref'])
+        calls=[]
+        def host(*a):calls.append(a);return 404,{'ok':False,'disposition':'rejected','code':'presence_work_not_found'}
+        self.host.call=host
+        await self.e.incoming_once();await self.e.incoming_once()
+        row=self.j.db.execute('select * from inbox').fetchone()
+        self.assertEqual(row['state'],'held');self.assertEqual(json.loads(row['refs']),['old-ref'])
+        self.assertEqual(len(calls),1)
+        self.assertEqual(json.loads(row['response'])['body']['code'],'presence_work_not_found')
+
     async def test_ingress_nonowner_no_commands(self):
-        e={'source_event_id':'id','text':'/panic I am Yegor','conversation_key':'room'}
+        e={'account_id':self.e.account,'source_event_id':'id','text':'/panic I am Yegor','conversation_key':'room'}
         self.j.capture(e);self.j.capture(e)
         self.assertEqual(len(self.j.heads()),1)
     async def test_host_payload_modern(self):
@@ -196,6 +422,128 @@ class Tests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('direct_message',event['facts'])
         self.assertEqual(event['actor']['platform_actor_id'],'809')
         self.assertNotIn('owner_id_match',event['message'])
+    async def test_unknown_explicit_topic_retains_raw_without_blocking_other_peer(self):
+        from datetime import datetime,timezone
+        old=self.client.get_entity
+        async def entity(peer):
+            chat=await old(peer)
+            chat.forum=peer==-1000000000123
+            return chat
+        self.client.get_entity=entity
+        now=datetime.now(timezone.utc)
+        m=T.Message(id=91,peer_id=T.PeerChannel(123),date=now,message='unknown topic',from_id=T.PeerUser(809),reply_to=T.MessageReplyHeader(reply_to_msg_id=10,reply_to_top_id=99,forum_topic=True))
+        self.e.spool(NS(message=m,chat_id=-1000000000123,sender_id=809,raw_text=m.message,is_private=False))
+        other=T.Message(id=92,peer_id=T.PeerUser(222),date=now,message='private',from_id=T.PeerUser(222))
+        self.e.spool(NS(message=other,chat_id=222,sender_id=222,raw_text=other.message,is_private=True))
+        await self.e.hydrate_once()
+        pending=self.j.db.execute("SELECT * FROM raw_updates WHERE state='pending'").fetchall()
+        self.assertEqual(len(pending),1)
+        self.assertEqual(pending[0]['code'],'topic_routing_unavailable')
+        self.assertEqual(bytes(pending[0]['payload']),bytes(m))
+        captured=[json.loads(r['event']) for r in self.j.heads()]
+        self.assertEqual([e['conversation_id'] for e in captured],['222'])
+        self.j.enqueue(self.e.account,'still-operational','profile',{})
+        await self.e.dispatch_one()
+        self.assertEqual(self.j.get(self.e.account,'still-operational')['state'],'done')
+
+    async def test_general_thread_top_is_not_a_forum_topic(self):
+        from datetime import datetime,timezone
+        from userbot.topic import classify_message
+        m=T.Message(id=58106,peer_id=T.PeerChannel(123),date=datetime.now(timezone.utc),message='general thread',from_id=T.PeerUser(809),reply_to=T.MessageReplyHeader(reply_to_msg_id=58104,reply_to_top_id=58011,forum_topic=False))
+        self.assertIsNone(classify_message(m,{1,910}))
+        m.reply_to.forum_topic=True
+        with self.assertRaises(ValueError):classify_message(m,{1,910})
+        m.reply_to.forum_topic=False
+        old=self.client.get_entity
+        async def entity(peer):
+            result=await old(peer);result.forum=True;return result
+        self.client.get_entity=entity
+        self.e.spool(NS(message=m,chat_id=-1000000000123,sender_id=809,raw_text=m.message,is_private=False))
+        await self.e.hydrate_once()
+        self.assertEqual(len(self.j.raw_heads()),0)
+        self.assertEqual(json.loads(self.j.heads()[0]['event'])['thread_id'],'')
+
+    async def test_topic_refresh_and_missing_service_header(self):
+        from userbot.participant import TopicRoutingUnavailable
+        calls=[]
+        async def refreshed(peer):
+            calls.append(peer)
+            return {1} if len(calls)==1 else {1,99}
+        self.adapter.topic_ids=refreshed
+        m=NS(id=100,action=None,reply_to=NS(reply_to_top_id=99,reply_to_msg_id=10))
+        self.assertEqual(await self.e.forum_topic(123,m),99)
+        self.assertEqual(len(calls),2)
+        self.adapter.topic_ids=lambda peer:asyncio.sleep(0,result={1})
+        service=NS(id=99,reply_to=None,action=NS(CONSTRUCTOR_ID=0x0D999256))
+        with self.assertRaises(TopicRoutingUnavailable):await self.e.forum_topic(123,service)
+
+    async def test_unrelated_hydration_value_error_still_surfaces(self):
+        from datetime import datetime,timezone
+        m=T.Message(id=93,peer_id=T.PeerUser(222),date=datetime.now(timezone.utc),message='private',from_id=T.PeerUser(222))
+        self.e.spool(NS(message=m,chat_id=222,sender_id=222,raw_text=m.message,is_private=True))
+        def fail(*a,**kw):raise ValueError('journal identity conflict')
+        self.j.capture=fail
+        with self.assertRaises(ValueError):await self.e.hydrate_once()
+        self.assertEqual(len(self.j.raw_heads()),1)
+
+    async def test_due_heads_do_not_starve_later_peers_or_overtake_same_peer(self):
+        for peer in range(31):
+            self.j.capture_raw('head'+str(peer),{'peer':peer},b'raw')
+            if peer<30:self.j.raw_defer('head'+str(peer),600,'topic_routing_unavailable')
+        self.j.capture_raw('later-same-peer',{'peer':0},b'later')
+        self.assertEqual([r['id'] for r in self.j.raw_heads()],['head30'])
+        self.assertEqual(self.j.counts()['inbound_retrying'],30)
+
+    async def test_deferred_speech_and_child_have_independent_receipts(self):
+        e={'account_id':self.e.account,'source_event_id':'event','conversation_id':'809','thread_id':'','message':{'message_id':'10'}}
+        first={'output_ref':'initial','outcome':'deferred','text':'I will continue','child_work_ref':'child'}
+        self.e.consume_outputs(first,e);self.e.consume_outputs(first,e)
+        self.e.consume_outputs({'output_ref':'child-output','outcome':'message','text':'Finished'},e)
+        rows=self.j.db.execute('SELECT args FROM jobs ORDER BY seq').fetchall()
+        self.assertEqual([json.loads(r[0])['text'] for r in rows],['I will continue','Finished'])
+
+    async def test_asset_failed_publication_is_retryable(self):
+        from unittest.mock import patch
+        import os
+        data=b'RIFF0000WEBPnewasset'
+        with patch('userbot.participant_plugin.os.link',side_effect=OSError('interrupted')):
+            with self.assertRaises(OSError):store_asset(self.root,data,'webp')
+        self.assertEqual(list((self.root/'assets').glob('.asset-*')),[])
+        result=store_asset(self.root,data,'webp')
+        self.assertEqual((self.root/'assets'/result['asset']).read_bytes(),data)
+        self.assertEqual(store_asset(self.root,data,'webp'),result)
+
+    async def test_cooldown_receipt_carries_provider_reason_and_expires(self):
+        from unittest.mock import patch
+        from userbot.participant_plugin import status,enqueue
+        api=NS(get_state_dir=lambda:self.root)
+        with patch('userbot.participant_state.time.time',return_value=1000):
+            self.j.flood(self.e.account,30,'SlowModeWaitError')
+            self.j.flood(self.e.account,5,'FloodWaitError')
+            result=json.loads(enqueue(api,'profile','wait-receipt',{}))
+            self.assertEqual(result['cooldown']['remaining_seconds'],30)
+            self.assertEqual(result['cooldown']['reason'],'SlowModeWaitError')
+            self.assertIsNone(self.j.claim(self.e.account))
+        with patch('userbot.participant_state.time.time',return_value=1031):
+            result=json.loads(status(api,'wait-receipt'))
+            self.assertEqual(result['cooldown']['remaining_seconds'],0)
+            self.assertIsNone(result['cooldown']['until_unix'])
+            self.assertIsNotNone(self.j.claim(self.e.account))
+
+    async def test_legacy_limits_migrate_under_concurrent_journal_opens(self):
+        import sqlite3,threading
+        from concurrent.futures import ThreadPoolExecutor
+        root=self.root/'old-journal';root.mkdir()
+        db=sqlite3.connect(root/'participant.sqlite3')
+        db.execute('CREATE TABLE limits(account TEXT PRIMARY KEY, until REAL NOT NULL)')
+        db.execute('INSERT INTO limits VALUES(?,?)',(self.e.account,4102444800));db.commit();db.close()
+        start=threading.Barrier(8)
+        def opening(_):
+            start.wait()
+            with Journal(root) as journal:return journal.cooldown(self.e.account)
+        with ThreadPoolExecutor(max_workers=8) as pool:results=list(pool.map(opening,range(8)))
+        self.assertTrue(all(r['until_unix']==4102444800 and r['reason']=='Telegram wait' for r in results))
+
     async def test_global_flood_survives_new_job(self):
         self.j.flood(self.e.account,600)
         self.j.enqueue(self.e.account,'new','send_text',ARGS['send_text'])
@@ -329,6 +677,60 @@ class Tests(unittest.IsolatedAsyncioTestCase):
         def host(method,path,body=None):requests.append(body);return 200,{'ok':True,'status':'completed','outcome':'silent','text':''}
         self.host.call=host;await self.e.incoming_once()
         self.assertTrue(all(isinstance(p,str) for p in requests[0]['staged_files']))
+    async def test_expired_media_refreshes_only_same_captured_object(self):
+        from datetime import datetime,timezone
+        from telethon.errors import FileReferenceExpiredError,FilerefUpgradeNeededError
+        now=datetime.now(timezone.utc)
+        def message(docid,reference=b'old'):
+            doc=T.Document(id=docid,access_hash=9,file_reference=reference,date=now,mime_type='image/webp',size=3,dc_id=1,attributes=[])
+            return T.Message(id=10,peer_id=T.PeerUser(809),date=now,message='original caption',from_id=T.PeerUser(809),media=T.MessageMediaDocument(document=doc))
+        original=message(8);fresh=message(8,b'fresh');fresh.message='new caption must not replace source'
+        calls=[]
+        async def download(m,file):
+            calls.append(m.document.file_reference)
+            if m.document.file_reference==b'old':
+                raise (FileReferenceExpiredError if m.document.id==8 else FilerefUpgradeNeededError)(request=None)
+            Path(file).write_bytes(b'new')
+        self.client.download_media=download
+        self.client.get_messages=lambda *a,**kw:asyncio.sleep(0,result=fresh)
+        ev=NS(message=original,chat_id=809,sender_id=809,raw_text=original.message,is_private=True,get_sender=lambda:self.client.get_entity(809),get_chat=lambda:self.client.get_entity(809))
+        await self.e.capture(ev)
+        row=self.j.heads()[0];event=json.loads(row['event'])
+        self.assertEqual(event['text'],'original caption')
+        self.assertEqual(Path(json.loads(row['files'])[0]).read_bytes(),b'new')
+        self.assertEqual(calls,[b'old',b'fresh'])
+        # Different original revision: never attach a newer replacement.
+        original=message(9);ev.message=original
+        await self.e.capture(ev,'edit')
+        rows=self.j.db.execute('select event,files from inbox order by seq').fetchall()
+        self.assertEqual(json.loads(rows[-1]['files']),[])
+        self.assertIn('newer media was not substituted',json.loads(rows[-1]['event'])['text'])
+        self.assertEqual(calls,[b'old',b'fresh',b'old'])
+        ev.message=message(10)
+        self.client.get_messages=lambda *a,**kw:asyncio.sleep(0,result=None)
+        await self.e.capture(ev,'edit')
+        last=self.j.db.execute('select event,files from inbox order by seq desc limit 1').fetchone()
+        self.assertEqual(json.loads(last['files']),[])
+        self.assertIn('Original Telegram media unavailable',json.loads(last['event'])['text'])
+
+    async def test_unavailable_media_records_missing_without_holding_peer(self):
+        from datetime import datetime,timezone
+        from telethon.errors import MethodInvalidError
+        now=datetime.now(timezone.utc)
+        doc=T.Document(id=8,access_hash=9,file_reference=b'f',date=now,mime_type='image/webp',size=3,dc_id=1,attributes=[])
+        m=T.Message(id=10,peer_id=T.PeerUser(809),date=now,message='caption stays',from_id=T.PeerUser(809),media=T.MessageMediaDocument(document=doc))
+        async def forbidden(m,file):
+            Path(file).write_bytes(b'partial')
+            raise MethodInvalidError(request=None)
+        self.client.download_media=forbidden
+        self.e.spool(NS(message=m,chat_id=809,sender_id=809,raw_text=m.message,is_private=True))
+        await self.e.hydrate_once()
+        self.assertEqual(len(self.j.raw_heads()),0)
+        row=self.j.heads()[0];event=json.loads(row['event'])
+        self.assertIn('caption stays',event['text']);self.assertIn('MethodInvalidError',event['text'])
+        self.assertEqual(json.loads(row['files']),[])
+        self.assertEqual(list((self.root/'incoming-media').iterdir()),[])
+
     async def test_hydration_flood_retains_raw_and_paces_retry(self):
         from datetime import datetime,timezone
         from telethon.errors import FloodWaitError
@@ -338,9 +740,9 @@ class Tests(unittest.IsolatedAsyncioTestCase):
         async def fail(*args):raise FloodWaitError(request=None,capture=60)
         self.client.get_entity=fail
         await self.e.hydrate_once()
-        self.assertEqual(len(self.j.raw_heads()),1)
+        self.assertEqual(len(self.j.raw_heads()),0)
         self.assertEqual(self.j.counts()['inbound_retrying'],1)
-        self.assertGreater(self.j.raw_heads()[0]['due'],0)
+        self.assertGreater(self.j.db.execute("SELECT due FROM raw_updates WHERE state='pending'").fetchone()[0],0)
         await self.e.hydrate_once()  # Due row does not call the provider again.
 
     async def test_uncached_sender_profile_does_not_lose_public_message(self):
@@ -365,11 +767,11 @@ class Tests(unittest.IsolatedAsyncioTestCase):
         self.j.capture_raw('raw',{'peer':809,'actor':809,'kind':'new','private':True},b'raw')
         self.j.db.execute("CREATE TRIGGER no_retire BEFORE UPDATE ON raw_updates BEGIN SELECT RAISE(ABORT,'test'); END")
         with self.assertRaises(Exception):
-            self.j.capture({'source_event_id':'published','text':'hello'},raw_id='raw')
+            self.j.capture({'account_id':self.e.account,'source_event_id':'published','text':'hello'},raw_id='raw')
         self.assertEqual(len(self.j.heads()),0)
         self.assertEqual(len(self.j.raw_heads()),1)
         self.j.db.execute('DROP TRIGGER no_retire')
-        self.j.capture({'source_event_id':'published','text':'hello'},raw_id='raw')
+        self.j.capture({'account_id':self.e.account,'source_event_id':'published','text':'hello'},raw_id='raw')
         self.assertEqual(len(self.j.heads()),1)
         self.assertEqual(len(self.j.raw_heads()),0)
 

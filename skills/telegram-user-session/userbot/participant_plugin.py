@@ -3,6 +3,8 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import os
+import tempfile
 from pathlib import Path
 from .participant_ops import SPECS, validate
 from .participant_state import Journal, policy, save_policy, asset
@@ -47,7 +49,8 @@ def enqueue(api,op,intent_id,args,ctx=None):
         raise ValueError('outgoing actions paused')
     with Journal(root) as journal:
         row=journal.enqueue(cfg.account_id,intent_id,op,args,origin={'kind':'tool','task_id':str(getattr(ctx,'task_id','') or '')})
-    return json.dumps({'intent_id':intent_id,'status':row['state'],'note':'Queued is not delivery. Read tg_status; unknown effects require reconciliation, never a new blind retry.'})
+        cooldown=journal.cooldown(cfg.account_id)
+    return json.dumps({'intent_id':intent_id,'status':row['state'],'cooldown':cooldown,'note':'Queued is not delivery. Read tg_status; unknown effects require reconciliation, never a new blind retry.'})
 
 def status(api,intent_id):
     root=Path(api.get_state_dir()); cfg=load_config(root)
@@ -55,8 +58,9 @@ def status(api,intent_id):
         return json.dumps({'status':'account_not_verified'})
     with Journal(root) as journal:
         row=journal.get(cfg.account_id,intent_id)
+        cooldown=journal.cooldown(cfg.account_id)
     if not row: return json.dumps({'status':'not_found'})
-    return json.dumps({'intent_id':intent_id,'operation':row['op'],'status':row['state'], 'result':json.loads(row['result']) if row['result'] else None},ensure_ascii=False)
+    return json.dumps({'intent_id':intent_id,'operation':row['op'],'status':row['state'], 'cooldown':cooldown, 'result':json.loads(row['result']) if row['result'] else None},ensure_ascii=False)
 
 def store_asset(root,data,extension):
     if extension not in {'png','jpg','webp','webm','ogg','mp3','pdf','bin'} or not data or len(data)>512*1024:
@@ -71,10 +75,20 @@ def store_asset(root,data,extension):
     name=hashlib.sha256(data).hexdigest()+'.'+extension
     path=directory/name
     if path.is_symlink(): raise ValueError('asset redirected')
+    fd, temporary = tempfile.mkstemp(prefix='.asset-', dir=directory)
     try:
-        with path.open('xb') as stream: stream.write(data)
-    except FileExistsError:
-        if path.read_bytes()!=data: raise ValueError('asset identity mismatch')
+        with os.fdopen(fd,'wb') as stream:
+            stream.write(data)
+            stream.flush()
+            os.fsync(stream.fileno())
+        try:
+            # No overwrite: concurrent identical stages converge on one full blob.
+            os.link(temporary,path)
+        except FileExistsError:
+            if path.is_symlink() or path.read_bytes()!=data:
+                raise ValueError('asset identity mismatch')
+    finally:
+        Path(temporary).unlink(missing_ok=True)
     return {'asset':name,'size':len(data),'sha256':name.split('.')[0]}
 
 def register(api,legacy):
@@ -123,7 +137,9 @@ def register(api,legacy):
             body=json.loads(old.body)
             body.update({'mode':p['mode'],'outgoing':p['outgoing'], 'account_id':str(cfg.account_id) if cfg and cfg.account_id else '', 'expected_account_matches':bool(cfg and cfg.account_id and (not p['expected_account_id'] or p['expected_account_id']==str(cfg.account_id)))})
             if (root/'participant.sqlite3').exists():
-                with Journal(root) as journal: body['participant_queue']=journal.counts()
+                with Journal(root) as journal:
+                    body['participant_queue']=journal.counts()
+                    body['cooldown']=journal.cooldown(cfg.account_id if cfg else '')
             else: body['participant_queue']={'status':'not_initialized'}
             login_attempt=_read_json(root/CODE_STATUS_NAME) or {}
             body['login_attempt']={k:v for k,v in login_attempt.items() if k in {'status','reason'} and isinstance(v,str) and len(v)<100}

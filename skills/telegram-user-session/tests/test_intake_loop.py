@@ -14,7 +14,7 @@ from userbot.config import Config, save_config
 
 
 class IntakeLoopTests(unittest.IsolatedAsyncioTestCase):
-    async def check_loop(self, fail=False):
+    async def check_loop(self, fail=False, hold_media=False):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             save_config(root, Config(123, 'a' * 32, '+1234567890'))
@@ -40,7 +40,12 @@ class IntakeLoopTests(unittest.IsolatedAsyncioTestCase):
                 next_send = 0
                 def __init__(self, *args): pass
                 def current(self): pass
-                async def hydrate_once(self): pass
+                async def hydrate_once(self):
+                    if hold_media:
+                        state['hydrations']=state.get('hydrations',0)+1
+                        started.set()
+                        try: await release.wait()
+                        finally: state['hydration_finished']=True
                 async def incoming_once(self):
                     state['calls'] += 1
                     started.set()
@@ -78,11 +83,17 @@ class IntakeLoopTests(unittest.IsolatedAsyncioTestCase):
                         await task
                 self.assertTrue(state['finished'], 'intake cancelled/joined before shutdown')
                 self.assertTrue(state['disconnected'])
+                if hold_media:
+                    self.assertEqual(state['hydrations'],1)
+                    self.assertTrue(state['hydration_finished'])
                 self.assertFalse([t for t in asyncio.all_tasks()
-                    if t is not asyncio.current_task() and t.get_name() == 'telegram-host-intake'])
+                    if t is not asyncio.current_task() and t.get_name() in {'telegram-host-intake','telegram-media-hydration'}])
 
     async def test_tool_and_reports_progress_while_actual_serve_waits_on_host(self):
         await self.check_loop()
+
+    async def test_outbound_progresses_while_media_hydration_is_held(self):
+        await self.check_loop(hold_media=True)
 
     async def test_intake_failure_propagates_and_closes_companion(self):
         await self.check_loop(fail=True)

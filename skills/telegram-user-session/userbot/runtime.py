@@ -542,9 +542,20 @@ class UserSessionBridge:
             raise ValueError('authenticated account changed')
         await self.authorization.authorize(peer, topic or '', True, expected_binding=binding)
 
+    def _flood_remaining(self):
+        from .participant_state import Journal
+        with Journal(self.state_dir) as journal:
+            return journal.flood_remaining(str(self.config.account_id))
+
+    def _record_flood(self, seconds):
+        from .participant_state import Journal
+        with Journal(self.state_dir) as journal:
+            journal.flood(str(self.config.account_id), seconds)
+
     async def send_one(self) -> bool:
         """At most ONE unattempted outbox job; no retry of unknown/sent effects."""
         account = str(self.config.account_id)
+        if self._flood_remaining(): return False
         job = self.store.claim(account)
         if job is None:
             return False
@@ -667,6 +678,7 @@ class UserSessionBridge:
             # without crashing/restarting the entire companion.
             return True
         except (FloodWait, SendRejected) as exc:
+            if isinstance(exc, FloodWait): self._record_flood(exc.retry_after)
             code = "FLOOD_WAIT" if isinstance(exc, FloodWait) else "RPC_REJECTED"
             self.store.settle(account, job.intent_id, job.lease_token,
                               success=False, error_code=code)
@@ -692,6 +704,7 @@ class UserSessionBridge:
         from telethon import errors as telegram_errors
 
         account = str(self.config.account_id)
+        if self._flood_remaining(): return False
         job = self.action_store.claim(account)
         if job is None:
             return False
@@ -712,6 +725,7 @@ class UserSessionBridge:
             return True
 
         def postpone_flood(seconds: Any) -> bool:
+            self._record_flood(seconds)
             if type(seconds) is not int or seconds > 30 * 86400:
                 return reject("FLOOD_WAIT_TOO_LONG")
             try:
@@ -831,6 +845,7 @@ class UserSessionBridge:
             else:
                 await actions.react(job.peer_id, job.message_id, payload["emoji"], topic_id=job.topic_id, before_mutation=before_mutation)
         except (ActionRejected, ActionFloodWait) as exc:
+            if isinstance(exc, ActionFloodWait): self._record_flood(exc.retry_after)
             code = "FLOOD_WAIT" if isinstance(exc, ActionFloodWait) else "RPC_REJECTED"
             self.action_store.settle(account, job.intent_id, token, success=False, error_code=code)
         except asyncio.CancelledError:

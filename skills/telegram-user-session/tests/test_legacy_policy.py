@@ -83,6 +83,30 @@ class LegacyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.client.target_reads,2);self.assertEqual(self.client.calls,[])
         self.assertEqual(self.actions.get(str(ACCOUNT),'delete').status,'unknown')
         await self.bridge.process_action_once();self.assertEqual(self.client.calls,[])
+    async def test_flood_wait_gates_both_legacy_mutation_queues(self):
+        from telethon.errors import FloodWaitError
+        self.queue_text('first');self.queue_text('second');self.queue_action('delete','action')
+        self.client.raise_error=FloodWaitError(request=None,capture=300)
+        await self.bridge.send_one()
+        self.assertEqual(len(self.client.calls),1)
+        self.client.raise_error=None
+        self.assertFalse(await self.bridge.send_one())
+        self.assertFalse(await self.bridge.process_action_once())
+        self.assertEqual(len(self.client.calls),1)
+        # Another bridge/process reads the same persisted account deadline.
+        from userbot.participant_state import Journal
+        with Journal(self.root) as journal:self.assertGreater(journal.flood_remaining(ACCOUNT),290)
+
+    async def test_action_flood_also_blocks_legacy_text(self):
+        from telethon.errors import FloodWaitError
+        self.queue_action('delete','first');self.queue_text('later')
+        self.client.raise_error=FloodWaitError(request=None,capture=300)
+        await self.bridge.process_action_once()
+        self.assertEqual(len(self.client.calls),1)
+        self.client.raise_error=None
+        self.assertFalse(await self.bridge.send_one())
+        self.assertEqual(len(self.client.calls),1)
+
     async def test_attempted_text_remains_unknown_without_replay(self):
         self.queue_text();self.client.raise_error=TimeoutError('synthetic transport')
         await self.bridge.send_one();self.assertEqual(len(self.client.calls),1)

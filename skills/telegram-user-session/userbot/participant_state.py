@@ -75,6 +75,13 @@ class Journal:
             raise ValueError("journal path redirected")
         self.db = sqlite3.connect(path, timeout=5)
         self.db.row_factory = sqlite3.Row
+        try:
+            with _config_lock(self.root, 5):
+                self._initialize(recover)
+        except BaseException:
+            self.db.close()
+            raise
+    def _initialize(self, recover):
         self.db.executescript('''PRAGMA journal_mode=WAL;
         CREATE TABLE IF NOT EXISTS jobs (seq INTEGER PRIMARY KEY, account TEXT NOT NULL, id TEXT NOT NULL,
           op TEXT NOT NULL, args TEXT NOT NULL, hash TEXT NOT NULL, state TEXT NOT NULL,
@@ -87,6 +94,8 @@ class Journal:
           metadata TEXT NOT NULL, payload BLOB NOT NULL, state TEXT NOT NULL DEFAULT 'pending', due REAL NOT NULL DEFAULT 0, code TEXT NOT NULL DEFAULT '');
         CREATE TABLE IF NOT EXISTS reports (id TEXT PRIMARY KEY, body TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'pending', due REAL NOT NULL DEFAULT 0, attempts INTEGER NOT NULL DEFAULT 0, code TEXT NOT NULL DEFAULT '');
         ''')
+        # Serialize inspect-and-ALTER across companion, tools and status opens.
+        self.db.execute('BEGIN IMMEDIATE')
         columns = {r[1] for r in self.db.execute('PRAGMA table_info(reports)')}
         for name, declaration in [('due','REAL NOT NULL DEFAULT 0'),('attempts','INTEGER NOT NULL DEFAULT 0'),('code',"TEXT NOT NULL DEFAULT ''")]:
             if name not in columns: self.db.execute('ALTER TABLE reports ADD COLUMN '+name+' '+declaration)
@@ -95,6 +104,10 @@ class Journal:
             if name not in raw_columns: self.db.execute('ALTER TABLE raw_updates ADD COLUMN '+name+' '+declaration)
         if 'origin' not in {r[1] for r in self.db.execute('PRAGMA table_info(jobs)')}:
             self.db.execute("ALTER TABLE jobs ADD COLUMN origin TEXT NOT NULL DEFAULT '{}'")
+        if 'response' not in {r[1] for r in self.db.execute('PRAGMA table_info(inbox)')}:
+            self.db.execute("ALTER TABLE inbox ADD COLUMN response TEXT NOT NULL DEFAULT '{}'")
+        if 'reason' not in {r[1] for r in self.db.execute('PRAGMA table_info(limits)')}:
+            self.db.execute("ALTER TABLE limits ADD COLUMN reason TEXT NOT NULL DEFAULT 'Telegram wait'")
         self.db.commit()
         if recover:
             self.db.execute("UPDATE jobs SET state='unknown' WHERE state='attempted'")
@@ -121,9 +134,16 @@ class Journal:
     def get(self, account, key):
         row = self.db.execute("SELECT * FROM jobs WHERE account=? AND id=?", (str(account), key)).fetchone()
         return dict(row) if row else None
-    def flood(self, account, seconds):
+    def flood(self, account, seconds, reason='FloodWait'):
         with self.db:
-            self.db.execute('INSERT INTO limits VALUES(?,?) ON CONFLICT(account) DO UPDATE SET until=max(until,excluded.until)',(str(account),time.time()+max(1,seconds)))
+            self.db.execute('INSERT INTO limits(account,until,reason) VALUES(?,?,?) ON CONFLICT(account) DO UPDATE SET reason=CASE WHEN excluded.until>=until THEN excluded.reason ELSE reason END, until=max(until,excluded.until)',(str(account),time.time()+max(1,seconds),reason))
+    def cooldown(self, account):
+        row=self.db.execute('SELECT until,reason FROM limits WHERE account=?',(str(account),)).fetchone()
+        now=time.time()
+        return {'remaining_seconds':max(0,row[0]-now) if row else 0,
+                'until_unix':row[0] if row and row[0]>now else None,
+                'reason':row[1] if row and row[0]>now else None,
+                'observed_at_unix':now}
     def flood_remaining(self, account):
         held=self.db.execute('SELECT until FROM limits WHERE account=?',(str(account),)).fetchone()
         return max(0,held[0]-time.time()) if held else 0
@@ -147,8 +167,15 @@ class Journal:
             if self.db.execute("SELECT count(*) FROM raw_updates WHERE state='pending'").fetchone()[0] >= 1000:
                 raise RuntimeError('raw ingress backpressure')
             self.db.execute('INSERT INTO raw_updates(id,metadata,payload) VALUES(?,?,?)',(key,json.dumps(metadata),payload))
-    def raw_heads(self):
-        return self.db.execute("SELECT * FROM raw_updates WHERE seq IN (SELECT min(seq) FROM raw_updates WHERE state='pending' GROUP BY json_extract(metadata,'$.peer')) ORDER BY seq LIMIT 30").fetchall()
+    def raw_heads(self, account=None):
+        scope = ''
+        params = []
+        if account is not None:
+            with self.db:
+                self.db.execute("UPDATE raw_updates SET state='held',code='capture_account_unknown' WHERE state='pending' AND json_extract(metadata,'$.account_id') IS NULL")
+            scope = " AND CAST(json_extract(metadata,'$.account_id') AS TEXT)=?"
+            params.append(str(account))
+        return self.db.execute("SELECT * FROM raw_updates WHERE seq IN (SELECT min(seq) FROM raw_updates WHERE state='pending'"+scope+" GROUP BY json_extract(metadata,'$.account_id'),json_extract(metadata,'$.peer')) AND due<=? ORDER BY seq LIMIT 30", (*params,time.time())).fetchall()
     def raw_defer(self,key,delay,code):
         with self.db:
             self.db.execute('UPDATE raw_updates SET due=?,code=? WHERE id=?',(time.time()+delay,code,key))
@@ -169,8 +196,13 @@ class Journal:
             self.db.execute("INSERT INTO inbox(id,event,files) VALUES(?,?,?)", (event["source_event_id"], data, json.dumps(list(files))))
             if raw_id is not None:
                 self.db.execute("UPDATE raw_updates SET state='done' WHERE id=?",(raw_id,))
-    def heads(self):
-        return self.db.execute("SELECT * FROM inbox WHERE state='pending' AND due<=? ORDER BY seq LIMIT 30", (time.time(),)).fetchall()
+    def heads(self, account=None):
+        scope = " AND CAST(json_extract(event,'$.account_id') AS TEXT)=?" if account is not None else ''
+        params = (str(account),time.time()) if account is not None else (time.time(),)
+        return self.db.execute("SELECT * FROM inbox WHERE state='pending'"+scope+" AND due<=? AND NOT EXISTS (SELECT 1 FROM inbox AS earlier WHERE earlier.state='pending' AND earlier.seq<inbox.seq AND earlier.refs='[]' AND json_extract(earlier.event,'$.conversation_key')=json_extract(inbox.event,'$.conversation_key') AND json_extract(earlier.event,'$.account_id')=json_extract(inbox.event,'$.account_id')) ORDER BY seq LIMIT 30", params).fetchall()
+    def observe_inbox(self, seq, status, body):
+        with self.db:
+            self.db.execute('UPDATE inbox SET response=? WHERE seq=?',(json.dumps({'http_status':status,'body':body},ensure_ascii=True),seq))
     def inbox_update(self, seq, state, refs, delay=0):
         with self.db:
             self.db.execute("UPDATE inbox SET state=?,refs=?,due=? WHERE seq=?", (state, json.dumps(refs), time.time()+delay, seq))
@@ -194,7 +226,7 @@ class Journal:
     def counts(self):
         jobs={r[0]:r[1] for r in self.db.execute('SELECT state,count(*) FROM jobs GROUP BY state')}
         reports={r[0]:r[1] for r in self.db.execute('SELECT state,count(*) FROM reports GROUP BY state')}
-        return {'jobs':jobs,'reports':reports,'inbound_retrying':self.db.execute("SELECT count(*) FROM raw_updates WHERE state='pending' AND code!=''").fetchone()[0], 'report_errors':self.db.execute("SELECT count(*) FROM reports WHERE code!=''").fetchone()[0]}
+        return {'jobs':jobs,'reports':reports,'inbox':{r[0]:r[1] for r in self.db.execute('SELECT state,count(*) FROM inbox GROUP BY state')},'inbound_retrying':self.db.execute("SELECT count(*) FROM raw_updates WHERE state='pending' AND code!=''").fetchone()[0], 'report_errors':self.db.execute("SELECT count(*) FROM reports WHERE code!=''").fetchone()[0]}
     def pending_reports(self):
         return self.db.execute("SELECT * FROM reports WHERE state='pending' AND due<=? ORDER BY due,id LIMIT 5",(time.time(),)).fetchall()
     def report_done(self, key):

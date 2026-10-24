@@ -295,9 +295,8 @@ def _config_lock(root: Path, timeout_sec: float) -> Iterator[None]:
         deadline = time.monotonic() + timeout_sec
         if os.name == "nt":
             import msvcrt
-            # msvcrt.locking locks from the current offset; reserve byte zero.
-            if metadata.st_size == 0:
-                os.write(fd, b"\0")
+            # Windows permits locking beyond EOF. Initialize only AFTER winning
+            # byte zero: another opener can otherwise write into a held range.
             attempt = lambda: msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
         else:
             import fcntl
@@ -314,6 +313,9 @@ def _config_lock(root: Path, timeout_sec: float) -> Iterator[None]:
                 if time.monotonic() >= deadline:
                     raise TimeoutError("config lock acquisition timed out") from None
                 time.sleep(min(0.05, max(0, deadline - time.monotonic())))
+        if os.name == "nt" and os.fstat(fd).st_size == 0:
+            os.lseek(fd, 0, os.SEEK_SET)
+            os.write(fd, b"\0")
         yield
     finally:
         try:

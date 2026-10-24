@@ -43,7 +43,8 @@ def _known(topic_id: object, known_topics: set[int] | frozenset[int]) -> int:
 def classify_message(message: object, known_topics: set[int] | frozenset[int]) -> int | None:
     """Classify a Telegram message from the catalog's forum peer.
 
-    ``reply_to_top_id`` explicitly identifies non-General topics. The topic
+    With ``forum_topic`` true, ``reply_to_top_id`` identifies non-General topics;
+    false identifies General even when an ordinary message thread has a top. The topic
     creation service message has no required top header: its own ID *is* the
     root. A reply directly to a known topic root is another explicit signal,
     but only when Telegram marks the header as ``forum_topic``. Other reply IDs
@@ -63,6 +64,11 @@ def classify_message(message: object, known_topics: set[int] | frozenset[int]) -
 
     header = getattr(message, "reply_to", None)
     if header is None:
+        return None
+    # Telegram's top ID names any message thread, not necessarily a forum
+    # topic. The explicit false flag means General even for a threaded reply.
+    # https://core.telegram.org/constructor/messageReplyHeader (checked 2026-10-24)
+    if getattr(header, "forum_topic", None) is False:
         return None
     top = getattr(header, "reply_to_top_id", None)
     if top is not None:
