@@ -6,7 +6,7 @@
     "Telegram"
   ],
   "description": "Own Telegram user-account participant: addressed Presence, durable named MTProto operations, profile/chats/media/stickers/admin tools and an expandable account widget. Uses actual account permissions, never strangers as owner.",
-  "digest": "5b98120fe6506e592cee27351b31bf4f11b4d9536ee2ff03268fb38507e4bd74",
+  "digest": "75102c7beacbd9ac0aedee9f1bd20b5adaa3e14d6376b4c86bf259046fccb3ec",
   "install_specs": [
     {
       "allow_source_build": true,

@@ -409,11 +409,11 @@ class Tests(unittest.IsolatedAsyncioTestCase):
 
     async def test_explicit_resend_uses_existing_challenge_once(self):
         import importlib.util
-        from userbot.config import save_login_challenge,load_login_challenge
+        from userbot.config import save_login_challenge,load_login_challenge,_write_json
         spec=importlib.util.spec_from_file_location('resend_test',ROOT/'scripts/companion.py')
         module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
         save_login_challenge(self.root,'old-challenge')
-        (self.root/'login-request.json').write_text('{"request_code":true,"resend":true}')
+        _write_json(self.root,'login-request.json',{'request_code':True,'resend':True})
         seen=[]
         async def unauthorized():return False
         async def request(phone,**kw):seen.append(kw);return 'new-challenge'
