@@ -25,7 +25,7 @@ def _worker(state_dir: Path, method: str, path: str, body: bytes = b"", mime: st
                 "Content-Length": str(len(body)),
             })
             response = conn.getresponse()
-            result = response.read(16384)
+            result = response.read(65536)
             if response.read(1):
                 raise ValueError("oversized worker reply")
             value = json.loads(result)
@@ -104,6 +104,18 @@ def _routes(state_dir: Path):
 def register(api):
     state_dir = Path(api.get_state_dir())
     api.register_companion_process("whisper_worker")
+    from .attachment_tool import transcribe_attachment
+
+    def attachment(ctx, ordinal: int):
+        return transcribe_attachment(ctx, ordinal, state_dir=state_dir, worker=_worker)
+
+    api.register_tool(
+        "transcribe_attachment", handler=attachment,
+        description="Transcribe a host-staged audio attachment locally by its manifest ordinal (not a file path). Reuses Whisper's resident companion; no cloud audio transfer. Returns text and non-content worker timings. Does not Send a message or change settings. Max 384 KiB / 60 seconds. Use directly for attached voice recordings, without HTTP scripts or port discovery.",
+        schema={"type": "object", "properties": {"ordinal": {"type": "integer", "minimum": 0}},
+                "required": ["ordinal"], "additionalProperties": False},
+        timeout_sec=150,
+    )
     status, transcribe, settings, install = _routes(state_dir)
     # Settings actions submit POST even when their descriptor says GET;
     # ordinary passive status readers can still use GET.

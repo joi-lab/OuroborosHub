@@ -1,4 +1,4 @@
-"""Cheap offline tests: no model download, CTranslate load or live installation."""
+"""Offline regressions: no model download, CTranslate load or live installation."""
 from __future__ import annotations
 
 import asyncio
@@ -194,7 +194,9 @@ def request(port, token, method, path, payload=b"", mime="application/json"):
 def test_supervised_companion_loopback_auth_and_readiness(tmp_path):
     model = make_model(tmp_path)
     env = {**os.environ, "OUROBOROS_SKILL_STATE_DIR": str(tmp_path)}
-    child = subprocess.Popen([sys.executable, str(ROOT / "scripts" / "companion.py")],
+    # Windows venv python.exe is a launcher: Popen.pid is not the interpreter.
+    executable = getattr(sys, "_base_executable", sys.executable) if os.name == "nt" else sys.executable
+    child = subprocess.Popen([executable, str(ROOT / "scripts" / "companion.py")],
                              env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     try:
         endpoint = tmp_path / "voice_endpoint.json"
@@ -342,4 +344,82 @@ def test_mp4_decodes_through_pyav_before_local_transcription(tmp_path, monkeypat
             return [types.SimpleNamespace(text=" Safari dictation ")], None
 
     monkeypatch.setitem(sys.modules, "faster_whisper", types.SimpleNamespace(WhisperModel=Model))
-    assert companion.Engine().transcribe(output.getvalue(), "audio/mp4") == "Safari dictation"
+    engine = companion.Engine()
+    cold, warm = {}, {}
+    assert engine.transcribe(output.getvalue(), "audio/mp4", cold) == "Safari dictation"
+    first = engine.model
+    # Saving the same snapshot or just residency must not reload weights.
+    engine.configure(validate_choice(str(tmp_path / "local-model"), True))
+    assert engine.model is first
+    assert engine.transcribe(output.getvalue(), "audio/mp4", warm) == "Safari dictation"
+    assert engine.model is first
+    assert cold["model_loaded"] is True and warm["model_loaded"] is False
+    stages = ("imports_ms", "decode_ms", "lock_wait_ms", "selection_and_load_ms", "inference_ms")
+    for metrics in (cold, warm):
+        assert all(metrics[key] >= 0 for key in stages)
+        assert abs(sum(metrics[key] for key in stages) - metrics["worker_total_ms"]) < .01
+    assert "Safari" not in json.dumps(cold)
+
+
+@pytest.mark.parametrize("resident", [False, True])
+def test_configure_retains_same_resolved_snapshot(tmp_path, monkeypatch, resident):
+    monkeypatch.setenv("OUROBOROS_SKILL_STATE_DIR", str(tmp_path))
+    spec = importlib.util.spec_from_file_location("voice_config_test", ROOT / "scripts" / "companion.py")
+    companion = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(companion)
+    model = make_model(tmp_path)
+    receipt = tmp_path / "installed.json"
+    receipt.write_text(json.dumps({"schema": "helene.voice.v1", "model": "turbo", "path": str(model)}), encoding="utf-8")
+    engine = companion.Engine()
+    original = object()
+    engine.model, engine.loaded_path, engine.last_use = original, str(model.resolve()), 123.0
+    engine.configure(validate_choice(str(receipt), resident))
+    assert engine.model is original and engine.last_use == 123.0
+    engine.configure(validate_choice(str(model), resident))
+    assert engine.model is original
+    other = tmp_path / "other"
+    other.mkdir()
+    for name in ("model.bin", "config.json", "tokenizer.json"):
+        (other / name).write_bytes(b"valid")
+    engine.configure(validate_choice(str(other), resident))
+    assert engine.model is None and engine.loaded_path == ""
+    # A failed selection must preserve both saved settings and residency.
+    engine.model, engine.loaded_path = original, str(other.resolve())
+    with pytest.raises(ModelUnavailable):
+        engine.configure(validate_choice(str(tmp_path / "missing"), resident))
+    assert engine.model is original
+    assert read_settings(tmp_path)["model_path"] == str(other)
+
+
+def test_busy_rejected_before_decode_and_exception_releases_admission(tmp_path, monkeypatch):
+    monkeypatch.setenv("OUROBOROS_SKILL_STATE_DIR", str(tmp_path))
+    spec = importlib.util.spec_from_file_location("voice_busy_test", ROOT / "scripts" / "companion.py")
+    companion = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(companion)
+    engine = companion.Engine()
+    entered, release = threading.Event(), threading.Event()
+    calls = []
+    def held(*args):
+        calls.append(1)
+        entered.set()
+        assert release.wait(3)
+        return 'finished'
+    monkeypatch.setattr(engine, '_transcribe', held)
+    thread = threading.Thread(target=engine.transcribe, args=(b'OggS', 'audio/ogg'))
+    thread.start()
+    try:
+        assert entered.wait(3)
+        with pytest.raises(companion.VoiceBusy):
+            engine.transcribe(b'OggS', 'audio/ogg')
+        assert calls == [1]
+    finally:
+        release.set()
+        thread.join(3)
+    assert not thread.is_alive()
+    def fail(*args):
+        raise ValueError('decode failure')
+    monkeypatch.setattr(engine, '_transcribe', fail)
+    with pytest.raises(ValueError, match='decode failure'):
+        engine.transcribe(b'OggS', 'audio/ogg')
+    monkeypatch.setattr(engine, '_transcribe', lambda *args: 'next request')
+    assert engine.transcribe(b'OggS', 'audio/ogg') == 'next request'

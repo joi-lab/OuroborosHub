@@ -53,9 +53,14 @@ def _atomic_json(path: Path, value: dict) -> None:
         tmp.unlink(missing_ok=True)
 
 
+class VoiceBusy(ValueError):
+    pass
+
+
 class Engine:
     def __init__(self) -> None:
         self.lock = threading.RLock()
+        self.transcription = threading.Lock()
         self.model = None
         self.loaded_path = ""
         self.last_use = 0.0
@@ -106,22 +111,35 @@ class Engine:
             }
 
     def configure(self, settings: dict) -> dict:
-        model_directory(settings["model_path"])
+        path = str(model_directory(settings["model_path"]).resolve())
         with self.lock:
             write_settings(STATE, settings)
-            self.model = None
-            self.loaded_path = ""
+            # Residency is a retention policy, not a new model selection.
+            if self.loaded_path != path:
+                self.model = None
+                self.loaded_path = ""
             self.install_error = ""
             self.install_notice = ""
         return self.status()
 
-    def transcribe(self, data: bytes, mime: str) -> str:
+    def transcribe(self, data: bytes, mime: str, timings: dict | None = None) -> str:
+        # Refuse excess work before imports/decode; never queue stale recordings.
+        if not self.transcription.acquire(blocking=False):
+            raise VoiceBusy("A local transcription is already running; try again after it finishes")
+        try:
+            return self._transcribe(data, mime, timings)
+        finally:
+            self.transcription.release()
+
+    def _transcribe(self, data: bytes, mime: str, timings: dict | None = None) -> str:
+        started = time.perf_counter()
         audio_format(mime, data)
         # Decode BEFORE loading 1.6 GB of weights; cap decoded samples too.
         import av
         import numpy as np
         from faster_whisper import WhisperModel
 
+        imported = time.perf_counter()
         parts = []
         count = 0
         # PyAV detects WebM/Ogg/MP3 and Safari MP4/AAC from the container.
@@ -146,19 +164,35 @@ class Engine:
         if count < 1600:
             raise ValueError("audio shorter than 0.1 seconds")
         audio = np.concatenate(parts).astype("float32", copy=False)
-        settings = read_settings(STATE)
-        path = str(model_directory(settings["model_path"]))
+        decoded = time.perf_counter()
         with self.lock:
-            if self.model is None or self.loaded_path != path:
+            acquired = time.perf_counter()
+            # Read selection under the same lock as configure/download writes.
+            settings = read_settings(STATE)
+            path = str(model_directory(settings["model_path"]).resolve())
+            model_loaded = self.model is None or self.loaded_path != path
+            if model_loaded:
                 self.model = None
                 self.loaded_path = ""
                 self.model = WhisperModel(path, device="cpu", compute_type="int8", local_files_only=True)
                 self.loaded_path = path
+            loaded = time.perf_counter()
             # faster-whisper returns a lazy generator: consume it before releasing
             # the lock so idle eviction cannot race a transcription.
             segments, _info = self.model.transcribe(audio, language=None, beam_size=3, vad_filter=True)
             words = " ".join(segment.text.strip() for segment in segments).strip()
             self.last_use = time.monotonic()
+            inferred = time.perf_counter()
+        if timings is not None:
+            timings.update({
+                "imports_ms": round((imported - started) * 1000, 3),
+                "decode_ms": round((decoded - imported) * 1000, 3),
+                "lock_wait_ms": round((acquired - decoded) * 1000, 3),
+                "selection_and_load_ms": round((loaded - acquired) * 1000, 3),
+                "inference_ms": round((inferred - loaded) * 1000, 3),
+                "worker_total_ms": round((inferred - started) * 1000, 3),
+                "model_loaded": model_loaded,
+            })
         if len(words) > 8000:
             raise ValueError("transcript too long")
         return words
@@ -211,7 +245,7 @@ class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
     def _reply(self, status: int, payload: dict) -> None:
-        body = json.dumps(payload).encode("utf-8")
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
@@ -240,8 +274,10 @@ class Handler(BaseHTTPRequestHandler):
             if len(data) != int(raw_length):
                 raise ValueError("incomplete request body")
             if self.path == "/transcribe":
-                text = ENGINE.transcribe(data, self.headers.get("Content-Type", ""))
-                self._reply(200, {"text": text} if text else {"text": "", "status": "no_speech"})
+                timings = {}
+                text = ENGINE.transcribe(data, self.headers.get("Content-Type", ""), timings)
+                self._reply(200, {"text": text, "timings": timings,
+                                  **({"status": "no_speech"} if not text else {})})
             else:
                 value = json.loads(data)
                 if not isinstance(value, dict):
@@ -256,6 +292,8 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     ENGINE.install(value.get("model"))
                     self._reply(202, ENGINE.status())
+        except VoiceBusy as exc:
+            self._reply(503, error("voice_busy", str(exc)))
         except (ValueError, OSError, ImportError) as exc:
             self._reply(400, error("voice_unavailable", str(exc)))
         except Exception as exc:
