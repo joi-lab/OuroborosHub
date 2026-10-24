@@ -2665,6 +2665,138 @@
       "version": "0.6.0"
     },
     {
+      "connects": [
+        "Telegram"
+      ],
+      "description": "Own Telegram user-account participant: addressed Presence, durable named MTProto operations, profile/chats/media/stickers/admin tools and an expandable account widget. Uses actual account permissions, never strangers as owner.",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "sha256": "79f23866eea56e14a26da7e593d545c425a903c72b00f4e4ba9ad7aad23522e6",
+          "size": 15122
+        },
+        {
+          "path": "plugin.py",
+          "sha256": "c6cbdbb41f59548f664829f4a6842e63ddf6f417c1b8db9a5852a9bfe2600de3",
+          "size": 45756
+        },
+        {
+          "path": "scripts/companion.py",
+          "sha256": "b068244c3e7e9e6e58e36d705b2c7e767b1b206e561ba5e709a231f196e242ba",
+          "size": 18183
+        },
+        {
+          "path": "tests/test_intake_loop.py",
+          "sha256": "4e25664aae83c67214cd4e6bb9fd6407ed7e43f7d699aa1f52d378632f727f6f",
+          "size": 4577
+        },
+        {
+          "path": "tests/test_legacy_policy.py",
+          "sha256": "fa04a1e4d515fff83274213ba20dc1e23b4d5ed9d21b83746c4c14c148dbe20c",
+          "size": 7786
+        },
+        {
+          "path": "tests/test_participant.py",
+          "sha256": "9545865ff9564577abd69ee45b1cfc774166a74c55a66617505551874f496acf",
+          "size": 55169
+        },
+        {
+          "path": "userbot/__init__.py",
+          "sha256": "281895169681b5ee5645cad05545a7c89aadb81ae8e9fc330aee79adb503d38c",
+          "size": 71
+        },
+        {
+          "path": "userbot/action_store.py",
+          "sha256": "dec3dffe26196c976fe9312425988ca52f2149f1c371e76cab45558b1898dc27",
+          "size": 15836
+        },
+        {
+          "path": "userbot/actions.py",
+          "sha256": "74e68beb5e114df937e0690a90a5ebb7167c095a84ca681e93b3bf87f74239a7",
+          "size": 9258
+        },
+        {
+          "path": "userbot/config.py",
+          "sha256": "5f92790f12f3fb1f0d6c9c9e0fcf25580ce847004bae90acda1c08e6e760fb61",
+          "size": 20596
+        },
+        {
+          "path": "userbot/dossier.py",
+          "sha256": "0f3f2f9b1418e1c993bdae6423d934d3927dbaf6ead59a79dc66f00d8f2f47fc",
+          "size": 9744
+        },
+        {
+          "path": "userbot/participant.py",
+          "sha256": "59d9467842725199137a941c8398ca6d0d3378b89097c4e743fa33deb3e73f4b",
+          "size": 30325
+        },
+        {
+          "path": "userbot/participant_ops.py",
+          "sha256": "a08ad76bf7fefa6f4cceb77dc42454907722e6532b827cbcdce88832787b4224",
+          "size": 25778
+        },
+        {
+          "path": "userbot/participant_plugin.py",
+          "sha256": "1f9ee6f78a556e188b5d456af955dc9a9f4ce1ff12ec8e3c75df31f77a99ffae",
+          "size": 12695
+        },
+        {
+          "path": "userbot/participant_state.py",
+          "sha256": "fc83498fdcb8308214b5a75ebe12e8da158e80dfd16f54291c643aed890f5343",
+          "size": 15267
+        },
+        {
+          "path": "userbot/presence.py",
+          "sha256": "8a9d65d2ee35281efc25db82fb811d1e5adcbca9cf3131e87b4f4f2603d23926",
+          "size": 16200
+        },
+        {
+          "path": "userbot/runtime.py",
+          "sha256": "f484f3acb09bc54085a2e03d6dd0570f13afad68fa82c77592427e3d73afc316",
+          "size": 51329
+        },
+        {
+          "path": "userbot/store.py",
+          "sha256": "0c422addc1b1ef260dbf8fb0932336c1020d818d485629d04a87fe1148de7141",
+          "size": 34557
+        },
+        {
+          "path": "userbot/telegram.py",
+          "sha256": "b4f42a2924facd1898fe213ff19fb0778a5c76b20aab26db0e0b001d3da0fc7a",
+          "size": 14225
+        },
+        {
+          "path": "userbot/topic.py",
+          "sha256": "218c5808e0b8aa594ed74215e71f966118ad3b36084ed0812632ec5ec7663d3e",
+          "size": 5528
+        },
+        {
+          "path": "widget.js",
+          "sha256": "a2c3fabc13aee3a4d0a980d0c3fde3ecd7452a76a3a8db960f9e903a5f2dba72",
+          "size": 17836
+        }
+      ],
+      "install_specs": [
+        {
+          "allow_source_build": true,
+          "check": {
+            "argv": [
+              "python",
+              "-c",
+              "import telethon"
+            ],
+            "cwd": "."
+          },
+          "kind": "pip",
+          "package": "telethon==1.45.0"
+        }
+      ],
+      "name": "telegram-user-session",
+      "slug": "telegram-user-session",
+      "type": "extension",
+      "version": "0.2.3"
+    },
+    {
       "description": "Token Observatory — Liquid Glass dashboard for recorded Ouroboros token usage, tasks and models.",
       "files": [
         {
