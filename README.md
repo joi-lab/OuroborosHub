@@ -260,7 +260,11 @@ The hub tests include mocked GitHub APIs for owner authorization, signals and
 catalog-to-mirror sequencing. The release-identity test compares all hosted skills
 with the core checkout selected by `OUROBOROS_IDENTITY_CORE_ROOT`, using the test
 runner's Python with core requirements installed. Without that variable the
-cross-repository check is reported as skipped.
+cross-repository check is reported as skipped. Every hosted skill that contributes
+a place is checked as a connector: declared tool effects, the place contract,
+wake facts, its status route and a bounded monochrome `ui/icon.svg`. The hub keeps
+a mirror of the core rules for this; the same checkout also runs every connector
+through the core's manifest, contribution and icon validators.
 
 Module widgets can declare `render.appearance: host` and feature-detect
 `OuroborosWidget.onTheme`. Preserve state while applying Light/Dark, unsubscribe
