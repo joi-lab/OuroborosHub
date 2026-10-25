@@ -32,12 +32,15 @@ def register(api):
             store.close()
         value["enabled"] = config["enabled"]
         value["host_contract_ready"] = value["metadata"].get("host_capabilities", {}).get("ready", False)
-        value["account_id"] = connection_account(config) if config["expected_writer_id"] else None
-        value["connect"] = [{"account_id": value["account_id"], "conversation_id": "repo." + str(r["id"]),
-                             "label": r["full_name"]} for r in config["repositories"]]
-        if value["account_id"] and (config["writer_notifications"] or config["notifications_user_id"]):
-            value["connect"].append({"account_id": value["account_id"], "conversation_id": "",
-                                     "label": "Public notification discovery (choose Silent)"})
+        value["account_id"] = account = connection_account(config) if config["expected_writer_id"] else None
+        # Connect rows name a real account; until the writer is configured nothing is offered yet.
+        value["connect"] = []
+        if isinstance(account, str) and account:
+            value["connect"] = [{"account_id": account, "conversation_id": "repo." + str(r["id"]),
+                                 "label": r["full_name"]} for r in config["repositories"]]
+            if config["writer_notifications"] or config["notifications_user_id"]:
+                value["connect"].append({"account_id": account, "conversation_id": "",
+                                         "label": "Account-wide notifications"})
         writer = value["metadata"].get("auth:writer", {})
         verified = (writer.get("state") == "valid" and writer.get("id") == config["expected_writer_id"]
                     and writer.get("auth_mode", "pat") == config["auth_mode"])
@@ -165,7 +168,7 @@ def register(api):
     api.register_route("settings", handler=settings, methods=("GET", "POST"))
     api.register_route("probe", handler=probe, methods=("POST",))
     api.register_settings_section("github", title="GitHub", schema={"components": [
-        {"type": "markdown", "text": "Configure a PAT writer or an App installation and explicit repository IDs; see SETUP.md. App mode verifies the App bot's numeric writer ID and mints expiring tokens. Notifications require separate classic PAT credentials. Start disabled, verify identities, connect in Places and make sure each place is Silent, then enable collection. For public notification discovery, use a Silent account-wide place with any_message. Private IDs require explicit selection. Credentials belong in Settings → Secrets. Windows and live App/GHES operation still require native qualification."},
+        {"type": "markdown", "text": "Configure a PAT writer or an App installation and explicit repository IDs; see SETUP.md. App mode verifies the App bot's numeric writer ID and mints expiring tokens. Notifications require separate classic PAT credentials. Start with collection disabled, verify identities, then connect each repository in Places. New places start Silent (on an older host, set them Silent); keep them Silent for the first trial. For public notifications outside the selected repositories, connect Account-wide notifications and add every message to that place's attention list. Private IDs require explicit selection. Credentials belong in Settings → Secrets. Windows and live App/GHES operation still require native qualification."},
         {"type": "form", "route": "settings", "method": "POST", "fields": [
             {"name": "configuration", "label": "Configuration JSON", "type": "textarea"}], "submit_label": "Save configuration"},
         {"type": "action", "route": "probe", "method": "POST", "label": "Verify identities and repositories", "target": "probe"},

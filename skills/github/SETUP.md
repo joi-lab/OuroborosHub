@@ -142,12 +142,14 @@ before any Active trial. The payload never changes a place to Active.
    this provider-only probe does not prove host readiness, write scopes or actual
    provider writes.
 3. Connect each displayed account/repository through the existing Places UI or
-   `configure_presence`. Make sure each new place is **Silent before enabling
-   collection**: a host that starts new places Silent needs no change, and an
-   older host's Connect creates Active. For public Notifications outside the
-   selected repositories, also create the account-wide place with a **blank**
-   conversation ID, state **Silent** and `any_message` (the host resolves that
-   blank scope to `*`; do not enter a literal `*` as the stored conversation ID).
+   `configure_presence`. Rows appear once `expected_writer_id` names the writer;
+   before that the status route offers none. Make sure each new place is **Silent
+   before enabling collection**: a host that starts new places Silent needs no
+   change, and an older host's Connect creates Active. For public Notifications
+   outside the selected repositories, also connect **Account-wide notifications**
+   (a **blank** conversation ID: the host resolves that blank scope to `*`; do not
+   enter a literal `*` as the stored conversation ID), keep it **Silent** and add
+   `any_message` ("every message") to its wakes, the only fact notifications carry.
    The connector never creates or edits
    a place. An absent binding retains a visible admission gap; a notification
    never selects a repository for external writes. No place mode is stored here.
