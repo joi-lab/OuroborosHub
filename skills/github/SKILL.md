@@ -1,7 +1,7 @@
 ---
-name: github-presence
+name: github
 description: Observe connected GitHub issues, pull requests and Discussions, and deliver authorized replies or explained issue closures with durable receipts.
-version: 0.1.0
+version: 0.1.1
 type: extension
 entry: plugin.py
 plugin_api: "2.0"
@@ -9,6 +9,7 @@ runtime: python3
 os: [darwin, linux, windows]
 dependencies: ["PyJWT[crypto]>=2.13,<3"]
 permissions: [net, read_settings, widget, route, tool, companion_process, presence]
+conflicts: [github-presence]
 env_from_settings: [GITHUB_PRESENCE_WRITER_TOKEN, GITHUB_PRESENCE_NOTIFICATIONS_TOKEN, GITHUB_PRESENCE_APP_PRIVATE_KEY]
 companion_processes:
   - name: github_poller
@@ -30,19 +31,21 @@ tools:
   - name: github_place_status
     effect: read
     target: [account_id, conversation_id]
+icon: ui/icon.svg
 contributes:
   - id: place
     provides: place
     label: GitHub
     destination: vendor:GitHub
     scope: account
-    wakes: [any_message]
+    icon: ui/icon.svg
+    wakes: [new_issue, new_pull_request, mention, my_thread, review_requested, assigned]
     source: {route: status, refresh_s: 15}
     settings: github
     read_only: provider
 ---
 
-# GitHub Presence
+# GitHub
 
 Use this transport for connected GitHub conversations. Read [SETUP.md](SETUP.md)
 for connection, supported capabilities and qualification limits, and

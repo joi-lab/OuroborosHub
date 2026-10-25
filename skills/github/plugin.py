@@ -164,14 +164,14 @@ def register(api):
     api.register_route("status", handler=status, methods=("GET",))
     api.register_route("settings", handler=settings, methods=("GET", "POST"))
     api.register_route("probe", handler=probe, methods=("POST",))
-    api.register_settings_section("github", title="GitHub Presence", schema={"components": [
-        {"type": "markdown", "text": "Configure a PAT writer or an App installation and explicit repository IDs; see SETUP.md. App mode verifies the App bot's numeric writer ID and mints expiring tokens. Notifications require separate classic PAT credentials. Start disabled, verify identities, connect in Places and choose Silent, then enable collection. For public notification discovery, use a Silent account-wide place with any_message. Private IDs require explicit selection. Credentials belong in Settings → Secrets. Windows and live App/GHES operation still require native qualification."},
+    api.register_settings_section("github", title="GitHub", schema={"components": [
+        {"type": "markdown", "text": "Configure a PAT writer or an App installation and explicit repository IDs; see SETUP.md. App mode verifies the App bot's numeric writer ID and mints expiring tokens. Notifications require separate classic PAT credentials. Start disabled, verify identities, connect in Places and make sure each place is Silent, then enable collection. For public notification discovery, use a Silent account-wide place with any_message. Private IDs require explicit selection. Credentials belong in Settings → Secrets. Windows and live App/GHES operation still require native qualification."},
         {"type": "form", "route": "settings", "method": "POST", "fields": [
             {"name": "configuration", "label": "Configuration JSON", "type": "textarea"}], "submit_label": "Save configuration"},
         {"type": "action", "route": "probe", "method": "POST", "label": "Verify identities and repositories", "target": "probe"},
         {"type": "json", "target": "probe"},
     ]})
-    api.register_ui_tab("status", title="GitHub Presence", render={"kind": "declarative", "schema_version": 1, "components": [
+    api.register_ui_tab("status", title="GitHub", render={"kind": "declarative", "schema_version": 1, "components": [
         {"type": "poll", "route": "status", "interval_ms": 15000, "target": "status"},
         {"type": "json", "target": "status"},
     ]})

@@ -57,7 +57,7 @@ Membership in the hub alone does not confer Official status.
 
 The initial Official set is: `a2a`, `adaptive-code-review`, `anti-slop`,
 `cache_efficiency_snapshot`, `claudexor_quotas`, `confluence`, `context-lens`,
-`duckduckgo`, `email`, `email-presence`, `github-presence`, `google-workspace`, `keenable`,
+`duckduckgo`, `email`, `email-presence`, `github`, `google-workspace`, `keenable`,
 `memory-atlas`, `perplexity`, `slack-bridge`, `telegram-bot`, `pdf_tools`, `word_tools`.
 The recommended hub starters are `duckduckgo`, `pdf_tools`, `word_tools`,
 `anti-slop` and `memory-atlas`. The app manages recommendations for its built-ins.

@@ -29,7 +29,7 @@ def main():
     result = unittest.TextTestRunner(verbosity=2, resultclass=Result).run(suite)
     if args.junit:
         root = ET.Element("testsuite", tests=str(result.testsRun), failures=str(len(result.failures)),
-                          errors=str(len(result.errors)), skipped=str(len(result.skipped)), name="github-presence")
+                          errors=str(len(result.errors)), skipped=str(len(result.skipped)), name="github")
         for test, duration in result.cases:
             case = ET.SubElement(root, "testcase", name=test.id(), time=f"{duration:.6f}")
             for kind, rows in (("failure", result.failures), ("error", result.errors), ("skipped", result.skipped)):

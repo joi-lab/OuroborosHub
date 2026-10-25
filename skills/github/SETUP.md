@@ -142,18 +142,20 @@ before any Active trial. The payload never changes a place to Active.
    this provider-only probe does not prove host readiness, write scopes or actual
    provider writes.
 3. Connect each displayed account/repository through the existing Places UI or
-   `configure_presence`. Connect currently creates Active; set each new place to
-   **Silent before enabling collection**. For public Notifications outside the
+   `configure_presence`. Make sure each new place is **Silent before enabling
+   collection**: a host that starts new places Silent needs no change, and an
+   older host's Connect creates Active. For public Notifications outside the
    selected repositories, also create the account-wide place with a **blank**
    conversation ID, state **Silent** and `any_message` (the host resolves that
    blank scope to `*`; do not enter a literal `*` as the stored conversation ID).
    The connector never creates or edits
    a place. An absent binding retains a visible admission gap; a notification
    never selects a repository for external writes. No place mode is stored here.
-4. Choose wakes, notes and model in Places. `any_message` includes unaddressed
-   conversations and new Discussions. Bots still require `from_bot` explicitly.
-   Use the upgraded host's `review_requested` and `assigned` choices as needed;
-   these facts are never disguised as mentions. A blank model inherits the
+4. Choose wakes, notes and model in Places. The connector suggests `new_issue`,
+   `new_pull_request`, `mention`, `my_thread`, `review_requested` and `assigned`;
+   these facts are never disguised as mentions. `any_message` is an explicit choice
+   that adds unaddressed conversations and new Discussions. Bots still require
+   `from_bot` explicitly. A blank model inherits the
    consciousness model slot; verify that inheritance if the desired model is Main.
 5. Enable collection in the configuration. Inspect baseline progress, per-stream
    completions/gaps, waiting work and receipts. Use a short Silent trial and a

@@ -124,11 +124,11 @@ def check(payload, repo, data, log, patches):
         "FakeProvider records mutations in memory; no GitHub network",
         "Only temporary schedule/data roots; no workers are started"]
     async def authenticate(*_args):
-        return "github-presence", {}
+        return "github", {}
     patches.enter_context(patch.object(host_service, "_authenticated", authenticate))
     patches.enter_context(patch("ouroboros.presence_admission.focus_enabled", return_value=True))
     patches.enter_context(patch("ouroboros.presence_admission.focus_allowance", return_value={"status": "available", "remaining_usd": 10}))
-    state = data / "state/skills/github-presence"
+    state = data / "state/skills/github"
     store = Store(state)
     patches.callback(store.close)
     write_config(state, CONFIG)
@@ -147,7 +147,7 @@ def check(payload, repo, data, log, patches):
     provider.rows.append(new_comment)
     sender.tick()
     assert store.one("SELECT state FROM outbox")["state"] == "needs_reconsideration"
-    place = places.connect_place(data, connector="github-presence", provider="github",
+    place = places.connect_place(data, connector="github", provider="github",
                                   account_id=first["account_id"], conversation_id=first["conversation_id"], wakes=["any_message"])
     tasks = []
     log["inputs"] = []
@@ -283,7 +283,7 @@ def audit_recovery_consumers(data, http, log):
 
     root, ref = data / "audit-recovery-transport", "audit-continuation"
     source = event("audit-source")
-    presence = {"transport_skill": "github-presence", "binding_id": "audit-binding", "event": source,
+    presence = {"transport_skill": "github", "binding_id": "audit-binding", "event": source,
                 "delivery_reporting_version": 1}
     patch_document(data, ref, lambda _: stamp_task_result_schema({
         "task_id": ref, "status": "running", "metadata": {"presence": presence}, "output_ref": "retained-speech",
