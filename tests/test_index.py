@@ -112,6 +112,7 @@ class IndexTests(unittest.TestCase):
             {'withdrawn': {'reason': 'why', 'at': '2026-01-01', 'extra': True}},
             {'source': {'kind': 'hosted', 'path': 'skills/another'}},
             {'source': {'kind': 'hosted', 'path': '../demo'}}, {'source': {}},
+            {'title': ''}, {'title': 7}, {'title': 'Two\nlines'}, {'title': ' Padded'},
         ]
         for changes in mutations:
             with self.subTest(changes=changes), self.assertRaises(ValueError):
@@ -164,6 +165,25 @@ class IndexTests(unittest.TestCase):
         self.assertEqual(builder.main(['--refresh', 'demo'], root=self.root), 0)
         self.assertNotIn('connects', builder.read_json(self.root / 'entries/demo.json'))
         self.assertNotIn('icon', builder.build_catalog(self.root)['skills'][0])
+
+    def test_title_derives_from_the_manifest_into_entries_and_v1_rows(self):
+        manifest = self.root / 'skills/demo/SKILL.md'
+        manifest.write_text('---\nversion: v2\ntitle: Demo tools\n---\nBody\n', encoding='utf-8')
+        self.assertEqual(builder.main(['--refresh', 'demo'], root=self.root), 0)
+        entry = builder.read_json(self.root / 'entries/demo.json')
+        self.assertEqual(entry['title'], 'Demo tools')
+        builder.validate_entry(entry, {'search'})
+        self.assertEqual(builder.build_catalog(self.root)['skills'][0]['title'], 'Demo tools')
+        self.write('entries/demo.json', {**entry, 'title': 'Something else'})
+        with self.assertRaisesRegex(ValueError, 'title must derive'):
+            builder.build_catalog(self.root)
+        # An entry may omit the field; the manifest still names the v1 row.
+        self.write('entries/demo.json', {k: v for k, v in entry.items() if k != 'title'})
+        self.assertEqual(builder.build_catalog(self.root)['skills'][0]['title'], 'Demo tools')
+        manifest.write_text('---\nversion: v3\n---\nBody\n', encoding='utf-8')
+        self.assertEqual(builder.main(['--refresh', 'demo'], root=self.root), 0)
+        self.assertNotIn('title', builder.read_json(self.root / 'entries/demo.json'))
+        self.assertNotIn('title', builder.build_catalog(self.root)['skills'][0])
 
     def test_endorsements_bind_exact_release_and_recommendations_are_boolean(self):
         endorsement = {'name': 'demo', 'digest': self.entry['digest'], 'recommended': True}

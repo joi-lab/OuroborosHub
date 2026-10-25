@@ -27,6 +27,9 @@ a source, a release digest and a withdrawal status. Optional `withdrawn_releases
 records withdrawn versions by digest. Optional `icon` names a host icon or a
 local `ui/*.svg` geometry asset. `connects` is derived from `provides: place`
 contributions in the reviewed manifest; older consumers can ignore both fields.
+Optional `title` is the human name the manifest gives a skill (for example
+`Email tools`); the canonical name stays its identity. A connector needs none:
+its place `label` already names the service.
 Connector marks are monochrome `currentColor` geometry: the Slack and GitHub
 marks use Lucide geometry (ISC License) and the Telegram mark uses Tabler Icons
 geometry (MIT License); product names and marks remain the property of their
@@ -116,7 +119,7 @@ identity along with code and instructions.
    included in an entry PR.
 
 `--refresh` updates only the named entry's version, raw dependency declaration,
-release digest, and manifest-derived `icon`/`connects` fields. `--digest NAME`
+release digest, and manifest-derived `icon`/`connects`/`title` fields. `--digest NAME`
 prints the digest without changing files. Neither command renews Official
 endorsements. `scripts/build_catalog.py` remains a
 compatible alias for the generator and its `--check` mode.
