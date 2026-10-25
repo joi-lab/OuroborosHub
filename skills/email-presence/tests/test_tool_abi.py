@@ -21,4 +21,4 @@ def test_registered_tools_through_extension_children(tmp_path):
         capture_output=True, text=True, timeout=180,
     )
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "verified seven email tools across the child boundary" in result.stdout
+    assert "verified eight email tools across the child boundary" in result.stdout

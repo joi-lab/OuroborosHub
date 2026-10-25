@@ -90,16 +90,23 @@ def register(api):
                                           reporting={"version": -1, "origin": tool_origin(ctx)})
         return {"ok": True, "request_id": rid, "deduplicated": not inserted, "receipt": mailbox.receipt(rid)}
 
+    def default_folder():
+        return client().settings.get("EMAIL_DEFAULT_FOLDER") or "INBOX"
+
     def search(**kwargs):
-        kwargs.setdefault("folder", client().settings.get("EMAIL_DEFAULT_FOLDER") or "INBOX")
+        kwargs.setdefault("folder", default_folder())
         return client().search(**kwargs)
 
-    def read(**kwargs):
-        kwargs.setdefault("folder", client().settings.get("EMAIL_DEFAULT_FOLDER") or "INBOX")
-        message = client().read(include_attachment_data=True, **kwargs)
+    def read(*, uid, uidvalidity, folder=None):
+        # Declared `effect: read`: there is deliberately no argument that changes flags.
+        message = client().read(uid=uid, uidvalidity=uidvalidity, folder=folder or default_folder(),
+                                include_attachment_data=True)
         if message.get("_raw_source") is not None or message.get("attachments"):
             store().stage_inbound_attachments(message)
         return message
+
+    def mark_read(*, uid, uidvalidity, folder=None):
+        return client().mark_read(uid=uid, uidvalidity=uidvalidity, folder=folder or default_folder())
 
     def draft(**kwargs):
         if kwargs.pop("reply_all", False):
@@ -137,8 +144,10 @@ def register(api):
           "attachments": {"type": "array", "items": {"type": "object"}}, "request_id": string}, ("body",))
     tool("email_search", search, "Search all mail, including mail before activation. IMAP criteria tokens, e.g. ['UNSEEN'], ['FROM', '\"alice@example.org\"'], ['HEADER', 'Message-ID', '\"<id>\"']. Returns stable UID and UIDVALIDITY.",
          {"folder": string, "criteria": array, "limit": integer})
-    tool("email_read", read, "Read any old or new message using UID and UIDVALIDITY from email_search. Peeks unless mark_as_read is true.",
-         {"uid": integer, "uidvalidity": integer, "folder": string, "mark_as_read": {"type": "boolean"}}, ("uid", "uidvalidity"))
+    tool("email_read", read, "Read any old or new message using UID and UIDVALIDITY from email_search. Only peeks: flags never change; use email_mark_read to mark it read.",
+         {"uid": integer, "uidvalidity": integer, "folder": string}, ("uid", "uidvalidity"))
+    tool("email_mark_read", mark_read, "Mark one message read (add \\Seen) by UID and UIDVALIDITY from email_search or email_read.",
+         {"uid": integer, "uidvalidity": integer, "folder": string}, ("uid", "uidvalidity"))
     tool("email_mailbox", lambda **kw: client().mailbox(**kw),
          "List/create folders, copy/move a message, or add/remove flags (Seen, Flagged, Deleted). Move requires server UID MOVE. No global expunge.",
          {"action": {"type": "string", "enum": ["list", "create", "copy", "move", "flags"]},

@@ -607,9 +607,11 @@ def test_every_exported_tool_has_an_effect_and_destination(name):
 
 def test_mixed_tools_remain_write_and_email_covers_all_recipients():
     manifests = {name: {row["name"]: row for row in builder.read_manifest(ROOT / "skills" / name)["tools"]} for name in CONNECTORS}
-    for connector, name in [("slack-bridge", "slack_api"), ("email-presence", "email_read"),
+    for connector, name in [("slack-bridge", "slack_api"), ("email-presence", "email_mark_read"),
                             ("email-presence", "email_mailbox"), ("telegram-bot", "telegram_operation")]:
         assert manifests[connector][name]["effect"] == "write"
-    assert manifests["slack-bridge"]["slack_history"]["effect"] == "read"
+    # Reading mail only peeks, so a Silent or Advises place can read it.
+    for connector, name in [("slack-bridge", "slack_history"), ("email-presence", "email_read")]:
+        assert manifests[connector][name]["effect"] == "read"
     assert manifests["email-presence"]["email_send"]["effect"] == "message"
     assert manifests["email-presence"]["email_send"]["target"] == ["to", "cc", "bcc"]
