@@ -27,7 +27,10 @@ a source, a release digest and a withdrawal status. Optional `withdrawn_releases
 records withdrawn versions by digest. Optional `icon` names a host icon or a
 local `ui/*.svg` geometry asset. `connects` is derived from `provides: place`
 contributions in the reviewed manifest; older consumers can ignore both fields.
-Optional `when_to_use` supplies additional discovery text. `install_specs` is
+Connector marks are monochrome `currentColor` geometry: the Slack and GitHub
+marks use Lucide geometry (ISC License) and the Telegram mark uses Tabler Icons
+geometry (MIT License); product names and marks remain the property of their
+owners. Optional `when_to_use` supplies additional discovery text. `install_specs` is
 generated from the manifest's first
 nonempty `install_specs`, `install` or `dependencies` value, without normalization.
 

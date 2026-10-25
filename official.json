@@ -81,12 +81,12 @@
       "recommended": false
     },
     {
-      "digest": "e49b193556f65a2cd972ad45f194f544bea2618be4098e9388fcf068dbabf989",
+      "digest": "844855d2500d28e7a508a4f3e3c54232f4ea7a6d58dda675f593216ae0114e81",
       "name": "slack-bridge",
       "recommended": false
     },
     {
-      "digest": "9e258b56d390786a5ac0fd68120af0b270b684d402a51068b99eab9ed058e90c",
+      "digest": "ec9c2e56599f4c11e6284b0f59f1706a0f0eb63d5310d94df916578acdc26422",
       "name": "telegram-bot",
       "recommended": false
     },

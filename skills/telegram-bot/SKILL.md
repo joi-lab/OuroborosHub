@@ -2,7 +2,7 @@
 name: telegram-bot
 description: Durable Telegram transport for generic Ouroboros presences, with exact actor and conversation
   provenance, media staging, and provider receipts.
-version: 0.6.0
+version: 0.6.1
 type: extension
 plugin_api: '2.0'
 runtime: python3
