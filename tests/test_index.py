@@ -8,6 +8,7 @@ import ast
 import contextlib
 import copy
 import hashlib
+import importlib.util
 import io
 import json
 import os
@@ -591,6 +592,47 @@ ICON_GEOMETRY = {"svg": {"viewBox", "width", "height"}, "path": {"d"}, "circle":
                  "line": {"x1", "y1", "x2", "y2"}, "polyline": {"points"}, "polygon": {"points"},
                  "rect": {"x", "y", "width", "height", "rx", "ry"}}
 ICON_PAINT = {"fill", "stroke", "stroke-width", "stroke-linecap", "stroke-linejoin", "fill-rule", "clip-rule"}
+# Connectors whose plugin.py hands registration to a package module that builds tool names from an
+# operation table. Reading plugin.py cannot see those names, so the hub records what plugin.register
+# actually registers; their registration path imports only the standard library.
+RECORDED_REGISTRATION = ("telegram-user-session",)
+
+
+class RecordingApi:
+    """Records the tool and route names a plugin registers; every other call does nothing."""
+
+    def __init__(self, state_dir):
+        self.state_dir, self.tools, self.routes = state_dir, set(), set()
+
+    def get_state_dir(self):
+        return self.state_dir
+
+    def register_tool(self, name, *_args, **_kwargs):
+        self.tools.add(name)
+
+    def register_route(self, path, *_args, **_kwargs):
+        self.routes.add(path)
+
+    def __getattr__(self, _name):
+        return lambda *_args, **_kwargs: None
+
+
+def recorded_registration(directory):
+    """Tool and route names from one plugin.register call, with the payload loaded as an isolated package."""
+    package = "hub_connector_" + re.sub(r"\W", "_", directory.name)
+    spec = importlib.util.spec_from_file_location(package, directory / "plugin.py",
+                                                  submodule_search_locations=[str(directory)])
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[package] = module
+    try:
+        spec.loader.exec_module(module)
+        with tempfile.TemporaryDirectory(prefix="hub-connector-") as state:
+            api = RecordingApi(state)
+            module.register(api)
+    finally:
+        for key in [key for key in sys.modules if key == package or key.startswith(package + ".")]:
+            del sys.modules[key]
+    return api.tools, api.routes
 
 
 def tool_prefix(names):
@@ -612,6 +654,8 @@ def plugin_calls(functions, paths):
 
 
 def exported_names(directory, prefix):
+    if directory.name in RECORDED_REGISTRATION:
+        return recorded_registration(directory)[0]
     names = set()
     for function, node in plugin_calls({"tool", "register_tool", "register_json_tool"},
                                        [directory / "plugin.py", *directory.glob("lib/read_tools.py")]):
@@ -629,6 +673,8 @@ def exported_names(directory, prefix):
 
 
 def registered_routes(directory):
+    if directory.name in RECORDED_REGISTRATION:
+        return recorded_registration(directory)[1]
     return {node.args[0].value for function, node in plugin_calls(
                 {"register_route"}, [directory / "plugin.py", *sorted(directory.glob("lib/*.py"))])
             if function and node.args and isinstance(node.args[0], ast.Constant)}
@@ -693,6 +739,15 @@ def test_connector_checks_cover_every_catalog_connector():
     _hub, entries, _official = builder.load_hub(ROOT)
     listed = {name for name, entry in entries.items() if entry["source"]["kind"] == "hosted" and entry.get("connects")}
     assert listed and listed <= set(CONNECTORS)
+
+
+def test_recorded_registration_covers_only_connectors_and_sees_dynamic_tools():
+    assert set(RECORDED_REGISTRATION) <= set(CONNECTORS)
+    tools, routes = recorded_registration(ROOT / "skills" / "telegram-user-session")
+    # The operation-table tools are absent from plugin.py; its retained legacy registrations are never called.
+    assert {"tg_send_text", "tg_history", "tg_status", "tg_stage_asset"} <= tools
+    assert not tools & {"send_text", "send_status", "action_status", "dossier_add"}
+    assert "participant/status" in routes
 
 
 def test_connectors_pass_the_core_validators_when_a_checkout_is_configured():

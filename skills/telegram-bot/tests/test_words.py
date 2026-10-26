@@ -95,8 +95,8 @@ def test_manifest_and_settings_offer_words_without_suggesting_the_signal(plugin,
     module, api = plugin
     manifest = yaml.safe_load((SKILL_ROOT / "SKILL.md").read_text().split("---", 2)[1])
     place = manifest["contributes"][0]
-    assert place["facts"] == ["any_message", "mention", "reply_to_me", "from_bot", SIGNAL]
-    assert place["wakes"] == ["mention", "reply_to_me"]
+    assert place["facts"] == ["any_message", "direct_message", "mention", "reply_to_me", "from_bot", SIGNAL]
+    assert place["wakes"] == ["direct_message", "mention", "reply_to_me"]
     section = dict(api.settings)[place["settings"]]
     form = section["schema"]["components"][0]
     assert form["route"] == "settings/save" and form["method"] == "POST"

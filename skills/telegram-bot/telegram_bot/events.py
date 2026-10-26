@@ -8,6 +8,9 @@ import re
 from typing import Any, Dict, Optional, Sequence, Tuple
 
 
+# Chats a bot can be part of. A private chat is one person who started the bot.
+_PLACE_CHAT_TYPES = frozenset({"private", "group", "supergroup", "channel"})
+
 @dataclass(frozen=True)
 class TelegramAttachment:
     kind: str
@@ -79,7 +82,7 @@ def parse_telegram_update(
         return None
     if (not places and actor.get("is_bot")) or (places and str(actor.get("id")) == bot_account_id):
         return None
-    if places and chat.get("type") not in {"group", "supergroup", "channel"}:
+    if places and chat.get("type") not in _PLACE_CHAT_TYPES:
         return None
 
     actor_id = _integer(actor.get("id"))
@@ -160,6 +163,9 @@ def parse_telegram_update(
 def telegram_wake_facts(message: Dict[str, Any], bot_id: str, username: str, words: Sequence[str] = ()) -> list[str]:
     """Provider entities establish mentions; literal owner words are a separate signal."""
     facts = ["any_message"]
+    if (message.get("chat") or {}).get("type") == "private":
+        # A private bot chat exists only after that person opened it with the bot.
+        facts.append("direct_message")
     if not message.get("sender_chat") and (message.get("from") or {}).get("is_bot"):
         facts.append("from_bot")
     reply = message.get("reply_to_message") or {}
@@ -208,7 +214,7 @@ def _parse_reaction_update(
         return None
     if (not places and actor.get("is_bot")) or (places and str(actor_id) == bot_account_id):
         return None
-    if places and chat.get("type") not in {"group", "supergroup", "channel"}:
+    if places and chat.get("type") not in _PLACE_CHAT_TYPES:
         return None
     bot_id = str(bot_account_id or "unknown").strip() or "unknown"
     conversation_key = f"telegram:{bot_id}:{chat_id}:0"

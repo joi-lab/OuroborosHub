@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.7.0 — 2026-10-26
+
+- Capture private chats that people open with the bot on Places hosts and report
+  their messages with the declared `direct_message` fact. It joins the suggested
+  wakes; existing place wake lists are not changed by the upgrade.
+- Check replies to a private chat against its place like any other place instead
+  of holding them as unsupported.
+- Explain in the transport tab what the bot can reach and that the Bot API cannot
+  read earlier history; a dedicated account is the separate
+  `telegram-user-session` connector.
+
 ## 0.6.3 — 2026-10-26
 
 - Add the connector's `words` setting, empty by default, with one literal word

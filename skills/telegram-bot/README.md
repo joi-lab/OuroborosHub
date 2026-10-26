@@ -1,8 +1,8 @@
-# Telegram Bot 0.6.3
+# Telegram Bot 0.7.0
 
-A public Telegram bot connector for group and channel places, separate from
-the built-in owner-control Telegram bridge. It keeps incoming events and
-outgoing delivery receipts in its durable inbox/outbox.
+A public Telegram bot connector for private-chat, group and channel places,
+separate from the built-in owner-control Telegram bridge. It keeps incoming
+events and outgoing delivery receipts in its durable inbox/outbox.
 
 In the place's connector settings, add **Words to notice**, one word or phrase
 per line. Matching is literal, case-insensitive, and requires non-word

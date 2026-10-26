@@ -40,6 +40,7 @@ class SelectionTests(unittest.TestCase):
             'context-lens': {'widgets'}, 'memory-atlas': {'widgets'}, 'token-usage': {'widgets'},
             'office_reader': {'office-reader'}, 'science_search': {'science-search'},
             'github': {'github'},
+            'telegram-user-session': {'telegram-user-session'},
         }
         for skill, expected in consumers.items():
             with self.subTest(skill=skill):

@@ -26,6 +26,14 @@ from .telegram_bot.tools import (
 )
 
 
+_BOT_DIFFERENCES = (
+    "**Telegram bot.** Telegram labels this account as a bot. People reach it in a private "
+    "chat they opened themselves and in groups or channels it was added to; group coverage depends "
+    "on privacy mode and admin rights. A bot cannot start a private chat with someone who never "
+    "opened one. The Bot API cannot read earlier chat history: only messages that arrive while it "
+    "runs are received. A dedicated ordinary account is the separate Telegram participant connector."
+)
+
 _RUNTIME: Optional[TelegramTransportRuntime] = None
 _STATE_DIR: Optional[pathlib.Path] = None
 
@@ -35,6 +43,7 @@ def _widget_render() -> Dict[str, Any]:
         "kind": "declarative",
         "schema_version": 1,
         "components": [
+            {"type": "markdown", "text": _BOT_DIFFERENCES},
             {
                 "type": "form",
                 "route": "settings/save",
