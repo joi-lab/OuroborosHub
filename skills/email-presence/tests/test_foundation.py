@@ -233,5 +233,5 @@ def test_manifest_offers_facts_without_default_wakes():
     place = manifest["contributes"][0]
     assert place["wakes"] == []
     assert place["settings"] == "email_presence"
-    assert place["facts"] == ["any_message", "direct_message", "from_bot",
+    assert place["facts"] == ["any_message", {"id": "direct_message", "label": "Mail addressed to you"}, "from_bot",
                               {"id": "signal.words", "label": "Words you chose appear (connector setting)"}]

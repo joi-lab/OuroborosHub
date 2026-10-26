@@ -6,7 +6,7 @@
     "Email"
   ],
   "description": "Email connector for IMAP/SMTP places, with threaded conversations, durable receipts and attachments, and live place-state delivery holds.",
-  "digest": "b457e1970350fece1d188af7042d5414866bfe00bfd97746e3c0ecb16173c380",
+  "digest": "c8c68030beda68904a7f6adcf747e36dddaab49c7a73589a63e01a38430766c5",
   "icon": "ui/icon.svg",
   "install_specs": [
     "httpx",
