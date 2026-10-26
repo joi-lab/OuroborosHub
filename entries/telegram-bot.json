@@ -6,7 +6,7 @@
     "Telegram"
   ],
   "description": "Telegram bot connector for group and channel places, with typed mentions and replies, durable media delivery, and live place-state holds. Owner chat uses the built-in Telegram bridge.",
-  "digest": "a8a8f3584132d1dca5788d814896d65304f23b5b03a4de3c829bad809f403f1a",
+  "digest": "817d4cd4896fbdca53ebd00cd44353d2a2f083d93ba181cc4ce508605fb3327d",
   "icon": "ui/icon.svg",
   "name": "telegram-bot",
   "owner": "ouroboros-agent",

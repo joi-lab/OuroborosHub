@@ -6,7 +6,8 @@ import httpx
 import pytest
 
 from lib.host_adapter import create_host_adapter
-from lib.presence import slack_identity
+from lib.events import parse_socket_envelope
+from lib.presence import slack_identity, slack_presence_event
 from lib.runtime import _discover_reporting
 from lib.store import BridgeStore
 from test_host_adapter import _item
@@ -41,3 +42,23 @@ def test_bot_identity_is_sent_only_when_advertised(tmp_path, monkeypatch, advert
             assert "identity" not in status and "identity" not in sent[0]
         assert "authenticated" not in sent[0]["actor"]
     asyncio.run(run())
+
+
+@pytest.mark.parametrize("sender_id", ["U-BOT", "U-OTHER"])
+def test_sending_identity_matches_its_message_actor_id(tmp_path, sender_id):
+    auth = {"user_id": "U-BOT", "user": "ouroboros", "bot_id": "B-APP", "team_id": "T1"}
+    identity = slack_identity(auth)
+    payload = {"type": "events_api", "envelope_id": "env-1", "payload": {
+        "team_id": "T1", "event_id": "Ev-1", "event": {
+            "type": "message", "subtype": "bot_message", "user": sender_id,
+            "bot_id": "B-APP" if sender_id == "U-BOT" else "B-OTHER",
+            "channel": "C1", "channel_type": "channel", "ts": "1710000000.001", "text": "Sent text"}}}
+    # Observe the sender as another connector would; our own echo is ignored.
+    parsed = parse_socket_envelope(payload, bot_user_id="U-OBSERVER")
+    assert parsed.accepted
+    store = BridgeStore(tmp_path)
+    store.ingest_envelope(payload, parsed)
+    event = slack_presence_event(store.claim_inbox(), places=True)
+    assert (identity["sends_as"]["id"] == event["actor"]["platform_actor_id"]) is (sender_id == "U-BOT")
+    own_view = parse_socket_envelope(payload, bot_user_id=auth["user_id"], bot_id=auth["bot_id"])
+    assert own_view.accepted is (sender_id != "U-BOT")
