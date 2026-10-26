@@ -67,7 +67,7 @@ class LockTests(unittest.TestCase):
         inode = self.path.stat().st_ino
         code, _, err = self.attempt()
         self.assertNotEqual(code, 0)
-        self.assertIn("another github-presence companion", err)
+        self.assertIn("another github companion", err)
         proc.communicate("x", timeout=10)
         self.assertEqual(proc.returncode, 0)
         self.assertEqual(self.attempt()[0], 0)
@@ -156,7 +156,7 @@ class LockTests(unittest.TestCase):
         second = subprocess.run([sys.executable, "-B", str(ROOT / "scripts/companion.py")],
                                 capture_output=True, text=True, env=self.env, cwd=self.tmp.name, timeout=10)
         self.assertNotEqual(second.returncode, 0)
-        self.assertIn("another github-presence companion", second.stderr)
+        self.assertIn("another github companion", second.stderr)
         proc.terminate()
         proc.communicate(timeout=10)
         if os.name != "nt":

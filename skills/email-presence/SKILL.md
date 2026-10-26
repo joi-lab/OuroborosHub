@@ -1,7 +1,7 @@
 ---
 name: email-presence
 description: Bidirectional email Presence transport with IMAP polling, durable delivery, and RFC 5322 reply threading.
-version: 0.5.0
+version: 0.6.0
 type: extension
 entry: plugin.py
 plugin_api: "2.0"
@@ -28,9 +28,13 @@ tools:
     target: []
     description: Search old and new mailbox messages using IMAP criteria.
   - name: email_read
+    effect: read
+    target: []
+    description: Read a message by stable UID and UIDVALIDITY without changing its flags.
+  - name: email_mark_read
     effect: write
     target: []
-    description: Read a message by stable UID and UIDVALIDITY.
+    description: Mark one message read by stable UID and UIDVALIDITY.
   - name: email_mailbox
     effect: write
     target: []
@@ -93,13 +97,15 @@ and retries transient provider or Host failures with bounded backoff.
 
 ## Mailbox tools and transport behavior
 
-- All seven tools return JSON text, preserving structured values across the host
+- All eight tools return JSON text, preserving structured values across the host
   process boundary. A missing `email_receipt` is JSON `null`; delivery errors
   retain their ordinary error path rather than becoming successful receipts.
 - `email_search` accepts ordinary IMAP search tokens (ALL, UNSEEN, FROM, SUBJECT,
   SINCE, HEADER) and returns UID/UIDVALIDITY, which `email_read` uses to address
   the same message even if other messages disappear. Mailbox tools do not submit
   historical mail to Presence or alter the automatic intake cursor.
+- `email_read` only peeks: it opens the folder read-only and fetches `BODY.PEEK[]`,
+  so no flag changes. `email_mark_read` is the separate write that adds `\Seen`.
 - `email_mailbox` lists/creates folders, copies/moves individual messages and
   adds/removes flags. Archive by moving to the desired folder. UID MOVE needs
   server support; the skill never substitutes a mailbox-wide expunge.
@@ -216,6 +222,7 @@ The SMTP worker re-reads the place immediately before sending. Silent/Paused
 or an unavailable lookup holds the same queue item with a visible reason;
 Active resumes it without spending the retry budget on policy holds.
 
-Mixed tools (`email_read` can mark mail as read, and `email_mailbox` can mutate)
-are declared write. Sending is message; search, receipts and connection checks
-are declared read. To/Cc/Bcc are all destination arguments.
+`email_read` is declared read, so a Silent or Advises place can read mail;
+`email_mark_read` and the mixed `email_mailbox` (it can mutate) are declared
+write. Sending is message; search, receipts and connection checks are declared
+read. To/Cc/Bcc are all destination arguments.

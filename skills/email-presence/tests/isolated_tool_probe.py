@@ -50,6 +50,8 @@ class OfflineMailClient:
                 "uid": kwargs["uid"], "message_id": "<fixture@example.invalid>",
                 "body": "Unicode 📬 and 'quoted' text", "attachments": [],
                 "_raw_source": b"Subject: fixture\\r\\n\\r\\nbody"}
+    def mark_read(self, **kwargs):
+        return {"ok": True, "uid": kwargs["uid"], "uidvalidity": kwargs["uidvalidity"], "folder": kwargs["folder"]}
     def mailbox(self, **kwargs):
         return [{"name": "INBOX", "selectable": True}, {"name": "Архив", "optional": None}]
     def draft(self, **kwargs):
@@ -105,6 +107,7 @@ def register(api):
         assert message["body"] == "Unicode 📬 and 'quoted' text"
         assert "_raw_source" not in message
         assert Path(message["source_artifact"]["path"]).read_bytes() == b"Subject: fixture\r\n\r\nbody"
+        assert invoke("email_mark_read", uid=4, uidvalidity=7) == {"ok": True, "uid": 4, "uidvalidity": 7, "folder": "INBOX"}
         assert invoke("email_mailbox", action="list") == [
             {"name": "INBOX", "selectable": True}, {"name": "Архив", "optional": None}]
         assert invoke("email_draft", to="reader@example.invalid", subject="Draft", body="Черновик") == {
@@ -137,7 +140,7 @@ def register(api):
                 assert expected in str(exc), str(exc)
             else:
                 raise AssertionError("Handler error became a successful result")
-        print("verified seven email tools across the child boundary")
+        print("verified eight email tools across the child boundary")
     finally:
         extension_loader.unload_extension(loaded.name)
 

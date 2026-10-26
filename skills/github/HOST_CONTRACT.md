@@ -23,7 +23,9 @@ is required. No new connector endpoint, scheduler or Main transport.
    `staged_files` (empty unless a held-context source is attached), and both
    negotiated versions set to 1. `review_requested`
    and `assigned` must be accepted as facts/wake choices by the host upgrade.
-   Manifest suggestions use existing `any_message`; Discussion is never new_issue.
+   Manifest suggestions name `new_issue`, `new_pull_request`, `mention`,
+   `my_thread`, `review_requested` and `assigned`; `any_message` stays an owner
+   choice. Discussion is never new_issue.
 3. Reply projections must retain actual `output_ref`, including retained original
    and late child outputs. `work_ref` identifies the polled work;
    `child_work_ref` exposes a late child even on terminal failure. Released

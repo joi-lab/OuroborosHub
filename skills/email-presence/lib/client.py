@@ -134,15 +134,17 @@ class MailClient:
             message.pop("body", None)
         return {"folder": folder, "uidvalidity": validity, "total": len(uids), "messages": messages}
 
-    def read(self, *, uid, uidvalidity, folder="INBOX", mark_as_read=False, include_attachment_data=False):
-        with self.imap(folder, readonly=not mark_as_read) as box:
+    def read(self, *, uid, uidvalidity, folder="INBOX", include_attachment_data=False):
+        """Peek only: a read-only session and BODY.PEEK leave every flag unchanged."""
+        with self.imap(folder, readonly=True) as box:
             validity, _ = self.metadata(box)
             if validity != int(uidvalidity):
                 raise ValueError("Mailbox UIDVALIDITY changed; search again before addressing a message")
-            message = self.fetch(box, folder, uid, validity, include_attachment_data=include_attachment_data)
-            if mark_as_read:
-                self._ok(box.uid("STORE", str(int(uid)), "+FLAGS.SILENT", "(\\Seen)"), "store")
-            return message
+            return self.fetch(box, folder, uid, validity, include_attachment_data=include_attachment_data)
+
+    def mark_read(self, *, uid, uidvalidity, folder="INBOX"):
+        """Add \\Seen to one message: the explicit write that read() never performs."""
+        return self.mailbox(action="flags", folder=folder, uid=uid, uidvalidity=uidvalidity, flags=["\\Seen"])
 
     def mailbox(self, *, action="list", folder="INBOX", uid=None, uidvalidity=None,
                 destination="", flags=None, remove_flags=False):

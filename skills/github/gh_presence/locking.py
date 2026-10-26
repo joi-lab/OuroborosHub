@@ -37,7 +37,7 @@ class CompanionLock:
         except BaseException as exc:
             os.close(fd)
             if isinstance(exc, OSError) and exc.errno in (errno.EACCES, errno.EAGAIN, errno.EDEADLK):
-                raise CompanionAlreadyRunning("another github-presence companion holds this state") from None
+                raise CompanionAlreadyRunning("another github companion holds this state") from None
             raise
         self.fd = fd
         return self

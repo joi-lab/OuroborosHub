@@ -27,7 +27,13 @@ a source, a release digest and a withdrawal status. Optional `withdrawn_releases
 records withdrawn versions by digest. Optional `icon` names a host icon or a
 local `ui/*.svg` geometry asset. `connects` is derived from `provides: place`
 contributions in the reviewed manifest; older consumers can ignore both fields.
-Optional `when_to_use` supplies additional discovery text. `install_specs` is
+Optional `title` is the human name the manifest gives a skill (for example
+`Email tools`); the canonical name stays its identity. A connector needs none:
+its place `label` already names the service.
+Connector marks are monochrome `currentColor` geometry: the Slack and GitHub
+marks use Lucide geometry (ISC License) and the Telegram mark uses Tabler Icons
+geometry (MIT License); product names and marks remain the property of their
+owners. Optional `when_to_use` supplies additional discovery text. `install_specs` is
 generated from the manifest's first
 nonempty `install_specs`, `install` or `dependencies` value, without normalization.
 
@@ -57,7 +63,7 @@ Membership in the hub alone does not confer Official status.
 
 The initial Official set is: `a2a`, `adaptive-code-review`, `anti-slop`,
 `cache_efficiency_snapshot`, `claudexor_quotas`, `confluence`, `context-lens`,
-`duckduckgo`, `email`, `email-presence`, `github-presence`, `google-workspace`, `keenable`,
+`duckduckgo`, `email`, `email-presence`, `github`, `google-workspace`, `keenable`,
 `memory-atlas`, `perplexity`, `slack-bridge`, `telegram-bot`, `pdf_tools`, `word_tools`.
 The recommended hub starters are `duckduckgo`, `pdf_tools`, `word_tools`,
 `anti-slop` and `memory-atlas`. The app manages recommendations for its built-ins.
@@ -113,7 +119,7 @@ identity along with code and instructions.
    included in an entry PR.
 
 `--refresh` updates only the named entry's version, raw dependency declaration,
-release digest, and manifest-derived `icon`/`connects` fields. `--digest NAME`
+release digest, and manifest-derived `icon`/`connects`/`title` fields. `--digest NAME`
 prints the digest without changing files. Neither command renews Official
 endorsements. `scripts/build_catalog.py` remains a
 compatible alias for the generator and its `--check` mode.
@@ -257,7 +263,11 @@ The hub tests include mocked GitHub APIs for owner authorization, signals and
 catalog-to-mirror sequencing. The release-identity test compares all hosted skills
 with the core checkout selected by `OUROBOROS_IDENTITY_CORE_ROOT`, using the test
 runner's Python with core requirements installed. Without that variable the
-cross-repository check is reported as skipped.
+cross-repository check is reported as skipped. Every hosted skill that contributes
+a place is checked as a connector: declared tool effects, the place contract,
+wake facts, its status route and a bounded monochrome `ui/icon.svg`. The hub keeps
+a mirror of the core rules for this; the same checkout also runs every connector
+through the core's manifest, contribution and icon validators.
 
 Module widgets can declare `render.appearance: host` and feature-detect
 `OuroborosWidget.onTheme`. Preserve state while applying Light/Dark, unsubscribe
