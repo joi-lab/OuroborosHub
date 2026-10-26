@@ -14,11 +14,10 @@ def connector_identity(config, metadata):
             return {}
         if writer.get("expires_at") and datetime.fromisoformat(writer["expires_at"].replace("Z", "+00:00")) <= datetime.now(timezone.utc):
             return {}
-        login = writer.get("slug") or login.removesuffix("[bot]")
         kind = "bot"
-    result = {"sends_as": {"id": login, "label": login, "kind": kind}}
+    result = {"sends_as": {"id": str(writer["id"]), "label": login, "kind": kind}}
     reader = metadata.get("auth:notifications", {})
     if (reader.get("state") == "valid" and reader.get("id") == config["notifications_user_id"]
             and reader.get("id") != writer["id"] and reader.get("login")):
-        result["reads_as"] = [{"id": reader["login"], "label": reader["login"], "kind": "user"}]
+        result["reads_as"] = [{"id": str(reader["id"]), "label": reader["login"], "kind": "user"}]
     return result

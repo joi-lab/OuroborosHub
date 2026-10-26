@@ -121,7 +121,7 @@ class HTTP:
         if any(key.lower() in ("authorization", "x-skill-token", "host") for key in (headers or {})):
             raise ValueError("credential_header_override_refused")
         token = self.auth.token_for(self) if self.auth else self._token
-        request_headers = {"Accept": "application/vnd.github+json", "User-Agent": "ouroboros-github/0.1.2"}
+        request_headers = {"Accept": "application/vnd.github+json", "User-Agent": "ouroboros-github/0.1.3"}
         if self.host:
             request_headers["X-Skill-Token"] = token
         else:

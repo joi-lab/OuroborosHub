@@ -15,6 +15,7 @@ sys.path.insert(0, str(ROOT))
 from gh_presence.config import validate, write_config
 from gh_presence.host import Host
 from gh_presence.http import Response
+from gh_presence.identity import connector_identity
 from gh_presence.outbox import Outbox
 from gh_presence.provider import GitHub
 from gh_presence.http import TransportError
@@ -71,10 +72,10 @@ class IdentityTests(unittest.TestCase):
                         current = status()
                         host.close()
                         if advertised == 1:
-                            login = "fixture-app" if app else "service-writer"
-                            expected = {"sends_as": {"id": login, "label": login, "kind": "bot" if app else "user"}}
+                            login = "fixture-app[bot]" if app else "service-writer"
+                            expected = {"sends_as": {"id": "11", "label": login, "kind": "bot" if app else "user"}}
                             if reader:
-                                expected["reads_as"] = [{"id": "reader", "label": "reader", "kind": "user"}]
+                                expected["reads_as"] = [{"id": "22", "label": "reader", "kind": "user"}]
                             self.assertEqual(current["identity"], expected)
                             self.assertEqual(sent[0]["identity"], expected)
                         else:
@@ -120,11 +121,31 @@ class IdentityTests(unittest.TestCase):
             provider = GitHub(SimpleNamespace(), store)
             provider.get = lambda path: Response(200, {"id": 11, "login": "service-writer"}, {})
             provider.identity(11)
-            self.assertEqual(status()["identity"]["sends_as"]["id"], "service-writer")
+            self.assertEqual(status()["identity"]["sends_as"]["id"], "11")
             provider.get = lambda path: Response(200, {"id": 99, "login": "someone-else"}, {})
             with self.assertRaises(TransportError):
                 provider.identity(11)
             self.assertNotIn("identity", status())
+
+    def test_app_identity_uses_the_resolved_bot_user_and_never_the_app_or_installation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            _, store, _, _, status = self.fixture(Path(tmp), 1, app=True)
+            writer = store.meta("auth:writer")
+            actor = GitHub(None, None).actor({"user": {
+                "id": writer["id"], "login": writer["login"], "type": "Bot"}})
+            sender = status()["identity"]["sends_as"]
+            self.assertEqual(sender, {"id": actor["platform_actor_id"],
+                                      "label": writer["login"], "kind": "bot"})
+            for unresolved_id in (None, writer["app_id"], writer["installation_id"], writer["slug"]):
+                with self.subTest(unresolved_id=unresolved_id):
+                    store.set_meta("auth:writer", {**writer, "id": unresolved_id})
+                    self.assertNotIn("identity", status())
+
+    def test_reader_matching_the_writer_is_not_declared_twice(self):
+        writer = {"state": "valid", "auth_mode": "pat", "id": 11, "login": "service-writer"}
+        config = {**CONFIG, "notifications_user_id": 11}
+        identity = connector_identity(config, {"auth:writer": writer, "auth:notifications": writer})
+        self.assertEqual(identity, {"sends_as": {"id": "11", "label": "service-writer", "kind": "user"}})
 
 
 if __name__ == "__main__":
