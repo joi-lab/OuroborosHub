@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import pathlib
 import re
 from dataclasses import replace
@@ -15,6 +14,7 @@ from .formatting import prepare_text, prepare_caption
 from .custody import CustodyStore, InboxLease, OutboxLease
 from .events import parse_telegram_update
 from .host import PresenceHostHTTPError, PresenceSubmission, PresenceWorkResult
+from .settings import load_settings
 
 
 _MAX_OUTBOX_ATTEMPTS = 5
@@ -138,12 +138,14 @@ class TelegramTransportRuntime:
                     update_id = _update_id(update)
                     if update_id is None:
                         continue
+                    settings = load_settings(self.state_dir)
                     event = parse_telegram_update(
                         update,
                         bot_account_id=self._bot_id,
-                        management_group_id=self._management_group_id(),
+                        management_group_id=str(settings.get("management_group_id") or "").strip(),
                         places=bool(getattr(self.submitter, "places_version", 0)),
                         bot_username=self._bot_username,
+                        words=settings.get("words", []),
                     )
                     self.store.commit_update(update_id, event)
                 backoff = 2.0
@@ -157,19 +159,6 @@ class TelegramTransportRuntime:
                 )
                 await self._pause(backoff)
                 backoff = min(60.0, backoff * 1.7)
-
-    def _management_group_id(self) -> str:
-        try:
-            settings = json.loads(
-                (self.state_dir / "settings.json").read_text(encoding="utf-8")
-            )
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-            return ""
-        return (
-            str(settings.get("management_group_id") or "").strip()
-            if isinstance(settings, dict)
-            else ""
-        )
 
     async def _ready_client(self) -> Optional[TelegramClient]:
         if self._client_lock is None:

@@ -2,7 +2,7 @@
 name: telegram-bot
 description: Durable Telegram transport for generic Ouroboros presences, with exact actor and conversation
   provenance, media staging, and provider receipts.
-version: 0.6.2
+version: 0.6.3
 type: extension
 plugin_api: '2.0'
 runtime: python3
@@ -136,6 +136,13 @@ contributes:
     scope: account
     source: {route: status, refresh_s: 15}
     icon: ui/icon.svg
+    settings: transport
+    facts:
+      - any_message
+      - mention
+      - reply_to_me
+      - from_bot
+      - {id: signal.words, label: "Words you chose appear (connector setting)"}
     wakes: [mention, reply_to_me]
 ---
 
@@ -165,9 +172,9 @@ internal chats, interpret owner commands, or create prompt envelopes. It uses
 only the reviewed `presence` Host permission. Connect a Telegram place with the
 bot account ID. On hosts advertising `places_version >= 1`, groups and channels
 are captured without a binding ID; private bot chats are excluded. Suggested
-wakes are explicit mentions and replies to the bot. Typed facts come from
-Telegram entities and reply identities, not text interpretation. Other bots
-carry `from_bot`; own bot echoes are ignored.
+wakes are explicit mentions and replies to the bot. Provider facts come from
+Telegram entities and reply identities; the optional `signal.words` comes from
+the connector's word setting. Other bots carry `from_bot`; own bot echoes are ignored.
 
 Older hosts retain the previous event filtering and receive the already-saved
 `binding_id` from local settings. Deferred references, offsets, staged files and
@@ -264,6 +271,37 @@ message text. These are observations for model judgment, not automatic replies.
 Reply context comes only from that incoming update. It does not fetch history,
 follow nested reply chains, or download the replied-to message's media. Direct
 photo/document attachments continue through the existing staging path.
+
+## Connector settings and facts (0.6.3)
+
+The place's connector settings open the Telegram section. `words` is empty by
+default; its form takes one entry per line and stores a list of plain strings.
+Surrounding whitespace and empty lines are removed. Settings apply to newly
+captured updates without a restart; queued events keep their captured facts.
+
+How I decide each event fact:
+
+- `any_message`: every supported message or edit, including media captions.
+- `mention`: a Telegram mention entity names this bot's username or user id;
+  plain text alone never manufactures a provider mention.
+- `reply_to_me`: the replied-to message's sender id is this bot's id.
+- `from_bot`: Telegram identifies the sender as a bot. Own bot echoes are ignored.
+- `signal.words`: at least one configured plain string in `words` matches a whole
+  word or phrase in the message text or caption, case-insensitively, with non-word
+  boundaries on each side. Punctuation is literal, never a pattern. The settings
+  form takes one entry per line and stores a list; an empty list reports no word
+  signal. Sender names, chat titles and replied-to text are not searched.
+  Reactions have no message text and report no word signal.
+
+The signal's manifest label is "Words you chose appear (connector setting)";
+the status payload adds nothing for it. It is sent only when the host advertises
+`presence_wake_signals: 1`. It grants no owner identity, addressed status or
+permission to speak. To notice a name in a group, add it to `words` and choose
+this signal under "What calls it here" on that place's sheet. Suggested wakes
+remain mentions and replies. A matching event can wake a Silent place through
+ordinary intake, while Silent still holds replies and writes. Bot events still
+require the owner's `from_bot` wake choice; that choice itself can wake on bots.
+Every supported event is reported whether or not words match.
 
 ## Configured room and selected actions
 

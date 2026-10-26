@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import asdict, dataclass
-from typing import Any, Dict, Optional, Tuple
+import re
+from typing import Any, Dict, Optional, Sequence, Tuple
 
 
 @dataclass(frozen=True)
@@ -43,7 +44,7 @@ class TelegramEvent:
 
 def parse_telegram_update(
     update: Dict[str, Any], *, bot_account_id: str, management_group_id: str = "",
-    places: bool = False, bot_username: str = "",
+    places: bool = False, bot_username: str = "", words: Sequence[str] = (),
 ) -> Optional[TelegramEvent]:
     """Return one factual external-message event or ``None`` for unsupported updates."""
     if not isinstance(update, dict):
@@ -152,18 +153,19 @@ def parse_telegram_update(
         conversation=conversation_fact,
         message=message_fact,
         text=text,
-        facts=telegram_wake_facts(message, bot_id, bot_username) if places else None,
+        facts=telegram_wake_facts(message, bot_id, bot_username, words) if places else None,
     )
 
 
-def telegram_wake_facts(message: Dict[str, Any], bot_id: str, username: str) -> list[str]:
-    """Telegram entity offsets are UTF-16; only explicit entities establish mentions."""
+def telegram_wake_facts(message: Dict[str, Any], bot_id: str, username: str, words: Sequence[str] = ()) -> list[str]:
+    """Provider entities establish mentions; literal owner words are a separate signal."""
     facts = ["any_message"]
     if not message.get("sender_chat") and (message.get("from") or {}).get("is_bot"):
         facts.append("from_bot")
     reply = message.get("reply_to_message") or {}
     if str((reply.get("from") or {}).get("id") or "") == bot_id:
         facts.append("reply_to_me")
+    # Telegram entity offsets are UTF-16.
     for text_key, entities_key in (("text", "entities"), ("caption", "caption_entities")):
         wire = str(message.get(text_key) or "").encode("utf-16-le")
         for entity in message.get(entities_key) or []:
@@ -176,6 +178,10 @@ def telegram_wake_facts(message: Dict[str, Any], bot_id: str, username: str) -> 
                     token = wire[2 * start:2 * (start + length)].decode("utf-16-le", errors="replace")
                     if token.casefold() == "@" + username.lstrip("@").casefold() and "mention" not in facts:
                         facts.append("mention")
+    if words:
+        text = str(message.get("text") or message.get("caption") or "").casefold()
+        if any(re.search(r"(?<!\w)" + re.escape(word.casefold()) + r"(?!\w)", text) for word in words if word):
+            facts.append("signal.words")
     return facts
 
 

@@ -12,6 +12,7 @@ class FakeApi:
         self.routes = []
         self.tools = []
         self.tabs = []
+        self.settings = []
         self.unload = None
 
     def get_state_dir(self):
@@ -41,6 +42,9 @@ class FakeApi:
     def register_ui_tab(self, tab_id, title, **kwargs):
         self.tabs.append((tab_id, title, kwargs))
 
+    def register_settings_section(self, section_id, **kwargs):
+        self.settings.append((section_id, kwargs))
+
     def on_unload(self, callback):
         self.unload = callback
 
@@ -49,8 +53,9 @@ class FakeApi:
 
 
 class FakeRequest:
-    def __init__(self, payload):
+    def __init__(self, payload=None, method="POST"):
         self.payload = payload
+        self.method = method
 
     async def json(self):
         return self.payload
@@ -76,7 +81,7 @@ def test_package_style_plugin_registration_and_status_route(tmp_path):
     assert api.routes[0][0] == "status"
     assert api.routes[0][2] == ("GET",)
     assert api.routes[1][0] == "settings/save"
-    assert api.routes[1][2] == ("POST",)
+    assert api.routes[1][2] == ("GET", "POST")
     assert api.tabs[0][0] == "transport"
     assert api.tools[0][0] == "telegram_send"
     form = api.tabs[0][2]["render"]["components"][0]
