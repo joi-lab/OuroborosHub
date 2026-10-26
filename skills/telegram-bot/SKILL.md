@@ -2,7 +2,7 @@
 name: telegram-bot
 description: Durable Telegram transport for generic Ouroboros presences, with exact actor and conversation
   provenance, media staging, and provider receipts.
-version: 0.6.1
+version: 0.6.2
 type: extension
 plugin_api: '2.0'
 runtime: python3
@@ -352,3 +352,10 @@ remain unchanged. See `FORMATTER_PROVENANCE.md` for the included helper source.
   longer matches: those events now carry an empty thread and the Host refuses
   them (403). Re-check such bindings and use the chat-level conversation.
 - Reactions in forums stay on the chat's conversation (`:0`), not the topic.
+
+## Identity (0.6.2)
+
+When `/identity` advertises `presence_identity: 1`, the status route and every
+turn event declare `identity.sends_as` with the bot id and `@username` returned
+by Telegram `getMe`, and `kind: bot`. This is the sending credential, separate
+from the incoming message's actor. Older hosts receive no identity key.

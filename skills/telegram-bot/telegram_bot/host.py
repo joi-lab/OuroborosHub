@@ -176,6 +176,8 @@ class PresenceHostClient:
         self.delivery_reporting_status = "unknown"
         self.delivery_reporting_version = 0
         self.places_version = 0
+        self.presence_identity = 0
+        self.connector_identity = {}
 
     async def discover_delivery_support(self) -> int:
         if self.delivery_reporting_status in {"supported", "unsupported"}:
@@ -188,6 +190,7 @@ class PresenceHostClient:
             self.delivery_reporting_version = int(response.get("presence_delivery_version") == 1)
             version = response.get("places_version")
             self.places_version = int(type(version) is int and version >= 1)
+            self.presence_identity = int(response.get("presence_identity") == 1)
             self.delivery_reporting_status = "supported" if self.delivery_reporting_version else "unsupported"
         except (PresenceHostError, OSError, TimeoutError, asyncio.TimeoutError):
             self.delivery_reporting_status = "unavailable"
@@ -232,6 +235,8 @@ class PresenceHostClient:
         event = dict(event)
         if not self.places_version:
             event.pop("facts", None)
+        if self.presence_identity and self.connector_identity:
+            event["identity"] = self.connector_identity
         try:
             response = await self.transport.request_json(
                 "POST",

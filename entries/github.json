@@ -6,7 +6,7 @@
     "GitHub"
   ],
   "description": "GitHub places for issues, pull requests, reviews and Discussions, with separate Notifications readers, owner questions in Main and durable reply receipts.",
-  "digest": "3cb32558975b1083dc7e966e3dc0bd5a27724b41acd3712dbb811c0d992ba66b",
+  "digest": "839355d9ae18e075dcbdc761ae07b287e3eb0fc4d06b887ee5a128563474f887",
   "icon": "ui/icon.svg",
   "install_specs": [
     "PyJWT[crypto]>=2.13,<3"
@@ -19,6 +19,6 @@
     "path": "skills/github"
   },
   "type": "extension",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "withdrawn": null
 }

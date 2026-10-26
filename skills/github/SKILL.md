@@ -1,7 +1,7 @@
 ---
 name: github
 description: Observe connected GitHub issues, pull requests and Discussions, and deliver authorized replies or explained issue closures with durable receipts.
-version: 0.1.1
+version: 0.1.2
 type: extension
 entry: plugin.py
 plugin_api: "2.0"
@@ -107,3 +107,12 @@ The host alone selects wakes and the model. All supported observed events,
 including bots, go to the host with honest facts. `mention` is a documented
 syntactic approximation, not GitHub's notification reason. Absence of a poll
 event is not evidence that nothing happened between polls.
+
+## Credential identity (0.1.2)
+
+On hosts advertising `presence_identity: 1`, status and turn events declare
+`identity.sends_as`: a verified PAT user's login (`kind: user`), or the verified
+App slug (`kind: bot`). `reads_as` names the Notifications token's verified user
+when it differs from the writer. Unverified credentials are not declared.
+The first dispatch keeps the identity snapshot with its existing saved payload;
+retries to older hosts omit the key. Status uses current verification records.

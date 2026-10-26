@@ -110,6 +110,9 @@ class TelegramTransportRuntime:
         return {
             "runtime_state": self._runtime_state,
             "bot_label": self._bot_label,
+            **({"identity": self.submitter.connector_identity}
+               if getattr(self.submitter, "presence_identity", 0) == 1
+               and getattr(self.submitter, "connector_identity", {}) else {}),
             "last_error": self._last_error,
             "delivery_reporting": getattr(self.submitter, "delivery_reporting_status", "unsupported"),
             "last_event_at": custody.get("last_event_at", ""),
@@ -188,6 +191,8 @@ class TelegramTransportRuntime:
             username = str(identity.get("username") or "").strip()
             self._bot_username = username
             self._bot_label = f"@{username}" if username else self._bot_id
+            self.submitter.connector_identity = {"sends_as": {
+                "id": self._bot_id, "label": self._bot_label, "kind": "bot"}}
             self._client = client
             self._client_token = token
             self._last_error = ""

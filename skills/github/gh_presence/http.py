@@ -121,7 +121,7 @@ class HTTP:
         if any(key.lower() in ("authorization", "x-skill-token", "host") for key in (headers or {})):
             raise ValueError("credential_header_override_refused")
         token = self.auth.token_for(self) if self.auth else self._token
-        request_headers = {"Accept": "application/vnd.github+json", "User-Agent": "ouroboros-github/0.1.1"}
+        request_headers = {"Accept": "application/vnd.github+json", "User-Agent": "ouroboros-github/0.1.2"}
         if self.host:
             request_headers["X-Skill-Token"] = token
         else:
@@ -149,7 +149,7 @@ class HTTP:
                     # returned once, never replayed automatically with a new token.
                     self.auth.invalidate(token)
                 return Response(stream.code, result, response_headers)
-        except (OSError, urllib.error.URLError, TimeoutError) as exc:
+        except (OSError, urllib.error.URLError, TimeoutError):
             raise TransportError("network_outcome_unknown" if method != "GET" else "read_unavailable") from None
 
 

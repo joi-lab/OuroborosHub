@@ -114,6 +114,9 @@ def _make_status(api: Any):
     async def status(_request: Any = None) -> JSONResponse:
         store = BridgeStore(_state_dir(api))
         payload = store.status()
+        identity = payload.pop("connector_identity", {})
+        if payload.get("presence_identity") == 1 and identity:
+            payload["identity"] = identity
         held = payload.get("outbox_held", 0)
         payload.update(text=f"{held} held" if held else str(payload.get("socket_state") or "Not connected"),
                        tone="warn" if held else "muted", title="Slack transport")
