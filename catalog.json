@@ -1,7 +1,7 @@
 {
   "description": "Official Ouroboros skills catalog.",
   "name": "OuroborosHub",
-  "raw_base_url": "https://raw.githubusercontent.com/razzant/OuroborosHub/main",
+  "raw_base_url": "https://raw.githubusercontent.com/razzant/OuroborosHub/d66c7b56f1dc424f946abd2abb3858d72dcae69f",
   "schema_version": 1,
   "skills": [
     {
@@ -1080,8 +1080,8 @@
       "files": [
         {
           "path": "CHANGELOG.md",
-          "sha256": "3cec1b368cb04047228ebc299792bb6639c1aa564da522c853a3d4290f542a16",
-          "size": 540
+          "sha256": "91eb4b4ef30aa83fd56b142363772713e70e2bb9d1a69c9e1cb12d052e286277",
+          "size": 682
         },
         {
           "path": "README.md",
@@ -1090,8 +1090,8 @@
         },
         {
           "path": "SKILL.md",
-          "sha256": "8769511c3d8b953526acaa1fb0abab26dca9b462f8a3a9fbbf2eb11e65b22be9",
-          "size": 15545
+          "sha256": "137ba56972d67490b9cb56c4e1dc626d1f30563b8ee42fe70824717c03f76ffd",
+          "size": 15727
         },
         {
           "path": "lib/client.py",
@@ -1135,8 +1135,8 @@
         },
         {
           "path": "plugin.py",
-          "sha256": "91d93a8fd3b453e078d4ee11a69d72bc17b649dc567336b5cd5fd499df2560c2",
-          "size": 14065
+          "sha256": "b70fe88c6446871e4fcb6efbe01d85f7217f2cfbcd48cc1f7c02ce4ccb6ce08c",
+          "size": 14137
         },
         {
           "path": "scripts/email_daemon.py",
@@ -1175,8 +1175,8 @@
         },
         {
           "path": "tests/test_foundation.py",
-          "sha256": "7a15094d3be1876bcddef1e4fbea31aaaf43f8bbaa2fcd4906d9c083c94d70dc",
-          "size": 12527
+          "sha256": "42bc0292411dd9188c3abfa270f774e784e60736ae6cccc6a846e312499ae4f0",
+          "size": 12560
         },
         {
           "path": "tests/test_host_adapter.py",
@@ -1286,8 +1286,8 @@
       "files": [
         {
           "path": "HOST_CONTRACT.md",
-          "sha256": "e0da0c6a9da8328341c2d87245851a83dcb2fc5b7262f0bfe09456c73969f854",
-          "size": 7935
+          "sha256": "1ec9ab306f89a5a93aeaaecbf4da5cb9e680513dde0d17a8e88251d989d36f4d",
+          "size": 8110
         },
         {
           "path": "SETUP.md",
@@ -1296,8 +1296,8 @@
         },
         {
           "path": "SKILL.md",
-          "sha256": "bae602b34b95ead705674811b8aa8701a68727dc27882b9b77fca4c09b8bece1",
-          "size": 6148
+          "sha256": "1296b38b5d0f57797f5379f5dd9f5f7b57b21de170f452e0fa1cc2fbf6154fd2",
+          "size": 6397
         },
         {
           "path": "SOURCES.md",
@@ -1341,13 +1341,13 @@
         },
         {
           "path": "gh_presence/http.py",
-          "sha256": "39624bc088f429085ca36c73336245d3b8f549cb5f6c62a14eb8e5508122d144",
+          "sha256": "57b61b1e5b867740d2913b0f961f322358427262c03586e361e5fc914582cbbf",
           "size": 7822
         },
         {
           "path": "gh_presence/identity.py",
-          "sha256": "71768129c9868a7540e3d9b9d2740717072b2e658021a8183aa691edfdb1116b",
-          "size": 1291
+          "sha256": "67f9052333dafa358c290a8240efb577bc7f52213a5d5011a529cd7e6d209741",
+          "size": 1239
         },
         {
           "path": "gh_presence/locking.py",
@@ -1421,13 +1421,18 @@
         },
         {
           "path": "tests/test_identity.py",
-          "sha256": "95521f0d959a90b264eec1a442daab793b7f75236ec21a37d6de749db387cb24",
-          "size": 6670
+          "sha256": "09cc0e41080d4f6490750436110b1e02a31b3e75c1fc249cfd0916bc9d3c74b6",
+          "size": 8053
         },
         {
           "path": "tests/test_locking.py",
           "sha256": "f94ac66031c67d1bc909320b48f7999bd5bc3e6c4a9156e8e39c0875161efe6c",
           "size": 7597
+        },
+        {
+          "path": "tests/test_owner_identity.py",
+          "sha256": "9057f29a83185a0b67ca33f00b3062acd2c816480aa52892f6654cec2ef78aab",
+          "size": 3759
         },
         {
           "path": "tests/test_repairs.py",
@@ -1457,7 +1462,7 @@
       "name": "github",
       "slug": "github",
       "type": "extension",
-      "version": "0.1.2"
+      "version": "0.1.3"
     },
     {
       "description": "Universal Google Workspace integration for Google Sheets, Docs, Drive, Slides and Calendar via explicit OAuth or Service Account authentication.",
@@ -2365,8 +2370,8 @@
         },
         {
           "path": "tests/test_identity.py",
-          "sha256": "cf6b3f3a525db2d3798c630c6e1a01722a13e9fc28135eb692a32e45f65a7283",
-          "size": 2029
+          "sha256": "adf0690de4402401284ea73e30b5932c85491913b3df44b502033de52de4d13f",
+          "size": 3316
         },
         {
           "path": "tests/test_inbound_files.py",
@@ -2687,8 +2692,8 @@
         },
         {
           "path": "tests/test_identity.py",
-          "sha256": "134e5fd49e45c42dd2d2cf1291ddd9bb8175d824de5f2cebebdf257aaf8fa347",
-          "size": 2345
+          "sha256": "35da29261ced3cc0843c91c5752b590909d9ab73563a236e80d3d6acd765ac72",
+          "size": 3696
         },
         {
           "path": "tests/test_moderation.py",
