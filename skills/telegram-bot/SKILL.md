@@ -2,7 +2,7 @@
 name: telegram-bot
 description: Durable Telegram transport for generic Ouroboros presences, with exact actor and conversation
   provenance, media staging, and provider receipts.
-version: 0.6.0
+version: 0.7.0
 type: extension
 plugin_api: '2.0'
 runtime: python3
@@ -19,8 +19,9 @@ permissions:
 env_from_settings:
 - TELEGRAM_PUBLIC_BOT_TOKEN
 timeout_sec: 60
-when_to_use: The owner wants a reviewed Telegram bot transport for one or more external presence
-  places, separate from the native owner-control Telegram bridge.
+when_to_use: The owner wants Ouroboros in Telegram as a labelled bot (private chats people open with it,
+  groups and channels it is added to), separate from the native owner-control Telegram bridge. For a
+  dedicated ordinary account use the telegram-user-session connector instead.
 ui_tab:
   tab_id: transport
   title: Telegram Transport
@@ -29,6 +30,12 @@ ui_tab:
     kind: declarative
     schema_version: 1
     components:
+    - type: markdown
+      text: "**Telegram bot.** Telegram labels this account as a bot. People reach it in a private
+        chat they opened themselves and in groups or channels it was added to; group coverage depends
+        on privacy mode and admin rights. A bot cannot start a private chat with someone who never
+        opened one. The Bot API cannot read earlier chat history: only messages that arrive while it
+        runs are received. A dedicated ordinary account is the separate Telegram participant connector."
     - type: form
       route: settings/save
       method: POST
@@ -38,8 +45,8 @@ ui_tab:
         label: Management group ID
         type: text
         placeholder: Optional numeric Telegram group ID
-        help: Marks this room in event facts. Work instructions stay in place notes; no
-          owner permissions are granted.
+        help: Marks this room in event facts. Work instructions stay in the place notes;
+          no owner permissions are granted.
     - type: poll
       route: status
       method: GET
@@ -76,6 +83,10 @@ ui_tab:
       - type: metric
         label: Outbox waiting
         path: outbox_waiting
+        target: status
+      - type: metric
+        label: Outbox held
+        path: outbox_held
         target: status
       - type: metric
         label: Delivered
@@ -136,7 +147,7 @@ contributes:
     scope: account
     source: {route: status, refresh_s: 15}
     icon: ui/icon.svg
-    wakes: [mention, reply_to_me]
+    wakes: [direct_message, mention, reply_to_me]
 ---
 
 # Telegram Bot Presence Transport
@@ -163,17 +174,29 @@ It provides:
 The payload does not call the owner `/chat/inject` path, allocate synthetic
 internal chats, interpret owner commands, or create prompt envelopes. It uses
 only the reviewed `presence` Host permission. Connect a Telegram place with the
-bot account ID. On hosts advertising `places_version >= 1`, groups and channels
-are captured without a binding ID; private bot chats are excluded. Suggested
-wakes are explicit mentions and replies to the bot. Typed facts come from
-Telegram entities and reply identities, not text interpretation. Other bots
-carry `from_bot`; own bot echoes are ignored.
+bot account ID. On hosts advertising `places_version >= 1`, private chats,
+groups and channels are captured without a binding ID. A private chat carries
+the `direct_message` fact; the person opened that chat with the bot, and the
+bot cannot open one first (Telegram refuses it). Suggested wakes are direct
+messages, explicit mentions and replies to the bot. Typed facts come from
+Telegram entities, chat type and reply identities, not text interpretation.
+Other bots carry `from_bot`; own bot echoes are ignored. Owner identity is the
+numeric Telegram ID the owner confirms in the Places sheet; a private chat with
+this bot grants no owner authority by itself. The owner-control chat remains the
+built-in Telegram bridge with its own bot token.
+
+The Bot API has no method for reading earlier chat history. This connector
+receives only updates delivered while it runs (Telegram keeps undelivered
+updates for about a day) and offers no history import. A dedicated ordinary
+account (the `telegram-user-session` connector) is the option that can read
+history the account can see.
 
 Older hosts retain the previous event filtering and receive the already-saved
 `binding_id` from local settings. Deferred references, offsets, staged files and
 delivery identities survive the upgrade. Before each outgoing message part or
-mutation the worker re-reads the place. Silent/Paused or an unavailable lookup
-holds the queued bytes and receipts without consuming retries; Active resumes.
+mutation the worker re-reads the place, including a private chat's place.
+Silent/Paused or an unavailable lookup holds the queued bytes and receipts
+without consuming retries; Active resumes.
 
 Supported v1 Telegram content is text/caption, photos, documents, edited
 messages, and message-reaction provider facts. Voice/audio bytes are still
@@ -352,3 +375,13 @@ remain unchanged. See `FORMATTER_PROVENANCE.md` for the included helper source.
   longer matches: those events now carry an empty thread and the Host refuses
   them (403). Re-check such bindings and use the chat-level conversation.
 - Reactions in forums stay on the chat's conversation (`:0`), not the topic.
+
+## Upgrading to 0.7.0
+
+- Private chats people open with the bot are now captured on Places hosts with
+  the `direct_message` fact, and replies to them pass the same place check as
+  groups instead of being held as unsupported. Add `direct_message` to the
+  place's wakes if private chats should wake Ouroboros; existing wake lists are
+  not changed by the upgrade.
+- Updates already acknowledged before the upgrade are not fetched again, so
+  earlier private messages are not replayed.

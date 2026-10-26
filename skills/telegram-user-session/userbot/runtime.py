@@ -21,6 +21,7 @@ from typing import Any, Callable
 from telethon import errors as telegram_errors
 from userbot.action_store import ActionStore
 from userbot.actions import Actions, ActionAmbiguous, ActionFloodWait, ActionRejected
+from userbot.participant_state import policy, receiving_refusal
 from userbot.presence import PresenceClient, build_event
 from userbot.store import DurableStore
 from userbot.telegram import AmbiguousSend, FloodWait, LoginRequired, SendRejected, TelegramAdapter
@@ -29,6 +30,10 @@ from userbot.topic import classify_message, reply_target
 
 class OversizedReply(ValueError):
     """A Host answer cannot be sent as one Telegram text message."""
+
+
+class ReplyConflict(ValueError):
+    """An automatic reply identity already names different reply bytes."""
 
 
 class IngressTooLarge(RuntimeError):
@@ -168,6 +173,11 @@ class UserSessionBridge:
         # Compatibility only with the test's simple one-peer configuration.
         return self.config.binding_id if peer_id in self.config.allowed_peer_ids else None
 
+    def _excluded(self, peer: int) -> bool:
+        """The owner's current exclusions; in legacy mode the enrolled chats are the scope."""
+        return receiving_refusal({**policy(self.state_dir), "scope": "all"}, peer,
+                                 self.config.account_id) is not None
+
     def _presence_for(self, binding_id: str) -> PresenceClient:
         if getattr(self.presence, "binding_id", binding_id) == binding_id:
             return self.presence
@@ -190,8 +200,8 @@ class UserSessionBridge:
         peer, actor, mid = event.chat_id, event.sender_id, message.id
         if any(type(x) is not int or x == 0 for x in (peer, actor, mid)):
             return None  # Telegram service senders need a separate identity policy.
-        if peer not in self.config.allowed_peer_ids:
-            return None
+        if peer not in self.config.allowed_peer_ids or self._excluded(peer):
+            return None  # Outside the current receiving scope: never captured.
         text = event.raw_text or ""
         if not text.strip():
             return None
@@ -327,16 +337,21 @@ class UserSessionBridge:
         # admitted turn. The behavior profile chooses speech or silence.
         return True, topic
 
+    def _reply_path(self, intent: str) -> Path:
+        ref = hashlib.sha256(f"{self.config.account_id}:{intent}".encode()).hexdigest()
+        return self.state_dir / "outgoing" / (ref + ".json")
+
     def _queue_reply(self, raw: dict[str, Any], topic: int | None, binding_id: str,
                      text: str, version: int, source_event_id: str,
-                     turn_ref: str, *, phase: str = "final") -> None:
+                     turn_ref: str, *, phase: str = "final", output_ref: str = "",
+                     source: Path | None = None) -> None:
         if phase not in {"interim", "final"}:
             raise ValueError("invalid reply phase")
         if not text.strip() or len(text.encode("utf-8")) > 4096:
             raise OversizedReply("automatic reply exceeds Telegram text boundary")
         prefix = "auto_" + hashlib.sha256(source_event_id.encode("utf-8")).hexdigest()
+        # Without a Host output identity an event has one interim and one final reply.
         intent = prefix + ("_interim" if phase == "interim" else "")
-        ref = hashlib.sha256(f"{self.config.account_id}:{intent}".encode()).hexdigest()
         part = "0" if phase == "interim" or self.store.get(str(self.config.account_id),
                                                              prefix + "_interim") is None else "1"
         payload = {
@@ -346,14 +361,69 @@ class UserSessionBridge:
             "source_event_id": source_event_id, "delivery_reporting_version": version,
             "turn_ref": turn_ref, "part_id": part,
         }
-        path = self.state_dir / "outgoing" / (ref + ".json")
+        slot = self._reply_path(intent)
+        if output_ref:
+            # A Host-selected output is queued once by its identity: a new selection is
+            # new speech even with the same text, and a parent and its child may both
+            # speak. A slot already holding exactly this reply, queued before replies
+            # carried that identity, stays the reply of the first selection matching it
+            # and of no other; the source event records which one before it is relied on.
+            owner = (raw.get("legacy_reply_outputs") or {}).get(intent)
+            if owner is None and slot.exists() and _read_json(slot) == payload:
+                raw.setdefault("legacy_reply_outputs", {})[intent] = output_ref
+                if source is not None:
+                    _atomic_json(source, raw)
+            elif owner != output_ref:
+                intent = prefix + "_" + hashlib.sha256(output_ref.encode("utf-8")).hexdigest()[:32]
+                payload.update(part_id="0", output_ref=output_ref)
+        path = self._reply_path(intent)
         if path.exists():
             if _read_json(path) != payload:
-                raise ValueError("automatic reply identity changed")
+                raise ReplyConflict("automatic reply identity changed")
         else:
             _atomic_json(path, payload)
         self.store.enqueue(str(self.config.account_id), intent, peer_id=raw["peer_id"],
-                           payload_ref=ref, topic_id=topic, reply_id=raw["message_id"])
+                           payload_ref=path.stem, topic_id=topic, reply_id=raw["message_id"])
+
+    def _queue_pending(self, raw: dict[str, Any], path: Path, topic: int | None,
+                       binding_id: str, event_id: str) -> None:
+        """Queue replies a response selected before the next reference was stored."""
+        interim = raw.get("pending_interim")  # recorded before replies had output identities
+        pending = raw.get("pending_replies") or []
+        if not interim and not pending:
+            return
+        if interim:
+            try:
+                self._queue_reply(raw, topic, binding_id, interim["text"], interim["version"],
+                                  event_id, interim["turn_ref"], phase="interim")
+            except ReplyConflict:
+                # A second interim from the reference still being polled: that reference
+                # repeats it with its own output identity on the next read.
+                if interim["turn_ref"] != raw.get("work_ref"):
+                    raise
+        for reply in pending:
+            self._queue_reply(raw, topic, binding_id, reply["text"], reply["version"], event_id,
+                              reply["turn_ref"], phase=reply["phase"], output_ref=reply["output_ref"],
+                              source=path)
+        raw.pop("pending_interim", None)
+        raw.pop("pending_replies", None)
+        _atomic_json(path, raw)
+
+    @staticmethod
+    def _selected(response: Any, polled: str) -> list[dict[str, Any]]:
+        """Speech the Host selected in ended work, in order; released outputs come first.
+
+        Text of failed or cancelled work counts only with the Host's output identity:
+        that is an explicit selection, never a recorded failure notice.
+        """
+        producer = response.task_id or response.turn_ref or response.work_ref or polled
+        rows = [(ref, outcome, text) for ref, outcome, text in response.outputs]
+        if response.outcome in {"message", "deferred"} and response.text.strip() and (
+                response.output_ref or response.status == "completed"):
+            rows.append((response.output_ref, response.outcome, response.text))
+        return [{"output_ref": ref, "phase": "interim" if outcome == "deferred" else "final",
+                 "text": text, "version": response.delivery_reporting_version, "turn_ref": producer}
+                for ref, outcome, text in rows]
 
     async def process_incoming(self, *, limit: int = 100) -> int:
         """Replay raw, pending-Host and deferred-work events without minting new ids."""
@@ -398,6 +468,13 @@ class UserSessionBridge:
                 try:
                     work_ref = raw.get("work_ref") or ""
                     binding_id = raw.get("selected_binding") or ""
+                    if not work_ref and self._excluded(peer):
+                        # Excluded after capture: its content is never submitted. Work the
+                        # Host already admitted keeps its custody; replies to an excluded
+                        # chat are refused at dispatch.
+                        self.store.settle_raw(str(self.config.account_id), filename, held=True)
+                        os.replace(path, path.with_suffix(".held"))
+                        continue
                     if work_ref and binding_id:
                         # Admission already happened. Do not re-fetch a replied
                         # message that may have since been deleted: its absence
@@ -436,44 +513,36 @@ class UserSessionBridge:
                                         })
                     event_id = event["source_event_id"]
                     self.store.reserve_inbox(str(self.config.account_id), event_id, event)
-                    pending_interim = raw.get("pending_interim")
-                    if pending_interim:
-                        # Crash after the work_ref write but before enqueue must
-                        # replay the interim, not skip straight to the child.
-                        self._queue_reply(raw, topic, binding_id,
-                                          pending_interim["text"], pending_interim["version"],
-                                          event_id, pending_interim["turn_ref"], phase="interim")
-                        raw.pop("pending_interim")
-                        _atomic_json(path, raw)
+                    # A crash after storing the next reference must still queue what the
+                    # previous response selected, not skip straight to the child.
+                    self._queue_pending(raw, path, topic, binding_id, event_id)
                     presence = self._presence_for(binding_id)
+                    if not work_ref and self._excluded(peer):
+                        # Excluded while the provider reads above were awaited: the
+                        # first submission is checked again with nothing awaited after.
+                        self.store.settle_raw(str(self.config.account_id), filename, held=True)
+                        os.replace(path, path.with_suffix(".held"))
+                        continue
                     response = await asyncio.to_thread(presence.work, work_ref) if work_ref else (
                         await asyncio.to_thread(presence.turn, event,
                                                 delivery_reporting_version=self.delivery_reporting_version))
-                    if response.kind == "completed" and response.outcome == "deferred" and response.text:
-                        if not response.text.strip() or len(response.text.encode("utf-8")) > 4096:
-                            raw["failure_code"] = "REPLY_TOO_LONG"
-                            _atomic_json(path, raw)
-                            os.replace(path, path.with_suffix(".held"))
-                            self.store.settle_raw(str(self.config.account_id), filename, held=True)
-                            continue
-                        raw["pending_interim"] = {
-                            "text": response.text,
-                            "version": response.delivery_reporting_version,
-                            "turn_ref": response.turn_ref or work_ref,
-                        }
-                    if (response.work_ref and response.work_ref != work_ref) or raw.get("pending_interim"):
-                        raw["work_ref"] = response.work_ref
+                    if response.kind == "retained" and response.turn_ref:
+                        # The Host keeps the admitted turn: observe its original
+                        # reference instead of submitting the same event again.
+                        raw["work_ref"] = response.turn_ref
                         _atomic_json(path, raw)
-                    if response.kind == "pending":
                         blocked_peers.add(peer)
                         continue
                     if response.kind != "completed":
-                        self._ingress_health(peer, "HOST_UNAVAILABLE" if response.kind == "retry"
+                        if response.work_ref and response.work_ref != work_ref:
+                            raw["work_ref"] = response.work_ref
+                            _atomic_json(path, raw)
+                        if response.kind == "pending":
+                            blocked_peers.add(peer)
+                            continue
+                        self._ingress_health(peer, "HOST_UNAVAILABLE" if response.kind in {"retry", "retained"}
                                              else "EVENT_UNAVAILABLE")
-                        if response.code in {"presence_work_failed", "presence_work_cancelled"}:
-                            self.store.settle_raw(str(self.config.account_id), filename, held=True)
-                            os.replace(path, path.with_suffix(".held"))
-                        elif response.work_ref or work_ref:
+                        if response.work_ref or work_ref:
                             blocked_peers.add(peer)
                         elif response.kind in {"blocked", "rejected"}:
                             # Do not pay for the same permanent refusal every
@@ -486,36 +555,46 @@ class UserSessionBridge:
                         else:
                             blocked_peers.add(peer)
                         continue
-                    if response.outcome == "deferred":
-                        if raw.get("pending_interim"):
-                            interim = raw["pending_interim"]
-                            self._queue_reply(raw, topic, binding_id, interim["text"],
-                                              interim["version"], event_id, interim["turn_ref"],
-                                              phase="interim")
-                            raw.pop("pending_interim")
-                            _atomic_json(path, raw)
-                        if not (raw.get("work_ref") or work_ref):
-                            raw["failure_code"] = "DEFERRED_WITHOUT_WORK_REF"
-                            _atomic_json(path, raw)
-                            os.replace(path, path.with_suffix(".held"))
-                            self.store.settle_raw(str(self.config.account_id), filename, held=True)
-                            continue
+                    # Ended work: queue what its producer selected, whatever the task's
+                    # status, then follow a separately admitted child. A turn names its
+                    # child in work_ref; a work read names itself there.
+                    replies = self._selected(response, work_ref)
+                    if any(len(reply["text"].encode("utf-8")) > 4096 for reply in replies):
+                        # Do not ACK an answer we cannot deliver. Hold the
+                        # exact source for owner correction instead of
+                        # repeatedly posting an unsendable job.
+                        raw["failure_code"] = "REPLY_TOO_LONG"
+                        _atomic_json(path, raw)
+                        os.replace(path, path.with_suffix(".held"))
+                        self.store.settle_raw(str(self.config.account_id), filename, held=True)
+                        continue
+                    child = response.child_work_ref or (
+                        response.work_ref if response.work_ref != work_ref else "")
+                    if child and child != work_ref:
+                        # Stored with the replies selected so far, which are queued even
+                        # if this process stops before the child is read.
+                        raw["work_ref"], raw["pending_replies"] = child, replies
+                        _atomic_json(path, raw)
+                        self._queue_pending(raw, path, topic, binding_id, event_id)
                         blocked_peers.add(peer)
                         continue
-                    if response.outcome == "message" and response.text:
-                        try:
-                            self._queue_reply(raw, topic, binding_id, response.text,
-                                              response.delivery_reporting_version, event_id,
-                                              response.turn_ref or response.work_ref or work_ref)
-                        except OversizedReply:
-                            # Do not ACK an answer we cannot deliver. Hold the
-                            # exact source for owner correction instead of
-                            # repeatedly posting an unsendable job.
-                            raw["failure_code"] = "REPLY_TOO_LONG"
-                            _atomic_json(path, raw)
-                            os.replace(path, path.with_suffix(".held"))
-                            self.store.settle_raw(str(self.config.account_id), filename, held=True)
-                            continue
+                    for reply in replies:
+                        self._queue_reply(raw, topic, binding_id, reply["text"], reply["version"],
+                                          event_id, reply["turn_ref"], phase=reply["phase"],
+                                          output_ref=reply["output_ref"], source=path)
+                    if response.outcome == "deferred" and response.status == "completed":
+                        raw["failure_code"] = "DEFERRED_WITHOUT_WORK_REF"
+                        _atomic_json(path, raw)
+                        os.replace(path, path.with_suffix(".held"))
+                        self.store.settle_raw(str(self.config.account_id), filename, held=True)
+                        continue
+                    if response.status != "completed":
+                        # Failed or cancelled work with nothing left to follow keeps its
+                        # exact source visible, after any speech it selected.
+                        self._ingress_health(peer, "EVENT_UNAVAILABLE")
+                        self.store.settle_raw(str(self.config.account_id), filename, held=True)
+                        os.replace(path, path.with_suffix(".held"))
+                        continue
                     self.store.ack_inbox(str(self.config.account_id), event_id)
                     path.unlink()
                     self.store.settle_raw(str(self.config.account_id), filename)
@@ -882,6 +961,7 @@ class UserSessionBridge:
                             type(payload.get("topic_id")) not in (int, type(None)) or
                             not isinstance(payload.get("binding_id"), str) or
                             not isinstance(payload.get("text"), str) or
+                            not isinstance(payload.get("output_ref", ""), str) or
                             payload.get("part_id", "0") not in {"0", "1"}):
                         raise ValueError("invalid delivery payload fields")
             except (ValueError, TypeError, UnicodeError, OSError):
@@ -913,21 +993,26 @@ class UserSessionBridge:
             if receipt.exists():
                 self.store.mark_reported(account, job.intent_id)
                 continue
-            # Only an immutable automatic intent uses this naming contract.
+            # Only an immutable automatic intent uses this naming contract. A reply
+            # with a Host output identity is its own delivery.
             prefix = "auto_" + hashlib.sha256(source.encode("utf-8")).hexdigest()
-            if job.intent_id not in {prefix, prefix + "_interim"} or job.remote_message_id is None:
+            output_ref = payload.get("output_ref", "")
+            delivery_id = (prefix + "_" + hashlib.sha256(output_ref.encode("utf-8")).hexdigest()[:32]
+                           if output_ref else prefix)
+            allowed = {delivery_id} if output_ref else {prefix, prefix + "_interim"}
+            if job.intent_id not in allowed or job.remote_message_id is None:
                 self.store.mark_report_invalid(account, job.intent_id)
                 continue
             result = await asyncio.to_thread(
                 self._presence_for(payload["binding_id"]).report_delivered,
-                delivery_id=prefix, part_id=payload.get("part_id", "0"),
+                delivery_id=delivery_id, part_id=payload.get("part_id", "0"),
                 provider_message_id=job.remote_message_id,
                 account_id=self.config.account_id, peer_id=job.peer_id,
                 topic_id=job.topic_id, text=payload["text"],
                 source_event_id=source, task_id=payload.get("turn_ref") or "",
                 delivery_reporting_version=1)
             if result.kind == "completed":
-                _atomic_json(receipt, {"delivery_id": prefix, "message_id": job.remote_message_id})
+                _atomic_json(receipt, {"delivery_id": delivery_id, "message_id": job.remote_message_id})
                 self.store.mark_reported(account, job.intent_id)
                 count += 1
             else:

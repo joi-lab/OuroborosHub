@@ -1,93 +1,118 @@
-/* Account setup and free-participant controls. Host Places remains the sole wake writer. */
+/* Telegram connector: two ways in, what the account hears, participation and earlier history.
+   Host Places stays the only owner of place state, wakes, notes and conversation history. */
 (() => {
   const bridge = window.OuroborosWidget;
   const root = document.getElementById('root');
   const style = document.createElement('style');
   style.textContent = `
-    :root{--bg:#f7f8f7;--ink:#17231f;--muted:#506057;--edge:#d5ddd8;--field:#fff;--accent:#277450}
-    :root[data-theme=dark]{--bg:#171d1a;--ink:#edf3ef;--muted:#b3bfb7;--edge:#414b44;--field:#232b26;--accent:#87cda0}
-    *{box-sizing:border-box}body{margin:0;color:var(--ink);background:var(--bg);font:14px/1.5 system-ui,sans-serif}
-    #root{padding:20px;overflow-wrap:anywhere}h2{font-size:22px;line-height:1.2;margin:0 0 8px}h3{font-size:16px;margin:0 0 10px}
-    p{margin:8px 0}.muted,small{color:var(--muted)}section,details{margin-top:22px}summary{cursor:pointer;font-weight:600;padding:8px 0}
-    .fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr));gap:12px}
-    label{display:flex;flex-direction:column;gap:6px}label.check{flex-direction:row;align-items:flex-start}
-    input,select,button{font:inherit;color:var(--ink);max-width:100%}input,select{width:100%;padding:9px;border:1px solid var(--edge);border-radius:7px;background:var(--field);min-width:0}
-    input[type=checkbox]{width:auto;flex:none;margin-top:4px}button{padding:8px 12px;border:1px solid var(--edge);border-radius:7px;background:var(--field);cursor:pointer}
-    button:disabled{opacity:.55;cursor:default}button:focus-visible,input:focus-visible,select:focus-visible,summary:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
-    .actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}.status{color:var(--muted);white-space:pre-wrap}.status[data-error=true]{color:var(--ink);border-left:3px solid #bc6555;padding-left:10px}
-    ol{padding-left:23px}li{margin:7px 0}.rule{border-top:1px solid var(--edge);padding-top:18px}.badge{font-size:12px;color:var(--accent);font-weight:650}
+    :root{color-scheme:dark;--room:#171719;--object:#1d1d1f;--tray:#262628;--capsule:#303033;--ink:#efeff2;--muted:#b8b8c0;
+      --accent:#fe7d85;--chosen:#872236;--chosen-ink:#ffdfe1;--rose:#76162b;--rose-ink:#fcf9f9;--amber:#f7cb58;--green:#83e499;
+      --red:#fe9498;--line:#4e4e55;--field:#161618;--rest:0 1px 2px #0006,0 6px 20px #0004}
+    :root[data-theme=light]{color-scheme:light;--room:#fafbfc;--object:#fff;--tray:#f3f4f6;--capsule:#fff;--ink:#20232b;--muted:#5d6472;
+      --accent:#b52b3b;--chosen:#f9e9ec;--chosen-ink:#b52b3b;--rose:#fdf2f4;--rose-ink:#35272c;--amber:#805000;--green:#176b49;
+      --red:#b4232f;--line:#c8ccd4;--field:#fff;--rest:0 1px 2px #1c21330d,0 6px 18px #1c21330f}
+    @media (prefers-color-scheme:light){:root:not([data-theme]){color-scheme:light;--room:#fafbfc;--object:#fff;--tray:#f3f4f6;
+      --capsule:#fff;--ink:#20232b;--muted:#5d6472;--accent:#b52b3b;--chosen:#f9e9ec;--chosen-ink:#b52b3b;--rose:#fdf2f4;--rose-ink:#35272c;
+      --amber:#805000;--green:#176b49;--red:#b4232f;--line:#c8ccd4;--field:#fff;--rest:0 1px 2px #1c21330d,0 6px 18px #1c21330f}}
+    *{box-sizing:border-box}
+    body{margin:0;background:var(--room);color:var(--ink);font:14px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif}
+    #root{padding:20px;overflow-wrap:anywhere}
+    button,input,textarea,select{font:inherit;color:inherit}
+    button{cursor:pointer;border:0;background:var(--capsule);box-shadow:var(--rest);border-radius:999px;padding:9px 16px;min-height:40px;font-weight:600}
+    button:hover{filter:brightness(1.08)}
+    button[aria-pressed=true]{background:var(--chosen);color:var(--chosen-ink)}
+    button:disabled{cursor:default;color:var(--muted);box-shadow:none;filter:none}
+    button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible,summary:focus-visible{outline:3px solid var(--accent);outline-offset:3px}
+    h2{font-size:16px;line-height:1.3;margin:0 0 16px;font-weight:600}
+    h3{font-size:14px;margin:0 0 8px;font-weight:600}
+    p{margin:0 0 12px}
+    .meta,small{font-size:12px;line-height:1.4;color:var(--muted)}
+    .secondary{color:var(--muted)}
+    .top{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px}
+    .strip{display:flex;gap:8px;flex-wrap:wrap}
+    .strip.small button{font-size:12px;padding:8px 12px;min-height:36px}
+    .profile{display:flex;align-items:center;gap:12px;min-width:0;margin-bottom:16px}
+    .profile .who{min-width:0;flex:1}
+    .avatar{width:40px;height:40px;display:grid;place-items:center;background:var(--rose);color:var(--rose-ink);border-radius:50%;font-size:20px;flex:none}
+    .profile strong{font-size:16px;display:block}
+    .profile small{display:block;margin-top:2px}
+    .grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:20px;align-items:start}
+    .object{background:var(--object);border-radius:18px;padding:24px;box-shadow:var(--rest);min-width:0}
+    .wide{grid-column:1/-1}
+    .tray{padding:14px 16px;background:var(--tray);border-radius:12px;margin:12px 0}
+    .tray p:last-child{margin-bottom:0}
+    .method-picker{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px;margin-bottom:20px}
+    .method-picker button{text-align:left;border-radius:18px;padding:18px 20px;min-height:84px}
+    .method-picker small{display:block;margin-top:6px;color:inherit;font-weight:400}
+    .field{display:block;margin-top:16px;font-weight:500}
+    .field>span{display:block;margin-bottom:6px}
+    .field small{display:block;margin-top:6px;font-weight:400}
+    .fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,180px),1fr));gap:0 12px}
+    input:not([type=checkbox]),select,textarea{display:block;width:100%;min-width:0;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--field);font-weight:400}
+    textarea{resize:vertical;min-height:232px;line-height:1.5}
+    input[type=checkbox]{width:19px;height:19px;accent-color:var(--accent);flex:none;margin:0}
+    .check{display:flex;align-items:center;justify-content:space-between;gap:16px;min-height:52px;cursor:pointer;padding:6px 0}
+    .check+.check{border-top:1px solid var(--tray)}
+    .check-text{font-weight:500;min-width:0}
+    .check small{display:block;font-weight:400}
+    .capline{padding:10px 0}
+    .capline strong{display:block;margin-bottom:4px}
+    .actionbar{display:flex;flex-wrap:wrap;gap:8px;margin-top:16px;align-items:center}
+    .quiet{background:none;box-shadow:none;color:var(--accent);padding:6px 0;min-height:36px}
+    .quiet:disabled{color:var(--muted)}
+    .hint{font-size:12px;color:var(--muted);margin-top:12px}
+    .result{font-size:12px;color:var(--muted);margin:10px 0 0;white-space:pre-wrap;min-height:1px}
+    .result[data-error=true]{color:var(--red)}
+    .lines{white-space:pre-wrap;margin:0}
+    .mark{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:500;white-space:nowrap}
+    .mark::before{content:'';width:7px;height:7px;border-radius:50%;background:currentColor}
+    .tone-good{color:var(--green)}.tone-warn{color:var(--amber)}.tone-bad{color:var(--red)}.tone-quiet{color:var(--muted)}
+    .arrowline{display:flex;flex-wrap:wrap;gap:8px;color:var(--muted);align-items:center;margin:4px 0 12px}
+    .arrowline b{font-size:12px;font-weight:500;background:var(--tray);padding:6px 10px;border-radius:999px;color:var(--ink)}
+    .row{display:flex;justify-content:space-between;align-items:center;gap:16px;padding:10px 0;min-width:0}
+    .row+.row{border-top:1px solid var(--tray)}
+    .row>div{min-width:0}
+    .row>button,.row>span{flex:none;white-space:nowrap}
+    .row .meta{display:block;margin-top:2px}
+    details{margin-top:16px}
+    summary{cursor:pointer;font-weight:600}
+    .warning{color:var(--amber)}
+    .inline{display:flex;gap:8px;align-items:flex-end}
+    .inline .field{flex:1;margin-top:0}
+    .note{white-space:pre-wrap}
+    .empty{color:var(--muted);padding:12px 0}
+    .first-step{margin-bottom:20px}
+    .hidden,[hidden]{display:none!important}
+    @media (max-width:720px){.grid{grid-template-columns:minmax(0,1fr)}}
+    @media (max-width:560px){#root{padding:14px}.object{padding:18px}.method-picker button{padding:16px}}
   `;
   document.head.append(style);
-  root.innerHTML = `
-    <header><span class="badge">OWN ACCOUNT · SHARED OUROBOROS MEMORY</span><h2>Telegram, as myself</h2>
-      <p class="muted">An independent AI participant, not a public command service.</p>
-      <p class="status" id="account" role="status">Reading account status…</p>
-      <p class="status" id="cooldown" role="status">Telegram wait: not checked.</p>
-      <div class="actions"><button type="button" id="refresh">Check status</button></div></header>
-    <section class="rule"><h3>1 · Connect the dedicated account</h3>
-      <p class="muted">Get your own API ID and hash at my.telegram.org. Saved secrets stay private; blank secret fields keep them. An existing session is preserved.</p>
-      <form id="setup"><div class="fields">
-        <label>Telegram API ID<input name="api_id" inputmode="numeric" disabled></label>
-        <label>API hash<input type="password" name="api_hash" autocomplete="off" disabled></label>
-        <label>Dedicated account phone<input type="password" name="phone" autocomplete="off" placeholder="+country code…" disabled></label>
-      </div><div class="actions"><button type="button" data-save-setup disabled>Save account setup</button></div><p class="status" data-result role="status"></p></form>
-      <p class="muted">Use Login actions here only if status asks for authorization. Saving does not request a code or log in.</p>
-    </section>
-    <section class="rule"><h3>2 · Permit participation</h3><form id="controls">
-      <div class="fields"><label>Transport mode<select name="mode" disabled><option value="participant">Free participant</option><option value="legacy">Legacy scoped transport</option></select></label>
-      <label class="check"><input type="checkbox" name="outgoing" disabled><span>Allow outgoing actions<br><small>Telegram rights and current Place controls still apply.</small></span></label></div>
-      <details><summary>Identity, exclusions and pacing</summary><div class="fields">
-        <label>Your numeric Telegram ID<input name="owner_id" disabled><small>Recognition only; confirm This is me in host Places.</small></label>
-        <label>Expected account ID<input name="expected_account_id" disabled></label>
-        <label>Excluded numeric chat IDs<input name="blocked_peers" disabled placeholder="Comma-separated; blank permits all"></label>
-        <label>Minimum seconds between actions<input type="number" min="1" max="60" name="interval" disabled></label>
-      </div></details>
-      <div class="actions"><button type="button" data-save-controls disabled>Save controls</button></div><p class="status" data-result role="status"></p></form>
-      <p class="muted">Free mode does not require enrolling each correspondent. It does not grant strangers owner authority.</p>
-    </section>
-    <section class="rule"><h3>3 · Choose where and how I participate</h3>
-      <p><strong>Settings → Behavior → Consciousness → Places → Telegram</strong></p>
-      <p>Use the verified account ID above and leave conversation empty for the whole account. Set wakes, Active / Silent / Paused and behavior instructions there. That host-owned sheet is the single behavior editor, not another setting hidden in Advanced.</p>
-      <p class="muted">For selective groups choose mention / reply; private messages can wake directly. Write the desired tone and boundaries in Place notes. Names become available after the separate core update. Confirm your identity there with This is me.</p>
-    </section>
-    <details id="guide"><summary>Detailed connection and behavior guide</summary>
-      <h3>Choose what wakes me</h3>
-      <p>Open <strong>Settings → Behavior → Consciousness → Places</strong> and select Telegram. The host owns the live wake list; this widget does not keep another copy.</p>
-      <ul><li><strong>Direct message:</strong> private correspondence is addressed to me.</li><li><strong>Mention / reply to me:</strong> selective group participation. A plain name in text is not a Telegram mention.</li><li><strong>Any message:</strong> every supported incoming message can wake me, if offered by the connector.</li></ul>
-      <p>Messages are captured before the wake decision. Unaddressed messages are heard without starting model work; an active author can receive follow-up context. A later addressed exchange uses the same conversation history, not a new Project.</p>
-      <p>Active permits participation. Silent still permits thought, but holds outward actions. Paused hears without starting a new focus. Outgoing actions above is an additional local switch.</p>
-      <p>The prepared host UI contribution adds a Places door on connector cards and a read-only conversation reader. Until that core change is applied, use the existing Places settings; a transport log is not a substitute for canonical conversation history.</p>
-      <h3>Connect this account once</h3>
-      <ol><li>Save the API ID/hash and dedicated phone in step 1 above. The same account settings remain available in Advanced. Blank secret fields keep saved values.</li>
-      <li>Request one code below. A request is not proof the code arrived. If necessary use Telegram's explicit next delivery method; do not start a request loop.</li>
-      <li>Enter the newest code, and a 2FA password only if requested. A staged login input is not successful authorization; Check status afterwards.</li>
-      <li>Connect Telegram in Places using the verified account ID. An empty conversation means account-wide scope. Confirm your own numeric Telegram actor ID there; names and claims are not identity.</li>
-      <li>Select Free participant and deliberately enable outgoing actions. Changing transport mode requires turning the skill off and on through Skills; it does not require restarting Ouroboros.</li></ol>
-      <h3>Check what actually happened</h3>
-      <p>Enabled, authenticated and sent are different facts. Telegram actions have stable intent IDs: queued is not sent; unknown may already have happened and must not be blindly retried. A delivered receipt proves Telegram acknowledgement, not that a person read it.</p>
-      <p>Chats, topics, media, sticker packs and admin tools use this account's actual Telegram permissions. They are not invitations to spam, and an admin tool does not make this account an admin. Exclusions and pacing remain under advanced Settings.</p>
-    </details>
-    <details><summary>Login actions</summary><p class="muted">Use only for this dedicated account. Never copy another person's session or tdata.</p>
-      <div class="actions"><button type="button" id="request">Request code</button><button type="button" id="resend">Resend with Telegram's next method</button></div>
-      <p class="status" id="code-result" role="status"></p>
-      <form id="login"><div class="fields"><label>Newest login code<input type="password" name="code" autocomplete="off" inputmode="numeric"></label>
-      <label>2FA password, only if requested<input type="password" name="password" autocomplete="off"></label></div>
-      <div class="actions"><button type="button" data-login>Submit private login input</button></div><p class="status" data-result role="status"></p></form>
-    </details>`;
-  // Keep authorization next to credentials, before participation and behavior.
-  root.querySelector('#setup').closest('section').append(root.querySelector('#login').closest('details'));
+
+  const SUGGESTED_NOTE = 'Speak as yourself, Ouroboros, an AI. Join in when you have something to add, answer private messages, '
+    + 'use reactions, and come back with results you promised. Do not speak for me or take on commitments in my name.\n'
+    + 'In chats where you already take part, act on your own. Before a first contact with someone new or joining a new chat, '
+    + 'if you are not sure it fits, ask me in Main and wait for my answer. After every new join, send me one short note in Main.\n'
+    + 'Moderate only in a chat where this note gives you that role. Telegram admin rights alone do not make you a moderator.';
+  const SCENES = [['connect', '1 · Connect'], ['scope', '2 · What I hear'], ['participation', '3 · Participation'], ['history', '4 · History']];
+  const KIND = {private: 'Private chat', bot: 'Bot', group: 'Group', supergroup: 'Group', forum: 'Forum group', channel: 'Channel'};
+  const state = {
+    scene: '', method: 'account', status: null, statusError: '', policy: null, policyError: '', setup: null, setupError: '',
+    chats: null, chatsError: '', scope: null, imports: null, importsError: '',
+    drafts: {api_id: '', api_hash: '', phone: '', code: '', password: '', note: SUGGESTED_NOTE, addPeer: '',
+      importMode: 'receiving', importChats: new Set(), importExclude: new Set(), importFrom: '', importTo: '', importCap: '500'},
+    results: {}, busy: new Set(), open: new Set(), controls: {},
+  };
   let disposed = false;
-  let policyLoaded = false;
-  let policyRead = null;
   const active = new Set();
   const cleanups = [];
+  const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (c) => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
   const $ = (selector) => root.querySelector(selector);
-  const tell = (node, text, error = false) => { if (!disposed) { node.textContent = text; node.dataset.error = String(error); } };
+
   async function call(path, body) {
     const abort = new AbortController(); active.add(abort);
     try {
       const response = await bridge.fetch(`/api/extensions/telegram-user-session/${path}`, {
-        method: body === undefined ? 'GET' : 'POST', headers: body === undefined ? {} : {'Content-Type':'application/json'},
+        method: body === undefined ? 'GET' : 'POST', headers: body === undefined ? {} : {'Content-Type': 'application/json'},
         body: body === undefined ? undefined : JSON.stringify(body), signal: abort.signal, timeoutMs: 20000,
       });
       const value = await response.json();
@@ -96,112 +121,493 @@
     } finally { active.delete(abort); }
   }
   function on(element, name, fn) { element.addEventListener(name, fn); cleanups.push(() => element.removeEventListener(name, fn)); }
-  let waitUntil=0, waitReason='', waitKnown=false;
-  function paintWait(){
-    if(disposed)return;
-    const seconds=Math.max(0,Math.ceil((waitUntil-Date.now())/1000));
-    tell($('#cooldown'),!waitKnown?'Telegram wait: unavailable — Check status.':seconds>0
-      ?`Telegram cooldown: ${seconds}s remaining (${waitReason}). The queue waits; this does not resend anything.`
-      :waitReason?'Last reported Telegram wait has elapsed. Check status for the next operation; elapsed time is not delivery.'
-      :'No active Telegram cooldown in the last status read.');
+  function result(key, text, error = false) { state.results[key] = {text, error}; paintResult(key); }
+  function paintResult(key) {
+    const node = root.querySelector(`[data-result="${key}"]`);
+    const value = state.results[key];
+    if (!node || disposed) return;
+    node.textContent = value ? value.text : '';
+    node.dataset.error = String(Boolean(value?.error));
   }
-  const waitTimer=setInterval(paintWait,1000);cleanups.push(()=>clearInterval(waitTimer));
-  async function status() {
+  const resultLine = (key) => `<p class="result" data-result="${key}" role="status"></p>`;
+  const busy = (key) => state.busy.has(key);
+
+  // ---- data -------------------------------------------------------------
+  let waitUntil = 0, waitReason = '', waitKnown = false;
+  const shape = (s) => JSON.stringify([s?.account_id, s?.profile, s?.configured, s?.legacy_enrolled, Boolean(s?.participant_queue?.jobs?.held)]);
+  async function loadStatus() {
+    const before = shape(state.status);
     try {
       const value = await call('participant/status');
-      const lines = [`Transport heartbeat: ${value.companion_category || 'unknown'}.`, value.message || 'Status returned without a description.'];
-      if (value.login_attempt?.status) lines.push(`Last login request: ${value.login_attempt.status}${value.login_attempt.reason ? ' / '+value.login_attempt.reason : ''}`);
-      if (value.code_delivery?.type) lines.push(`Code delivery method: ${value.code_delivery.type}; next: ${value.code_delivery.next_type || 'not reported'}; timeout: ${value.code_delivery.timeout ?? 'unknown'}`);
-      if (value.participant_queue?.inbox?.held) lines.push(`Captured inputs held by Host refusal or local policy: ${value.participant_queue.inbox.held}. They are retained, not delivered.`);
-      if (value.participant_queue?.inbound_retrying) lines.push(`Incoming messages awaiting safe routing/provider retry: ${value.participant_queue.inbound_retrying}. Their original source is retained; other chats can continue.`);
-      if (value.last_companion_error?.error_type) lines.push(`Earlier companion diagnostic: ${value.last_companion_error.error_type} (${value.last_companion_error.at || 'time unrecorded'})`);
-      const cooldown=value.cooldown;
-      waitKnown=!!cooldown && Number.isFinite(cooldown.remaining_seconds);
-      waitUntil=Date.now()+Math.max(0,cooldown?.remaining_seconds || 0)*1000;
-      waitReason=cooldown?.reason || '';paintWait();
-      tell($('#account'), lines.join('\n'));
-    } catch (error) { waitKnown=false;paintWait();tell($('#account'), error.message, true); }
+      state.status = value; state.statusError = '';
+      const cooldown = value.cooldown;
+      waitKnown = !!cooldown && Number.isFinite(cooldown.remaining_seconds);
+      waitUntil = Date.now() + Math.max(0, cooldown?.remaining_seconds || 0) * 1000;
+      waitReason = cooldown?.reason || '';
+    } catch (error) { state.statusError = error.message; waitKnown = false; }
+    if (!state.scene) { state.scene = state.status?.account_id ? 'scope' : 'connect'; render(); }
+    else if (shape(state.status) !== before) render();
+    else paintStatus();
   }
-  function loadPolicy() {
-    if (policyRead) return policyRead;
-    policyRead = call('participant/policy').then((value) => {
-      if(disposed)return;
-      const form=$('#controls');form.elements.mode.value=value.mode;
-      form.elements.outgoing.checked=value.outgoing==='true';
-      for(const name of ['owner_id','expected_account_id','blocked_peers','interval'])form.elements[name].value=value[name] ?? '';
-      policyLoaded=true;
-      form.querySelectorAll('input,select,button').forEach((el)=>{el.disabled=false;});
-      tell(form.querySelector('[data-result]'),'');
-    }).finally(()=>{policyRead=null;});
-    return policyRead;
+  let savedMode = '';
+  async function loadPolicy() {
+    try {
+      state.policy = await call('participant/policy'); state.policyError = '';
+      if (!savedMode) savedMode = state.policy.mode;
+      if (!state.scope?.dirty) resetScopeDraft();
+    } catch (error) { state.policyError = error.message; }
   }
-  on($('#refresh'), 'click', async () => {
-    if(!policyLoaded) {
-      try { await loadPolicy(); } catch(error) { tell($('#controls [data-result]'),error.message+' — Check status retries this read.',true); }
+  async function loadSetup() {
+    try { state.setup = await call('setup/config'); state.setupError = ''; state.drafts.api_id = state.setup.api_id || state.drafts.api_id; }
+    catch (error) { state.setupError = error.message; }
+  }
+  async function loadChats() {
+    try { state.chats = await call('participant/chats'); state.chatsError = ''; if (!state.scope) resetScopeDraft(); }
+    catch (error) { state.chatsError = error.message; }
+  }
+  // The companion answers a requested dialog read later; reread the local list until it has.
+  // A re-render keeps unsaved scope choices, the focused field, its caret and open sections.
+  async function followRefresh() {
+    if (disposed || !state.chats?.refresh?.pending) return;
+    const before = JSON.stringify(state.chats);
+    await loadChats();
+    if (JSON.stringify(state.chats) !== before && ['scope', 'history'].includes(state.scene)) render();
+  }
+  async function loadImports() {
+    try { state.imports = await call('participant/import'); state.importsError = ''; }
+    catch (error) { state.importsError = error.message; }
+  }
+  const peers = (text) => new Set(String(text || '').split(',').map((x) => x.trim()).filter(Boolean));
+  function resetScopeDraft() {
+    if (!state.policy) return;
+    state.scope = {mode: state.policy.scope || 'all', excluded: peers(state.policy.blocked_peers),
+      selected: peers(state.policy.selected_peers), added: new Map(), dirty: false};
+  }
+
+  // ---- shared pieces ------------------------------------------------------
+  const pressed = (value, current) => `aria-pressed="${value === current}"`;
+  function heartbeat() {
+    const s = state.status;
+    if (state.statusError) return ['tone-bad', 'Status unavailable'];
+    if (!s) return ['tone-quiet', 'Reading status…'];
+    const c = s.companion_category;
+    if (c === 'running') return ['tone-good', 'Running'];
+    if (c === 'login_required') return ['tone-warn', 'Login required'];
+    if (c === 'provider_retry') return ['tone-warn', 'Waiting for Telegram'];
+    if (['ingress_failed', 'login_failed', 'transport_error', 'companion_error', 'session_mismatch', 'config_invalid', 'dependency_missing'].includes(c))
+      return ['tone-bad', 'Stopped · ' + c.replace(/_/g, ' ')];
+    return ['tone-quiet', s.configured ? 'Not running' : 'Not set up'];
+  }
+  function identity() {
+    const profile = state.status?.profile || {};
+    // The bot's own profile lives in the Telegram Bot connector; never show this account's name for it.
+    const name = (state.method === 'account' && [profile.first_name, profile.last_name].filter(Boolean).join(' ')) || 'Ouroboros · AI';
+    const line = state.method === 'bot' ? 'Telegram bot · the separate Telegram Bot connector'
+      : 'Dedicated account · ' + (profile.username ? '@' + profile.username : state.status?.account_id ? 'account ' + state.status.account_id : 'not logged in');
+    const [tone, word] = heartbeat();
+    return `<div class="profile"><div class="avatar" aria-hidden="true">◌</div><div class="who"><strong>${esc(name)}</strong><small>${esc(line)}</small></div>
+      ${state.method === 'account' ? `<span class="mark ${tone}" id="heartbeat">${esc(word)}</span>` : ''}</div>`;
+  }
+  function statusLines() {
+    const s = state.status;
+    if (state.statusError) return state.statusError;
+    if (!s) return 'Reading account status…';
+    const lines = [s.message || ''];
+    if (s.login_attempt?.status) lines.push(`Last login request: ${s.login_attempt.status}${s.login_attempt.reason ? ' · ' + s.login_attempt.reason : ''}`);
+    if (s.code_delivery?.type) lines.push(`Code sent by ${s.code_delivery.type}; next method ${s.code_delivery.next_type || 'not reported'}. A request is not proof the code arrived.`);
+    if (s.last_companion_error?.error_type) lines.push(`Earlier companion stop: ${s.last_companion_error.error_type} (${s.last_companion_error.at || 'time unrecorded'})`);
+    return lines.filter(Boolean).join('\n');
+  }
+  function waitLine() {
+    if (!waitKnown) return 'Telegram wait: not checked.';
+    const seconds = Math.max(0, Math.ceil((waitUntil - Date.now()) / 1000));
+    if (seconds > 0) return `Telegram asked to wait ${seconds}s more (${waitReason}). The queue waits; nothing is resent.`;
+    return waitReason ? 'The last Telegram wait has passed. Elapsed time is not delivery.' : 'No Telegram wait in the last status read.';
+  }
+  function queueLine() {
+    const q = state.status?.participant_queue;
+    if (!q || q.status === 'not_initialized') return 'Queue not started yet.';
+    const jobs = q.jobs || {};
+    const parts = [`${jobs.queued || 0} queued`, `${jobs.held || 0} held`, `${jobs.unknown || 0} unknown outcome`];
+    if (q.inbound_retrying) parts.push(`${q.inbound_retrying} incoming waiting for a safe retry`);
+    if (q.inbox?.held) parts.push(`${q.inbox.held} incoming held`);
+    return 'Queue: ' + parts.join(' · ') + '.';
+  }
+  function placeChip() {
+    const place = state.status?.place || {};
+    const words = {active: ['tone-good', 'Active'], silent: ['tone-warn', 'Silent'], paused: ['tone-warn', 'Paused']};
+    const [tone, word] = words[place.state] || ['tone-quiet', place.state === 'unavailable' ? 'Not connected or unreadable' : 'Not checked yet'];
+    const when = place.at ? new Date(place.at) : null;
+    return `<span class="mark ${tone}">${esc(word)}</span>${when && !isNaN(when) ? ` <span class="meta">as of ${esc(when.toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'}))}</span>` : ''}`;
+  }
+  function paintStatus() {
+    if (disposed) return;
+    const lines = $('#status-lines'); if (lines) lines.textContent = statusLines();
+    const beat = $('#heartbeat'); if (beat) { const [tone, word] = heartbeat(); beat.className = 'mark ' + tone; beat.textContent = word; }
+    const wait = $('#wait-line'); if (wait) wait.textContent = waitLine();
+    const queue = $('#queue-line'); if (queue) queue.textContent = queueLine();
+    const chip = $('#place-chip'); if (chip) chip.innerHTML = placeChip();
+  }
+
+  // ---- first step -----------------------------------------------------------
+  // A fresh install starts in legacy mode, which serves only chats enrolled for that older
+  // transport. Choosing Free participant stays the owner's own step; nothing switches by itself.
+  function firstStep() {
+    // The choice stays reported only while it is the saved mode; Legacy saved again brings the step back.
+    const saved = state.firstStepSaved && state.policy?.mode === 'participant';
+    if (!saved && !(state.policy?.mode === 'legacy' && state.status?.legacy_enrolled === false)) return '';
+    return `<section class="object first-step"><h2>${saved ? 'Free participant chosen' : 'First step: choose Free participant'}</h2>
+      ${saved ? '' : `<p class="secondary">This install is in Legacy scoped transport mode, which serves only chats enrolled for that older transport, and none are enrolled. Until you choose Free participant, the Telegram tools refuse and the account hears nothing.</p>
+        <div class="actionbar"><button type="button" data-action="choose-participant" ${busy('first-step') ? 'disabled' : ''}>Choose Free participant</button></div>`}
+      ${resultLine('first-step')}<p class="hint">The mode starts after the skill is turned off and on. Outgoing actions keep their own switch under Participation.</p></section>`;
+  }
+
+  // ---- scene 1: connect ---------------------------------------------------
+  function connectScene() {
+    const bot = state.method === 'bot';
+    const d = state.drafts;
+    const loaded = !!state.setup;
+    const how = `<section class="object"><h2>How to connect</h2>
+      <div class="method-picker" role="group" aria-label="Connection type">
+        <button type="button" data-action="method" data-value="bot" ${pressed('bot', state.method)}>Telegram bot<small>Visible bot label · BotFather token</small></button>
+        <button type="button" data-action="method" data-value="account" ${pressed('account', state.method)}>Dedicated account<small>Own AI profile · phone number</small></button>
+      </div>${identity()}
+      ${bot ? `<p class="secondary">Good for private chats people open with the bot and for groups that add it. A bot can also take part on its own initiative.</p>
+        <div class="tray"><p>The bot is a separate connector, the Telegram Bot skill. Put the BotFather token into that skill's settings (<b>TELEGRAM_PUBLIC_BOT_TOKEN</b>), then connect it in Places. This widget never asks for a bot token.</p></div>`
+      : `<p class="secondary">An account created for Ouroboros. Its name and bio should say openly that it is an AI; nobody's personal account is used.</p>
+        <div class="fields">
+          <label class="field"><span>Telegram API ID</span><input data-draft="api_id" inputmode="numeric" autocomplete="off" value="${esc(d.api_id)}" ${loaded ? '' : 'disabled'}></label>
+          <label class="field"><span>API hash</span><input data-draft="api_hash" type="password" autocomplete="off" value="${esc(d.api_hash)}" ${loaded ? '' : 'disabled'}></label>
+          <label class="field"><span>Dedicated account phone</span><input data-draft="phone" type="password" autocomplete="off" placeholder="+country code…" value="${esc(d.phone)}" ${loaded ? '' : 'disabled'}></label>
+        </div>
+        <p class="hint">${!loaded && state.setupError ? `<span class="warning">${esc(state.setupError)} Check status retries this read.</span>` : 'API ID and hash come from my.telegram.org. Blank secret fields keep the saved values, which are never shown again. Saving does not log in.'}</p>
+        <div class="actionbar"><button type="button" data-action="save-setup" ${loaded && !busy('setup') ? '' : 'disabled'}>${busy('setup') ? 'Saving…' : 'Save account setup'}</button></div>${resultLine('setup')}
+        <h3 style="margin-top:20px">Log in</h3>
+        <div class="actionbar"><button type="button" data-action="code" data-value="setup/request_code" ${busy('code') ? 'disabled' : ''}>Request login code</button>
+          <button type="button" data-action="code" data-value="setup/resend_code" ${busy('code') ? 'disabled' : ''}>Resend with Telegram's next method</button></div>${resultLine('code')}
+        <div class="fields">
+          <label class="field"><span>Newest login code</span><input data-draft="code" type="password" inputmode="numeric" autocomplete="off" value="${esc(d.code)}"></label>
+          <label class="field"><span>2FA password, only if asked</span><input data-draft="password" type="password" autocomplete="off" value="${esc(d.password)}"></label>
+        </div>
+        <div class="actionbar"><button type="button" data-action="login" ${busy('login') ? 'disabled' : ''}>Submit login input</button></div>${resultLine('login')}
+        <p class="hint">The owner enters the code and 2FA password. Each button makes one request; status reads never contact Telegram. Never copy another person's session.</p>`}
+    </section>`;
+    const changes = `<section class="object"><h2>What changes for the people I talk to</h2>
+      <div class="capline"><strong>How I appear</strong><span class="secondary">${bot ? 'Telegram shows a bot label.' : 'Ordinary accounts have no AI label in Telegram, so my profile and my introduction should say I am an AI. The widget does not check the profile.'}</span></div>
+      <div class="capline"><strong>What reaches me</strong><span class="secondary">${bot ? 'Messages the bot can see. In groups this depends on privacy mode and rights; it is not a full Telegram archive. The Bot API cannot read earlier history.' : 'Supported events from the chats this account can see, minus the ones you exclude. Earlier history is read separately.'}</span></div>
+      <div class="capline"><strong>First contact</strong><span class="secondary">${bot ? 'A bot cannot start a private chat with someone who never opened one.' : 'Technically possible. It follows the participation notes and Telegram\'s anti-spam limits.'}</span></div>
+      <div class="tray">${bot ? 'Private chats with the bot reach Places as direct messages; the place\'s wakes decide whether they wake me.' : 'Connecting does not let me write on the owner\'s behalf or moderate any chat.'}</div>
+      <p class="meta">Both connectors can run side by side. Either way it is one Ouroboros with the same Places settings.</p>
+    </section>`;
+    const status = bot ? '' : `<section class="object wide"><h2>Account status</h2><p class="lines" id="status-lines" role="status">${esc(statusLines())}</p>
+      <p class="meta" id="wait-line">${esc(waitLine())}</p><div class="actionbar"><button type="button" data-action="refresh-status">Check status</button></div></section>`;
+    return `<div class="grid">${how}${changes}${status}</div>`;
+  }
+
+  // ---- scene 2: what I hear ---------------------------------------------------
+  function listedChats() {
+    const rows = (state.chats?.chats || []).map((c) => ({...c}));
+    for (const [id, title] of state.scope?.added || []) if (!rows.some((c) => c.id === id)) rows.push({id, title, kind: '', added: true});
+    return rows;
+  }
+  const receivingDraft = (id) => state.scope.mode === 'all' ? !state.scope.excluded.has(id) : state.scope.selected.has(id) && !state.scope.excluded.has(id);
+  function chatLabel(c) {
+    const parts = [c.added ? 'Not listed yet · added by ID' : KIND[c.kind] || 'Chat'];
+    if (c.members) parts.push(`${c.members} members`);
+    if (c.username) parts.push('@' + c.username);
+    return parts.join(' · ');
+  }
+  function scopeScene() {
+    if (!state.scope) return `<div class="grid"><section class="object"><h2>What the dedicated account hears</h2><p class="${state.policyError ? 'warning' : 'secondary'}">${esc(state.policyError || 'Reading receiving scope…')}</p>
+      <div class="actionbar"><button type="button" data-action="reload">Try again</button></div></section></div>`;
+    const all = state.scope.mode === 'all';
+    const rows = listedChats();
+    const receiving = rows.filter((c) => receivingDraft(c.id)).length;
+    const refresh = state.chats?.refresh || {};
+    const refreshed = refresh.pending ? 'Refresh requested; the companion reads Telegram once while it runs.'
+      : refresh.status === 'done' ? `Read from Telegram ${new Date(refresh.at).toLocaleString()} · ${refresh.count} chats${refresh.complete ? '' : ' (first 200)'}`
+      : refresh.status === 'flood_wait' ? `Telegram asked to wait ${refresh.retry_after_seconds}s before reading the chat list.`
+      : refresh.status === 'failed' ? `The last chat list read failed (${refresh.reason}).` : 'Chats appear here as messages arrive, or refresh the list from Telegram.';
+    const list = rows.length ? rows.map((c) => `<label class="check"><span class="check-text">${esc(c.title || 'Chat ' + c.id)}<small>${esc(chatLabel(c))}</small></span>
+        <input type="checkbox" data-chat="${esc(c.id)}" ${receivingDraft(c.id) ? 'checked' : ''} aria-label="Receive ${esc(c.title || c.id)}"></label>`).join('')
+      : `<p class="empty">No chats listed yet.</p>`;
+    const extra = all ? [...state.scope.excluded].filter((id) => !rows.some((c) => c.id === id)).length : [...state.scope.selected].filter((id) => !rows.some((c) => c.id === id)).length;
+    const left = `<section class="object"><h2>What the dedicated account hears</h2>
+      <div class="strip small" role="group" aria-label="Receiving scope"><button type="button" data-action="scope" data-value="all" ${pressed('all', state.scope.mode)}>All available chats</button>
+        <button type="button" data-action="scope" data-value="selected" ${pressed('selected', state.scope.mode)}>Selected chats</button></div>
+      <p class="hint">${all ? 'New chats are included too. Untick a chat to stop receiving it.' : 'A new chat is not received until you select it. This is the narrower option.'}</p>
+      ${list}
+      <div class="tray" id="scope-count">Receiving ${receiving} of ${rows.length} listed chat${rows.length === 1 ? '' : 's'}${extra ? `; ${extra} more ${all ? 'excluded' : 'selected'} by ID` : ''}.</div>
+      <div class="inline"><label class="field"><span>Add a chat by numeric ID</span><input data-draft="addPeer" inputmode="numeric" placeholder="-100… or a user ID" value="${esc(state.drafts.addPeer)}"></label>
+        <button type="button" data-action="add-peer">Add</button></div>
+      <div class="actionbar"><button type="button" data-action="save-scope" ${state.scope.dirty && !busy('scope') ? '' : 'disabled'}>${busy('scope') ? 'Saving…' : 'Save what I hear'}</button>
+        <button type="button" class="quiet" data-action="refresh-chats" ${busy('chats') || refresh.pending ? 'disabled' : ''}>Refresh chat list from Telegram</button></div>
+      ${resultLine('scope')}<p class="meta">${esc(refreshed)}</p>
+    </section>`;
+    const right = `<section class="object"><h2>Receiving is not replying to every message</h2>
+      <div class="arrowline" aria-label="What happens to a received message"><b>Received</b><span aria-hidden="true">→</span><b>Stored by the host</b><span aria-hidden="true">→</span><b>Available to attention</b></div>
+      <p class="secondary">Wake events in Places can call me at once. Everything else stays readable for later; a message does not turn into a paid reply by itself.</p>
+      <div class="tray"><strong>What about messages from before?</strong><p class="secondary">New messages and the old archive are separate. Importing earlier history is planned and not available yet; a saved plan reads nothing from Telegram. I can still read earlier messages in a chat when a conversation needs them.</p>
+        <button type="button" class="quiet" data-action="go" data-value="history">Earlier history →</button></div>
+      <p class="meta">Silent and Paused are not storage filters; not receiving a chat is set only here. Excluded chats are also never read or written.</p>
+    </section>`;
+    return `<div class="grid">${left}${right}</div>`;
+  }
+
+  // ---- scene 3: participation -------------------------------------------------
+  // The form edits a draft. Until Save, the tray describes the saved switch the companion uses.
+  const CONTROLS = ['mode', 'outgoing', 'expected_account_id', 'interval'];
+  const controlDraft = () => ({...state.policy, ...state.controls});
+  const changedControls = () => state.policy ? CONTROLS.filter((k) => String(controlDraft()[k] ?? '') !== String(state.policy[k] ?? '')) : [];
+  function paintControls() {
+    if (disposed) return;
+    const changed = changedControls();
+    const save = $('[data-action="save-controls"]'); if (save) save.disabled = !changed.length || busy('controls');
+    const note = $('#controls-unsaved'); if (note) note.hidden = !changed.some((k) => k !== 'outgoing');
+  }
+  function participationScene() {
+    const p = state.policy;
+    if (!p) return `<div class="grid"><section class="object"><h2>Participation</h2><p class="${state.policyError ? 'warning' : 'secondary'}">${esc(state.policyError || 'Reading participation controls…')}</p>
+      <div class="actionbar"><button type="button" data-action="reload">Try again</button></div></section></div>`;
+    const d = controlDraft();
+    const changed = changedControls();
+    const saved = p.outgoing === 'true', outgoing = d.outgoing === 'true';
+    const held = state.status?.participant_queue?.jobs?.held || 0;
+    const left = `<section class="object"><h2>Participation</h2>
+      <label class="check"><span class="check-text">Outgoing actions<small>Messages, reactions, joins, profile and admin changes</small></span><input type="checkbox" data-control="outgoing" ${outgoing ? 'checked' : ''}></label>
+      <div class="tray">${saved ? 'On. Every action still checks the place state and this account\'s Telegram rights first.' : 'Off. I cannot start Telegram actions; ones already queued wait as held until this is on again.'}${outgoing === saved ? '' : ` <strong>Not saved yet.</strong> Saving turns outgoing actions ${outgoing ? 'on' : 'off'}.`}</div>
+      <p class="meta" id="queue-line">${esc(queueLine())}</p><p class="meta" id="wait-line">${esc(waitLine())}</p>
+      ${held ? `<div class="actionbar"><button type="button" class="quiet" data-action="discard-held" ${busy('held') ? 'disabled' : ''}>Discard ${held} held action${held === 1 ? '' : 's'}</button></div>
+        <p class="hint">Held actions were never attempted. When the place is Active and outgoing actions are on, they run once in order.</p>` : ''}${resultLine('held')}
+      <details data-section="identity" ${state.open.has('identity') ? 'open' : ''}><summary>Identity, pacing and transport mode</summary><div class="fields">
+        <label class="field"><span>Expected account ID</span><input data-control="expected_account_id" inputmode="numeric" value="${esc(d.expected_account_id)}"><small>Optional guard against a wrong session.</small></label>
+        <label class="field"><span>Minimum seconds between actions</span><input data-control="interval" type="number" min="1" max="60" value="${esc(d.interval)}"></label>
+        <label class="field"><span>Transport mode</span><select data-control="mode"><option value="participant" ${d.mode === 'participant' ? 'selected' : ''}>Free participant</option><option value="legacy" ${d.mode === 'legacy' ? 'selected' : ''}>Legacy scoped transport</option></select><small>A changed mode starts after the skill is turned off and on.</small></label>
+      </div></details>
+      <div class="actionbar"><button type="button" data-action="save-controls" ${changed.length && !busy('controls') ? '' : 'disabled'}>${busy('controls') ? 'Saving…' : 'Save participation'}</button></div>
+      <p class="hint" id="controls-unsaved" ${changed.some((k) => k !== 'outgoing') ? '' : 'hidden'}>Changed settings are not saved yet.</p>${resultLine('controls')}
+    </section>`;
+    const right = `<section class="object"><h2>How I behave is set in Places</h2>
+      <div class="row"><div>Telegram place<span class="meta">Strictest state of this account's places</span></div><span id="place-chip">${placeChip()}</span></div>
+      <p class="secondary">Open Settings → Behavior → Consciousness → Places → Telegram. Connect the verified account and leave the conversation empty for the whole account. Active, Silent, Paused, wakes and notes live there.</p>
+      <label class="field"><span>Suggested notes for the place</span><textarea data-draft="note" class="note">${esc(state.drafts.note)}</textarea>
+        <small>Ordinary owner instructions for me. There is no separate permission system here. Paste them into the place's notes and adjust.</small></label>
+      <div class="actionbar"><button type="button" data-action="copy-note">Copy notes</button></div>${resultLine('note')}
+      <details data-section="wakes" ${state.open.has('wakes') ? 'open' : ''}><summary class="secondary">Wakes</summary><p class="meta">Suggested: direct message, mention, reply to me. Attention stays in Places and is not duplicated by this connector.</p></details>
+    </section>`;
+    return `<div class="grid">${left}${right}</div>`;
+  }
+
+  // ---- scene 4: history ------------------------------------------------------
+  const isoDay = (date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+  function planLine(plan) {
+    const spec = plan.spec || {};
+    const names = new Map((state.chats?.chats || []).map((c) => [c.id, c.title || c.id]));
+    const chats = spec.chats === 'receiving' ? 'All receiving chats' + (spec.exclude?.length ? `, ${spec.exclude.length} left out` : '')
+      : (spec.chats || []).map((id) => names.get(String(id)) || String(id)).join(', ');
+    const day = (value) => new Date(value).toLocaleDateString();
+    return `${chats} · ${day(spec.from)} – ${day(new Date(new Date(spec.to) - 1))} · up to ${spec.max_per_chat} each`;
+  }
+  function historyScene() {
+    const d = state.drafts;
+    const imports = state.imports;
+    const supported = imports?.host_supports_import;
+    const availability = !imports ? (state.importsError || 'Reading import support…')
+      : supported ? 'This Ouroboros can record imported history, but this connector version does not import yet. A saved plan never starts by itself; importing will need a connector version that supports it and your explicit start.'
+      : imports.host_checked_at ? 'Not available yet: this Ouroboros version offers no way to record imported history in conversations. You can save a plan; nothing is read from Telegram for it.'
+      : 'Not available yet: imports need Ouroboros support that has not been confirmed (the companion checks when it starts). You can save a plan; nothing is read from Telegram for it.';
+    const receivingChats = (state.chats?.chats || []).filter((c) => c.receiving);
+    const picking = d.importMode === 'chosen';
+    const choices = receivingChats.length ? receivingChats.map((c) => {
+      const set = picking ? d.importChats : d.importExclude;
+      const checked = picking ? set.has(c.id) : !set.has(c.id);
+      return `<label class="check"><span class="check-text">${esc(c.title || 'Chat ' + c.id)}<small>${esc(chatLabel(c))}</small></span>
+        <input type="checkbox" data-import-chat="${esc(c.id)}" ${checked ? 'checked' : ''} aria-label="Import ${esc(c.title || c.id)}"></label>`;
+    }).join('') : '<p class="empty">No receiving chats listed yet. Refresh the chat list on What I hear.</p>';
+    const plans = imports?.plans || [];
+    const left = `<section class="object"><h2>Import earlier history</h2>
+      <div class="tray"><p class="warning">${esc(availability)}</p></div>
+      <div class="strip small" role="group" aria-label="Chats to import"><button type="button" data-action="import-mode" data-value="receiving" ${pressed('receiving', d.importMode)}>All receiving chats</button>
+        <button type="button" data-action="import-mode" data-value="chosen" ${pressed('chosen', d.importMode)}>Chosen chats</button></div>
+      <p class="hint">${picking ? 'Tick the chats to import.' : 'Untick a chat to leave it out. Chats you do not receive are never imported.'}</p>
+      ${choices}
+      <div class="fields"><label class="field"><span>From</span><input type="date" data-draft="importFrom" value="${esc(d.importFrom)}"></label>
+        <label class="field"><span>To, inclusive</span><input type="date" data-draft="importTo" value="${esc(d.importTo)}"></label>
+        <label class="field"><span>Messages per chat, at most</span><input type="number" min="1" max="5000" data-draft="importCap" value="${esc(d.importCap)}"></label></div>
+      <div class="actionbar"><button type="button" data-action="save-import" ${busy('import') || !imports ? 'disabled' : ''}>${busy('import') ? 'Saving…' : 'Save import plan'}</button></div>${resultLine('import')}
+      ${plans.length ? `<h3 style="margin-top:20px">Saved plans</h3>${plans.map((plan) => `<div class="row"><div>${esc(planLine(plan))}<span class="meta">${plan.state === 'saved' ? 'Saved · not started' : 'Cancelled'}</span></div>
+        ${plan.state === 'saved' ? `<button type="button" class="quiet" data-action="cancel-import" data-value="${esc(plan.id)}">Cancel</button>` : ''}</div>`).join('')}` : ''}
+    </section>`;
+    const right = `<section class="object"><h2>What an import does</h2>
+      <p class="secondary">Old messages go into the conversation history with their authors and dates. They do not wake me, and nobody gets a reply to them.</p>
+      <div class="capline"><strong>Telegram bot</strong><span class="secondary">The Bot API cannot read earlier chat history. A bot only receives messages that arrive while it runs.</span></div>
+      <div class="capline"><strong>Dedicated account</strong><span class="secondary">Reads the history this account can see, newest first, within the chosen dates. Media is described, not downloaded.</span></div>
+      <div class="capline"><strong>Where to read it</strong><span class="secondary">Ouroboros versions with a Conversations view show the history the host recorded under Places → Telegram → Conversations; other versions do not have it. It is not a browser of all of Telegram.</span></div>
+    </section>`;
+    return `<div class="grid">${left}${right}</div>`;
+  }
+
+  // ---- render and actions -----------------------------------------------------
+  function render() {
+    if (disposed) return;
+    // Open sections, the focused field and its caret survive a re-render, including the status poll's.
+    for (const node of root.querySelectorAll('details[data-section]')) node.open ? state.open.add(node.dataset.section) : state.open.delete(node.dataset.section);
+    const focused = document.activeElement && root.contains(document.activeElement) ? document.activeElement : null;
+    const key = focused && (focused.dataset.draft || focused.dataset.control || focused.dataset.chat || focused.dataset.importChat);
+    let caret = null;
+    try { if (typeof focused?.selectionStart === 'number') caret = [focused.selectionStart, focused.selectionEnd]; } catch { caret = null; }
+    const strip = `<nav class="strip" aria-label="Telegram connector">${SCENES.map(([id, label]) => `<button type="button" data-action="go" data-value="${id}" ${pressed(id, state.scene)}>${label}</button>`).join('')}</nav>`;
+    const scene = {connect: connectScene, scope: scopeScene, participation: participationScene, history: historyScene}[state.scene || 'connect']();
+    root.innerHTML = `<div class="top">${strip}</div>${firstStep()}${scene}`;
+    Object.keys(state.results).forEach(paintResult);
+    const note = $('textarea[data-draft="note"]');
+    if (note) note.style.height = Math.max(232, note.scrollHeight + 2) + 'px';
+    const next = key && root.querySelector(`[data-draft="${key}"],[data-control="${key}"],[data-chat="${key}"],[data-import-chat="${key}"]`);
+    if (next) { next.focus(); if (caret) try { next.setSelectionRange(...caret); } catch { /* type without a caret */ } }
+  }
+  function setBusy(key, value) { value ? state.busy.add(key) : state.busy.delete(key); render(); }
+  function controlsBody() {
+    const draft = controlDraft();
+    return Object.fromEntries(CONTROLS.map((name) => [name, String(draft[name] ?? '')]));
+  }
+  const actions = {
+    go(value) { state.scene = value; render(); },
+    method(value) { state.method = value; render(); },
+    async reload() { await Promise.all([loadPolicy(), loadChats(), loadImports()]); render(); },
+    async 'refresh-status'() { await Promise.all([loadStatus(), state.setup ? null : loadSetup()]); render(); },
+    async 'save-setup'() {
+      const d = state.drafts; setBusy('setup', true); result('setup', 'Saving privately…');
+      try {
+        const value = await call('setup/config', {api_id: d.api_id, api_hash: d.api_hash, phone: d.phone});
+        d.api_hash = ''; d.phone = ''; result('setup', value.message);
+      } catch (error) { result('setup', error.message, true); }
+      finally { setBusy('setup', false); }
+    },
+    async code(path) {
+      setBusy('code', true); result('code', 'Submitting one request…');
+      try { result('code', (await call(path, {})).message || 'Request accepted locally; check status and Telegram.'); }
+      catch (error) { result('code', error.message, true); }
+      finally { setBusy('code', false); loadStatus(); }
+    },
+    async login() {
+      const d = state.drafts; setBusy('login', true);
+      try { const value = await call('setup/login', {code: d.code, password: d.password}); d.code = ''; d.password = ''; result('login', value.message + ' Check status for the actual login result.'); }
+      catch (error) { result('login', error.message, true); }
+      finally { setBusy('login', false); }
+    },
+    scope(value) { state.scope.mode = value; state.scope.dirty = true; render(); },
+    'add-peer'() {
+      const id = state.drafts.addPeer.trim();
+      if (!/^-?[1-9][0-9]{0,18}$/.test(id)) { result('scope', 'Enter a numeric chat or user ID, for example -1001234567890.', true); render(); return; }
+      if (!listedChats().some((c) => c.id === id)) state.scope.added.set(id, '');
+      state.scope.mode === 'all' ? state.scope.excluded.delete(id) : state.scope.selected.add(id);
+      state.scope.dirty = true; state.drafts.addPeer = ''; result('scope', ''); render();
+    },
+    async 'save-scope'() {
+      setBusy('scope', true); result('scope', 'Saving…');
+      try {
+        const value = await call('participant/policy', {scope: state.scope.mode, blocked_peers: [...state.scope.excluded].join(','), selected_peers: [...state.scope.selected].join(',')});
+        state.scope.dirty = false;
+        await Promise.all([loadPolicy(), loadChats()]);
+        result('scope', value.message);
+      } catch (error) { result('scope', error.message, true); }
+      finally { setBusy('scope', false); }
+    },
+    async 'choose-participant'() {
+      setBusy('first-step', true); result('first-step', 'Saving…');
+      try {
+        const value = await call('participant/policy', {mode: 'participant'});
+        state.firstStepSaved = true; state.policy.mode = 'participant';  // Saved as sent; the reload confirms it.
+        await loadPolicy(); savedMode = state.policy?.mode;
+        result('first-step', value.message);
+      } catch (error) { result('first-step', error.message, true); }
+      finally { setBusy('first-step', false); }
+    },
+    async 'refresh-chats'() {
+      setBusy('chats', true);
+      try { await call('participant/chats', {refresh: true}); result('scope', ''); await loadChats(); }
+      catch (error) { result('scope', error.message, true); }
+      finally { setBusy('chats', false); }
+    },
+    async 'save-controls'() {
+      const body = controlsBody(); const previous = savedMode; setBusy('controls', true); result('controls', 'Saving…');
+      try {
+        const value = await call('participant/policy', body);
+        Object.assign(state.policy, body); state.controls = {};  // Saved as sent; the reload confirms it.
+        await loadPolicy(); savedMode = state.policy?.mode;
+        if (savedMode !== 'participant') result('first-step', '');  // An earlier choice's receipt no longer holds.
+        result('controls', value.message + (body.mode !== previous ? ' The new transport mode starts after the skill is turned off and on.' : ''));
+        loadStatus();
+      } catch (error) { result('controls', error.message, true); }
+      finally { setBusy('controls', false); }
+    },
+    async 'discard-held'() {
+      setBusy('held', true);
+      try { result('held', (await call('participant/held', {action: 'discard'})).message); await loadStatus(); }
+      catch (error) { result('held', error.message, true); }
+      finally { setBusy('held', false); }
+    },
+    async 'copy-note'() {
+      try { await navigator.clipboard.writeText(state.drafts.note); result('note', 'Copied. Paste it into the Telegram place\'s notes.'); }
+      catch (error) { result('note', 'Copy is not available here; select the text and copy it.', true); }
+    },
+    'import-mode'(value) { state.drafts.importMode = value; render(); },
+    async 'save-import'() {
+      const d = state.drafts;
+      const start = d.importFrom ? new Date(d.importFrom + 'T00:00') : null;
+      const end = d.importTo ? new Date(d.importTo + 'T00:00') : null;
+      if (!start || !end || isNaN(start) || isNaN(end)) { result('import', 'Choose both dates.', true); return; }
+      end.setDate(end.getDate() + 1);
+      const body = {action: 'plan', from: start.toISOString(), to: end.toISOString(), max_per_chat: Number(d.importCap),
+        chats: d.importMode === 'chosen' ? [...d.importChats] : 'receiving', exclude: d.importMode === 'chosen' ? [] : [...d.importExclude]};
+      setBusy('import', true); result('import', 'Saving…');
+      try { result('import', (await call('participant/import', body)).message); await loadImports(); }
+      catch (error) { result('import', error.message, true); }
+      finally { setBusy('import', false); }
+    },
+    async 'cancel-import'(value) {
+      try { result('import', (await call('participant/import', {action: 'cancel', id: value})).message); await loadImports(); render(); }
+      catch (error) { result('import', error.message, true); }
+    },
+  };
+  // Module frames lack allow-forms: every action is a button handled here, never a form submit.
+  on(root, 'click', (event) => {
+    const button = event.target.closest('button[data-action]');
+    if (!button || !root.contains(button) || button.disabled) return;
+    event.preventDefault();
+    const action = actions[button.dataset.action];
+    if (action) Promise.resolve(action(button.dataset.value)).catch((error) => console.error(error));
+  });
+  on(root, 'input', (event) => {
+    const node = event.target;
+    if (node.dataset.draft) state.drafts[node.dataset.draft] = node.value;
+    if (node.dataset.control && node.type !== 'checkbox' && state.policy) { state.controls[node.dataset.control] = node.value; paintControls(); }
+  });
+  on(root, 'change', (event) => {
+    const node = event.target;
+    if (node.dataset.chat && state.scope) {
+      const id = node.dataset.chat;
+      if (state.scope.mode === 'all') node.checked ? state.scope.excluded.delete(id) : state.scope.excluded.add(id);
+      else { node.checked ? state.scope.selected.add(id) : state.scope.selected.delete(id); if (node.checked) state.scope.excluded.delete(id); }
+      state.scope.dirty = true; render();
+    } else if (node.dataset.importChat) {
+      const id = node.dataset.importChat; const d = state.drafts;
+      if (d.importMode === 'chosen') node.checked ? d.importChats.add(id) : d.importChats.delete(id);
+      else node.checked ? d.importExclude.delete(id) : d.importExclude.add(id);
+    } else if (node.dataset.control === 'outgoing' && state.policy) {
+      state.controls.outgoing = String(node.checked); render();
     }
-    if(!setupLoaded)await loadSetup();
-    await status();
   });
-  // Module frames deliberately lack allow-forms. Use the bridge from a button
-  // gesture, never native form submission (which the sandbox blocks before submit).
-  on($('[data-save-controls]'), 'click', async (event) => {
-    event.preventDefault(); const form = $('#controls'); const output = form.querySelector('[data-result]');
-    const input = {mode:form.elements.mode.value, outgoing:String(form.elements.outgoing.checked)};
-    for(const name of ['owner_id','expected_account_id','blocked_peers','interval'])input[name]=form.elements[name].value;
-    const fields = [...form.querySelectorAll('input,select,button')]; fields.forEach((el) => {el.disabled=true;});
-    tell(output, 'Saving…');
-    try {
-      const result = await call('participant/policy', input);
-      tell(output, result.message + ' A changed transport mode needs a skill off/on before it runs.');
-      await status();
-    } catch (error) { tell(output, error.message, true); }
-    finally { if (!disposed) fields.forEach((el) => {el.disabled=false;}); }
-  });
-  for (const [id,path] of [['request','setup/request_code'],['resend','setup/resend_code']]) {
-    on($('#'+id), 'click', async () => {
-      const buttons = [$('#request'),$('#resend')];buttons.forEach((button) => {button.disabled=true;});
-      tell($('#code-result'), 'Submitting one request…');
-      try { const result = await call(path, {}); tell($('#code-result'), result.message || 'Request accepted locally; check status and Telegram.'); }
-      catch (error) { tell($('#code-result'), error.message, true); }
-      finally { if (!disposed) buttons.forEach((button) => {button.disabled=false;}); }
-    });
-  }
-  on($('[data-login]'), 'click', async (event) => {
-    event.preventDefault();const form=$('#login');const output=form.querySelector('[data-result]');
-    const fields=[...form.querySelectorAll('input,button')];fields.forEach((el)=>{el.disabled=true;});
-    try {
-      const result=await call('setup/login',{code:form.elements.code.value,password:form.elements.password.value});
-      if (!disposed) { form.reset();tell(output,result.message || 'Private input staged. Check status for the actual login result.'); }
-    } catch(error) { tell(output,error.message,true); }
-    finally { if(!disposed)fields.forEach((el)=>{el.disabled=false;}); }
-  });
-  let setupLoaded=false;
-  async function loadSetup(){
-    const form=$('#setup');
-    try{
-      const value=await call('setup/config');if(disposed)return;
-      form.elements.api_id.value=value.api_id || '';setupLoaded=true;
-      form.querySelectorAll('input,button').forEach(el=>{el.disabled=false;});
-      tell(form.querySelector('[data-result]'),'Saved secrets are not returned.');
-    }catch(error){tell(form.querySelector('[data-result]'),error.message+' — Check status retries this read.',true);}
-  }
-  on($('[data-save-setup]'),'click',async(event)=>{
-    event.preventDefault();const form=$('#setup');const fields=[...form.querySelectorAll('input,button')];
-    const body={api_id:form.elements.api_id.value,api_hash:form.elements.api_hash.value,phone:form.elements.phone.value};
-    fields.forEach(el=>{el.disabled=true;});tell(form.querySelector('[data-result]'),'Saving privately…');
-    try{
-      const result=await call('setup/config',body);
-      if(!disposed){form.elements.api_hash.value='';form.elements.phone.value='';tell(form.querySelector('[data-result]'),result.message);}
-    }catch(error){tell(form.querySelector('[data-result]'),error.message,true);}
-    finally{if(!disposed)fields.forEach(el=>{el.disabled=false;});}
-  });
-  loadSetup();
-  const disposeTheme = bridge.onTheme?.((theme) => { document.documentElement.dataset.theme=theme; });
+
+  const today = new Date(); const monthAgo = new Date(today); monthAgo.setDate(today.getDate() - 30);
+  state.drafts.importFrom = isoDay(monthAgo); state.drafts.importTo = isoDay(today);
+  const statusTimer = setInterval(loadStatus, 20000); cleanups.push(() => clearInterval(statusTimer));
+  const refreshTimer = setInterval(followRefresh, 5000); cleanups.push(() => clearInterval(refreshTimer));
+  const waitTimer = setInterval(() => { const node = $('#wait-line'); if (node && !disposed) node.textContent = waitLine(); }, 1000);
+  cleanups.push(() => clearInterval(waitTimer));
+  const disposeTheme = bridge.onTheme?.((theme) => { document.documentElement.dataset.theme = theme === 'light' ? 'light' : 'dark'; });
   if (disposeTheme) cleanups.push(disposeTheme);
-  window.__ouroWidgetOnDispose?.(() => { disposed=true;active.forEach((abort)=>abort.abort());cleanups.forEach((fn)=>fn());root.replaceChildren();style.remove(); });
-  loadPolicy().catch((error)=>{
-    if(disposed)return;
-    tell($('#controls [data-result]'),error.message+' — Check status retries this read.',true);
-  });
-  status();
+  window.__ouroWidgetOnDispose?.(() => { disposed = true; active.forEach((abort) => abort.abort()); cleanups.forEach((fn) => fn()); root.replaceChildren(); style.remove(); });
+  render();
+  Promise.all([loadSetup(), loadPolicy(), loadChats(), loadImports()]).then(() => loadStatus()).then(() => render());
 })();

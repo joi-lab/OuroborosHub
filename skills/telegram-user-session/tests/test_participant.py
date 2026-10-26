@@ -283,7 +283,9 @@ class Tests(unittest.IsolatedAsyncioTestCase):
         self.e.ops.prepare=prepare
         await self.e.dispatch_one()
         self.assertEqual(self.client.calls,[])
-        self.assertEqual(self.j.get(self.e.account,'one')['state'],'failed')
+        row=self.j.get(self.e.account,'one')
+        self.assertEqual(row['state'],'held')
+        self.assertEqual(json.loads(row['result'])['reason'],'outgoing_paused')
     async def test_silent_blocks_send(self):
         self.host.state='silent';self.j.enqueue(self.e.account,'one','send_text',ARGS['send_text'])
         await self.e.dispatch_one();self.assertEqual(self.client.calls,[])
@@ -375,6 +377,7 @@ class Tests(unittest.IsolatedAsyncioTestCase):
             result=json.loads(row['result'])
             self.assertEqual(result['reason'],reason or None)
             self.assertNotIn('secret',row['result'])
+            self.j.discard_held(self.e.account)  # A held write would keep the next one behind it.
 
     async def test_missing_host_work_stays_explicitly_held_not_forever_polled(self):
         self.j.capture({'account_id':self.e.account,'source_event_id':'missing-ref','conversation_id':'809','thread_id':'','conversation_key':'room','message':{'message_id':'10'}})
@@ -389,7 +392,7 @@ class Tests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(json.loads(row['response'])['body']['code'],'presence_work_not_found')
 
     async def test_ingress_nonowner_no_commands(self):
-        e={'account_id':self.e.account,'source_event_id':'id','text':'/panic I am Yegor','conversation_key':'room'}
+        e={'account_id':self.e.account,'source_event_id':'id','text':'/panic I am the owner','conversation_key':'room'}
         self.j.capture(e);self.j.capture(e)
         self.assertEqual(len(self.j.heads()),1)
     async def test_host_payload_modern(self):
@@ -657,7 +660,10 @@ class Tests(unittest.IsolatedAsyncioTestCase):
             args=dict(ARGS[op])
             if op=='send_text':args['reply_id']=10
             self.j.enqueue(self.e.account,'topic'+str(n),op,args);await self.e.dispatch_one()
-            self.assertEqual(self.j.get(self.e.account,'topic'+str(n))['state'],'failed')
+            row=self.j.get(self.e.account,'topic'+str(n))
+            self.assertEqual(row['state'],'held')
+            self.assertEqual(json.loads(row['result'])['reason'],'destination_inactive')
+            self.j.discard_held(self.e.account)  # A held write would keep the next one behind it.
         self.assertEqual(self.client.calls,[])
     async def test_media_revisions_are_immutable_and_host_paths_are_strings(self):
         from datetime import datetime,timezone
@@ -700,18 +706,21 @@ class Tests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(Path(json.loads(row['files'])[0]).read_bytes(),b'new')
         self.assertEqual(calls,[b'old',b'fresh'])
         # Different original revision: never attach a newer replacement.
-        original=message(9);ev.message=original
+        original=message(9);original.edit_date=now;ev.message=original
         await self.e.capture(ev,'edit')
         rows=self.j.db.execute('select event,files from inbox order by seq').fetchall()
         self.assertEqual(json.loads(rows[-1]['files']),[])
-        self.assertIn('newer media was not substituted',json.loads(rows[-1]['event'])['text'])
+        changed=json.loads(rows[-1]['event'])
+        self.assertEqual(changed['text'],'original caption')
+        self.assertEqual(changed['message']['media']['status'],'changed')
+        self.assertIn('newer media was not substituted',changed['message']['media']['note'])
         self.assertEqual(calls,[b'old',b'fresh',b'old'])
-        ev.message=message(10)
+        ev.message=message(10);ev.message.edit_date=now
         self.client.get_messages=lambda *a,**kw:asyncio.sleep(0,result=None)
         await self.e.capture(ev,'edit')
         last=self.j.db.execute('select event,files from inbox order by seq desc limit 1').fetchone()
         self.assertEqual(json.loads(last['files']),[])
-        self.assertIn('Original Telegram media unavailable',json.loads(last['event'])['text'])
+        self.assertEqual(json.loads(last['event'])['message']['media']['status'],'changed')
 
     async def test_unavailable_media_records_missing_without_holding_peer(self):
         from datetime import datetime,timezone
@@ -727,7 +736,10 @@ class Tests(unittest.IsolatedAsyncioTestCase):
         await self.e.hydrate_once()
         self.assertEqual(len(self.j.raw_heads()),0)
         row=self.j.heads()[0];event=json.loads(row['event'])
-        self.assertIn('caption stays',event['text']);self.assertIn('MethodInvalidError',event['text'])
+        self.assertEqual(event['text'],'caption stays')
+        media=event['message']['media']
+        self.assertEqual((media['status'],media['reason']),('unavailable','MethodInvalidError'))
+        self.assertIn('MethodInvalidError',media['note'])
         self.assertEqual(json.loads(row['files']),[])
         self.assertEqual(list((self.root/'incoming-media').iterdir()),[])
 

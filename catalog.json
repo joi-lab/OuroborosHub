@@ -2515,7 +2515,7 @@
       "connects": [
         "Telegram"
       ],
-      "description": "Telegram bot connector for group and channel places, with typed mentions and replies, durable media delivery, and live place-state holds. Owner chat uses the built-in Telegram bridge.",
+      "description": "Telegram bot connector for Places: private chats people open with the bot, groups and channels, with typed direct-message, mention and reply facts, durable media delivery and live place-state holds. The Bot API cannot read earlier history. Owner chat uses the built-in Telegram bridge.",
       "files": [
         {
           "path": "FORMATTER_PROVENANCE.md",
@@ -2529,13 +2529,13 @@
         },
         {
           "path": "SKILL.md",
-          "sha256": "7726d3247ed1d3af1f0c3e6a131ac8a2cbdcc21aad88163fef7b0f057c80076a",
-          "size": 16694
+          "sha256": "7139fdb49e23e5f29e9b69c71cd293712ad1111fcdd25839172c46b60859d03b",
+          "size": 18703
         },
         {
           "path": "plugin.py",
-          "sha256": "a70b1807287ce7d1d0d11899ac4a081cc934d6e6ba7fd39e748cf6d3952d0eca",
-          "size": 16222
+          "sha256": "39ca9c7ab8eabe54dc70ce577d8dd790df58167f1708cc6b92790d94a69929a0",
+          "size": 16800
         },
         {
           "path": "telegram_bot/__init__.py",
@@ -2559,8 +2559,8 @@
         },
         {
           "path": "telegram_bot/events.py",
-          "sha256": "51fdd3ea1e056da00110bda540f0f1ea92fe3ada9c0e93a9d7d47fb8cba164cf",
-          "size": 12418
+          "sha256": "8e1da568091c229a7f79b0663d1ef85bb48f5133aad99e42b190609e72f52634",
+          "size": 12725
         },
         {
           "path": "telegram_bot/formatting.py",
@@ -2569,8 +2569,8 @@
         },
         {
           "path": "telegram_bot/host.py",
-          "sha256": "b9cb8ac0510298b47896e05048f14e6824dcad24f2c199c81a8be44fb8c7b52f",
-          "size": 15167
+          "sha256": "b3ffee986e9cbd581127198fb6e70384b55c1a727d6ecdd20a67bfa6138b0083",
+          "size": 15048
         },
         {
           "path": "telegram_bot/runtime.py",
@@ -2634,13 +2634,13 @@
         },
         {
           "path": "tests/test_places.py",
-          "sha256": "b311e3fefe05b9b9f7b1a7a7985b5124799a962c77e0f981530a0bc45c56411e",
-          "size": 4355
+          "sha256": "e53faf25aeca937c8deb2b62afcbda92540a7492dfeccb438af890cfa8f2833b",
+          "size": 5574
         },
         {
           "path": "tests/test_plugin.py",
-          "sha256": "36641958c641c8255ed460ccea9630517c038bc527953484b2ff9743e9af3cc9",
-          "size": 8915
+          "sha256": "58ae5e990e217cf3b32682770477ed790804ddfa9bc5f427492005a897dc1db0",
+          "size": 9976
         },
         {
           "path": "tests/test_retained_custody.py",
@@ -2662,18 +2662,18 @@
       "name": "telegram-bot",
       "slug": "telegram-bot",
       "type": "extension",
-      "version": "0.6.0"
+      "version": "0.7.0"
     },
     {
       "connects": [
         "Telegram"
       ],
-      "description": "Own Telegram user-account participant: addressed Presence, durable named MTProto operations, profile/chats/media/stickers/admin tools and an expandable account widget. Uses actual account permissions, never strangers as owner.",
+      "description": "Own Telegram user-account participant for Places: all or selected chats with exclusions, held work while a place is Silent or Paused, durable named MTProto operations (profile, chats, media, stickers, admin) and a four-tab account widget beside the separate bot connector. Uses actual account permissions, never strangers as owner.",
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "79f23866eea56e14a26da7e593d545c425a903c72b00f4e4ba9ad7aad23522e6",
-          "size": 15122
+          "sha256": "c5b12fdee11b72a89c2bcf87908227db0358a1ffceebb9b671c2f8c8931203ba",
+          "size": 25740
         },
         {
           "path": "plugin.py",
@@ -2687,8 +2687,13 @@
         },
         {
           "path": "tests/test_intake_loop.py",
-          "sha256": "4e25664aae83c67214cd4e6bb9fd6407ed7e43f7d699aa1f52d378632f727f6f",
-          "size": 4577
+          "sha256": "7e54f80792017d138a1ee873fd3bc443afa0753dc82c40a8e29f1bf3d3bdb33f",
+          "size": 6247
+        },
+        {
+          "path": "tests/test_legacy_intake.py",
+          "sha256": "cc5838ea59c49e7fce4d2b99c8de0e261e02f85a6b484dedc49e9b7db25a259f",
+          "size": 17893
         },
         {
           "path": "tests/test_legacy_policy.py",
@@ -2697,8 +2702,18 @@
         },
         {
           "path": "tests/test_participant.py",
-          "sha256": "9545865ff9564577abd69ee45b1cfc774166a74c55a66617505551874f496acf",
-          "size": 55169
+          "sha256": "89788356f49e14616b3fe7698f5ee524c32982e438049e414f0320992a97218e",
+          "size": 55944
+        },
+        {
+          "path": "tests/test_participant_delivery.py",
+          "sha256": "bdb1a3a7c8335daae40407342dc4cb451483d6ed2a239c3b9ec21c83ea13fa0c",
+          "size": 63634
+        },
+        {
+          "path": "tests/test_participant_routes.py",
+          "sha256": "e3ae48e3b06926cec3e275e9cfe50bc1ecd921cf8458bb145b05192c8893726f",
+          "size": 12516
         },
         {
           "path": "userbot/__init__.py",
@@ -2726,34 +2741,44 @@
           "size": 9744
         },
         {
+          "path": "userbot/history_import.py",
+          "sha256": "5c02473174b6d5b4eccba05b444c8f2c71a0e871a07a0facdb862c692ba95b7b",
+          "size": 6170
+        },
+        {
+          "path": "userbot/normalize.py",
+          "sha256": "abc0db1ec18a197d935d37869d6fb84a8134f7daba4145a03e156dfae3d50295",
+          "size": 7604
+        },
+        {
           "path": "userbot/participant.py",
-          "sha256": "59d9467842725199137a941c8398ca6d0d3378b89097c4e743fa33deb3e73f4b",
-          "size": 30325
+          "sha256": "5d36a343a4b7c721050326de7f12eb0b253407586c483e522efd6805c8acf6d3",
+          "size": 41802
         },
         {
           "path": "userbot/participant_ops.py",
-          "sha256": "a08ad76bf7fefa6f4cceb77dc42454907722e6532b827cbcdce88832787b4224",
-          "size": 25778
+          "sha256": "bb14b0ee81a0766abf71cb0c59dc8cf2ad5d290bf288794e31f95b881bd7181f",
+          "size": 26696
         },
         {
           "path": "userbot/participant_plugin.py",
-          "sha256": "1f9ee6f78a556e188b5d456af955dc9a9f4ce1ff12ec8e3c75df31f77a99ffae",
-          "size": 12695
+          "sha256": "156fd7628c582cdb7b21bb320bbadf4843f9085c1f9bed069c1723a310e53249",
+          "size": 22392
         },
         {
           "path": "userbot/participant_state.py",
-          "sha256": "fc83498fdcb8308214b5a75ebe12e8da158e80dfd16f54291c643aed890f5343",
-          "size": 15267
+          "sha256": "1e499dc1db88501f6aec427bb7b4935c9dd9328bbbeaf7af128fe5d6da9dfa77",
+          "size": 23768
         },
         {
           "path": "userbot/presence.py",
-          "sha256": "8a9d65d2ee35281efc25db82fb811d1e5adcbca9cf3131e87b4f4f2603d23926",
-          "size": 16200
+          "sha256": "799491ca6511d2694c956c945bb4c8b7c13a1c6ea95e205ee4cd8779d403686a",
+          "size": 17768
         },
         {
           "path": "userbot/runtime.py",
-          "sha256": "f484f3acb09bc54085a2e03d6dd0570f13afad68fa82c77592427e3d73afc316",
-          "size": 51329
+          "sha256": "f0ce0a7daf590ca50c938b94ac48815e38eb48f909b3b174a0d352fa8471cbfc",
+          "size": 56635
         },
         {
           "path": "userbot/store.py",
@@ -2772,8 +2797,8 @@
         },
         {
           "path": "widget.js",
-          "sha256": "a2c3fabc13aee3a4d0a980d0c3fde3ecd7452a76a3a8db960f9e903a5f2dba72",
-          "size": 17836
+          "sha256": "f5171e8a25e5557568446f1e36d902fabc798bc8306bb04204595b7960aceb60",
+          "size": 49854
         }
       ],
       "install_specs": [
@@ -2794,7 +2819,7 @@
       "name": "telegram-user-session",
       "slug": "telegram-user-session",
       "type": "extension",
-      "version": "0.2.3"
+      "version": "0.3.0"
     },
     {
       "description": "Token Observatory — Liquid Glass dashboard for recorded Ouroboros token usage, tasks and models.",

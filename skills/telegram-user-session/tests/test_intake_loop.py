@@ -14,11 +14,12 @@ from userbot.config import Config, save_config
 
 
 class IntakeLoopTests(unittest.IsolatedAsyncioTestCase):
-    async def check_loop(self, fail=False, hold_media=False):
+    async def check_loop(self, fail=False, hold_media=False, hold_place=False):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             save_config(root, Config(123, 'a' * 32, '+1234567890'))
             started, release, sent = asyncio.Event(), asyncio.Event(), asyncio.Event()
+            place_started = asyncio.Event()
             state = {'calls': 0, 'reports': 0, 'job': False, 'finished': False,
                      'disconnected': False}
 
@@ -34,18 +35,31 @@ class IntakeLoopTests(unittest.IsolatedAsyncioTestCase):
                 client = Client()
                 async def connect(self): pass
                 async def get_me(self): return 123
-                async def disconnect(self): state['disconnected'] = True
+                async def disconnect(self):
+                    state['disconnected'] = True
+                    state['live_at_disconnect'] = [t.get_name() for t in asyncio.all_tasks()
+                                                   if not t.done() and t.get_name().startswith('telegram-')]
 
             class Engine:
                 next_send = 0
                 def __init__(self, *args): pass
                 def current(self): pass
-                async def hydrate_once(self):
+                async def hydrate_forever(self):
                     if hold_media:
                         state['hydrations']=state.get('hydrations',0)+1
                         started.set()
                         try: await release.wait()
                         finally: state['hydration_finished']=True
+                async def stop_hydration(self): state['hydration_stopped']=True
+                async def refresh_chats(self): return False
+                async def observe_place(self):
+                    if not hold_place:
+                        return
+                    # A display-only Host place read that has not answered yet.
+                    state['place_reads'] = state.get('place_reads', 0) + 1
+                    place_started.set()
+                    try: await release.wait()
+                    finally: state['place_finished'] = True
                 async def incoming_once(self):
                     state['calls'] += 1
                     started.set()
@@ -68,6 +82,8 @@ class IntakeLoopTests(unittest.IsolatedAsyncioTestCase):
                     lambda *args: None))
                 try:
                     await asyncio.wait_for(started.wait(), 3)
+                    if hold_place:
+                        await asyncio.wait_for(place_started.wait(), 3)
                     if fail:
                         with self.assertRaisesRegex(RuntimeError, 'held intake failed'):
                             await asyncio.wait_for(task, 3)
@@ -77,23 +93,33 @@ class IntakeLoopTests(unittest.IsolatedAsyncioTestCase):
                         self.assertFalse(release.is_set(), 'tool progressed before Host replied')
                         self.assertEqual(state['calls'], 1, 'no duplicate concurrent intake')
                         self.assertGreater(state['reports'], 0)
+                        if hold_place:
+                            self.assertEqual(state['place_reads'], 1, 'one display read in flight, never stacked')
+                            self.assertNotIn('place_finished', state)
                 finally:
                     task.cancel()
                     with contextlib.suppress(asyncio.CancelledError, RuntimeError):
                         await task
                 self.assertTrue(state['finished'], 'intake cancelled/joined before shutdown')
                 self.assertTrue(state['disconnected'])
+                self.assertEqual(state['live_at_disconnect'], [], 'every worker joined before disconnect')
                 if hold_media:
                     self.assertEqual(state['hydrations'],1)
                     self.assertTrue(state['hydration_finished'])
+                if hold_place:
+                    self.assertTrue(state['place_finished'], 'display read cancelled/joined before shutdown')
+                self.assertTrue(state.get('hydration_stopped'))
                 self.assertFalse([t for t in asyncio.all_tasks()
-                    if t is not asyncio.current_task() and t.get_name() in {'telegram-host-intake','telegram-media-hydration'}])
+                    if t is not asyncio.current_task() and t.get_name().startswith(('telegram-host-intake','telegram-media-hydration','telegram-chat-list','telegram-place-display'))])
 
     async def test_tool_and_reports_progress_while_actual_serve_waits_on_host(self):
         await self.check_loop()
 
     async def test_outbound_progresses_while_media_hydration_is_held(self):
         await self.check_loop(hold_media=True)
+
+    async def test_outbound_progresses_while_display_place_read_is_held(self):
+        await self.check_loop(hold_place=True)
 
     async def test_intake_failure_propagates_and_closes_companion(self):
         await self.check_loop(fail=True)

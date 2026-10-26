@@ -56,6 +56,9 @@ SPECS = {
  "pack_install": ("write", {"short_name": S}, {"remove": B}),
  "sticker_upload": ("write", {"asset": S, "emoji": S}, {}),
 }
+# Writes acting on an existing message take its forum topic when topic_id is omitted;
+# a reply_id does the same. The queue keeps their order until preparation reads it.
+TARGET_TOPIC_OPS = frozenset({"delete", "edit", "react", "pin"})
 
 def validate(op, args):
     if op not in SPECS or type(args) is not dict:
@@ -122,8 +125,15 @@ def public_message(m):
             "reply_to_top_id": getattr(getattr(m, "reply_to", None), "reply_to_top_id", None)}
 
 class Operations:
-    def __init__(self, adapter, root):
-        self.adapter, self.client, self.root = adapter, adapter.client, Path(root)
+    def __init__(self, adapter, root, account=None):
+        self.adapter, self.client, self.root, self.account = adapter, adapter.client, Path(root), account
+
+    def in_scope(self, items):
+        """Listings omit chats outside the receiving scope, as reads of them are refused."""
+        from .participant_state import policy, receiving_refusal
+        current = policy(self.root)
+        kept = [item for item in items if receiving_refusal(current, int(item["id"]), self.account) is None]
+        return kept, len(items) - len(kept)
 
     async def message_topic(self, peer, message):
         entity = await self.client.get_entity(peer)
@@ -157,7 +167,8 @@ class Operations:
                 a['resolved_peer'] = str(utils.get_peer_id(chat))
             else:
                 from .participant_state import policy
-                if policy(self.root)['blocked_peers']:
+                current = policy(self.root)
+                if current['blocked_peers'] or current['scope'] == 'selected':
                     raise ValueError('invite identity unresolved: exclusions cannot be checked')
         guard = getattr(self, 'guard', None)
         if guard is not None:
@@ -167,8 +178,8 @@ class Operations:
             if a.get('source_peer') is not None:
                 await guard(a['resolved_source_peer'], '', False)
             if a.get('user') is not None:
-                await guard(a['resolved_user'], '', SPECS[op][0] != 'read')
-        if op in {'delete','edit','react','pin'}:
+                await guard(a['resolved_user'], '', SPECS[op][0] != 'read', person=True)
+        if op in TARGET_TOPIC_OPS:
             target = await self.client.get_messages(a['peer'],ids=a['message_id'])
             actual = getattr(target,'peer_id',None)
             if actual is None or str(utils.get_peer_id(actual)) != a['resolved_peer']:
@@ -185,7 +196,7 @@ class Operations:
             if a.get('source_peer') is not None:
                 await guard(a['resolved_source_peer'], '', False)
             if a.get('user') is not None:
-                await guard(a['resolved_user'], '', SPECS[op][0] != 'read')
+                await guard(a['resolved_user'], '', SPECS[op][0] != 'read', person=True)
         if a.get("topic_id"):
             topics = await self.adapter.topic_ids(peer_value(args["peer"]))
             if a["topic_id"] not in topics:
@@ -279,12 +290,15 @@ class Operations:
             return {'ack_type':type(r).__name__,'photo_id':str(getattr(getattr(r,'photo',None),'id',''))}
         if op == "dialogs":
             dialogs = await c.get_dialogs(limit=limit, ignore_migrated=True)
-            return {"items": [public_entity(x.entity) for x in dialogs], "complete": len(dialogs) < limit, "note": "First page only; use resolve for known peers."}
+            items, omitted = self.in_scope([public_entity(x.entity) for x in dialogs])
+            return {"items": items, "complete": len(dialogs) < limit, "omitted_outside_scope": omitted,
+                    "note": "First page only; use resolve for known peers."}
         if op == "resolve":
             return public_entity(await c.get_entity(peer))
         if op == "search":
             r = await c(F.contacts.SearchRequest(a["query"], limit))
-            return {"items": [public_entity(x) for x in [*r.chats, *r.users]], "complete": False}
+            items, omitted = self.in_scope([public_entity(x) for x in [*r.chats, *r.users]])
+            return {"items": items, "complete": False, "omitted_outside_scope": omitted}
         if op == "history":
             kw = {"limit": limit, "offset_id": a.get("offset_id", 0)}
             if a.get("topic_id"):

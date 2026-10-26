@@ -81,7 +81,7 @@ def build_event(
     account_id: int, peer_id: int, message_id: int, actor_id: int, text: str, *,
     topic_id: int | None = None, provider: str = "telegram",
     conversation: dict[str, Any] | None = None, message: dict[str, Any] | None = None,
-    event_kind: str = "new", revision: str = "",
+    event_kind: str = "new", revision: str = "", actor: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the exact Host event from numeric Telegram identities.
 
@@ -115,6 +115,8 @@ def build_event(
         raise TypeError("conversation must be an object")
     if message is not None and not isinstance(message, dict):
         raise TypeError("message must be an object")
+    if actor is not None and not isinstance(actor, dict):
+        raise TypeError("actor must be an object")
     thread = str(topic_id) if topic_id is not None else ""
     account, peer = str(account_id), str(peer_id)
     event_id = f"{provider}:{account}:{peer}:{thread or '0'}:{message_id}"
@@ -128,7 +130,8 @@ def build_event(
         "provider": provider, "account_id": account, "conversation_id": peer,
         "thread_id": thread,
         "conversation_key": f"{provider}:{account}:{peer}:{thread or '0'}",
-        "actor": {"platform_actor_id": str(actor_id)},
+        # Display facts never replace the numeric provider actor.
+        "actor": {**(actor or {}), "platform_actor_id": str(actor_id)},
         "conversation": dict(conversation or {}),
         # Provider identity cannot be replaced by untrusted auxiliary fields.
         "message": message_facts,
@@ -136,12 +139,15 @@ def build_event(
     }
 
 
+_OUTCOMES = frozenset({"message", "silent", "tool_delivered", "deferred"})
+
+
 @dataclass(frozen=True)
 class PresenceResult:
     """Host outcome, with ambiguous transport failure represented as retry."""
 
-    kind: str  # completed, pending, retry, blocked, rejected
-    outcome: str = ""  # message, silent, tool_delivered, deferred on completed turns
+    kind: str  # completed (ended work or a receipt), pending, retained, retry, blocked, rejected
+    outcome: str = ""  # message, silent, tool_delivered, deferred on ended work
     text: str = ""
     turn_ref: str = ""
     work_ref: str = ""
@@ -149,6 +155,14 @@ class PresenceResult:
     code: str = ""
     error: str = ""
     retry_after: float | None = None
+    # Ended work keeps its Host status, producer task, the selected output's identity,
+    # a separately admitted child and earlier released outputs as (output_ref, outcome,
+    # text). A failed or cancelled status does not by itself withdraw selected speech.
+    status: str = ""
+    task_id: str = ""
+    output_ref: str = ""
+    child_work_ref: str = ""
+    outputs: tuple[tuple[str, str, str], ...] = ()
 
 
 def _urllib_transport(base_url: str, *, timeout: float) -> Transport:
@@ -237,25 +251,33 @@ class PresenceClient:
             host_status = body.get("status")
             if status == 202 and host_status == "pending" and isinstance(body.get("work_ref"), str):
                 return PresenceResult("pending", work_ref=body["work_ref"])
-            if status == 200 and host_status in {"failed", "cancelled"}:
-                return PresenceResult("blocked", outcome=str(body.get("outcome") or ""),
-                                      work_ref=str(body.get("work_ref") or ""),
-                                      code="presence_work_" + host_status)
-            if status == 200 and host_status == "completed" and body.get("outcome") in {
-                "message", "silent", "tool_delivered", "deferred"
-            } and isinstance(body.get("text"), str):
+            if status == 200 and host_status in {"completed", "failed", "cancelled"}:
+                outcome, text = body.get("outcome"), body.get("text")
+                if outcome not in _OUTCOMES or not isinstance(text, str):
+                    if host_status == "completed":
+                        return PresenceResult("retry", code="protocol_invalid", error="unexpected Host success shape")
+                    outcome, text = "silent", ""  # an ended attempt without an answer
                 version = body.get("delivery_reporting_version", 0)
                 if type(version) is not int or version not in (0, 1):
                     return PresenceResult("retry", code="protocol_invalid", error="invalid delivery version")
-                return PresenceResult("completed", outcome=body["outcome"], text=body["text"],
+                released = body.get("outputs") if isinstance(body.get("outputs"), list) else []
+                return PresenceResult("completed", outcome=outcome, text=text, status=host_status,
                                       turn_ref=str(body.get("turn_ref") or ""),
                                       work_ref=str(body.get("work_ref") or ""),
+                                      task_id=str(body.get("task_id") or ""),
+                                      output_ref=str(body.get("output_ref") or ""),
+                                      child_work_ref=str(body.get("child_work_ref") or ""),
+                                      outputs=tuple(
+                                          (row["output_ref"], row["outcome"], row["text"]) for row in released
+                                          if isinstance(row, dict) and isinstance(row.get("output_ref"), str)
+                                          and row["output_ref"] and row.get("outcome") in {"message", "deferred"}
+                                          and isinstance(row.get("text"), str) and row["text"].strip()),
                                       delivery_reporting_version=version)
             if status == 200 and body.get("recorded") is True:
                 return PresenceResult("completed")
             return PresenceResult("retry", code="protocol_invalid", error="unexpected Host success shape")
         disposition = body.get("disposition")
-        if disposition in {"retry", "blocked", "rejected"} and body.get("ok") is False:
+        if disposition in {"retry", "blocked", "rejected", "retained"} and body.get("ok") is False:
             return PresenceResult(disposition, code=str(body.get("code") or ""),
                                   error=str(body.get("error") or ""),
                                   turn_ref=str(body.get("turn_ref") or ""),

@@ -8,7 +8,8 @@ The app presents this repository as two sources: **Ouroboros** contains Official
 releases and defaults to Trusted; **Ouroboros Community** contains the other releases
 and defaults to Review each. Each source has its own switch. Built-in skills ship
 with the app and use a separate source. The hub's `telegram-bot` is a public bot for
-presences; the built-in `telegram` is the owner's connection to their own Ouroboros.
+presences and `telegram-user-session` is a dedicated ordinary account for the same purpose;
+the built-in `telegram` is the owner's connection to their own Ouroboros.
 
 ## Repository format
 

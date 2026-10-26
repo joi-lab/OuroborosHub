@@ -198,8 +198,6 @@ class PresenceHostClient:
         await self.discover_delivery_support()
         if not self.places_version:
             return "Held: place policy unavailable" if self.delivery_reporting_status == "unavailable" else ""
-        if str(conversation_id).isdigit():
-            return "Held: Telegram places support groups and channels only"
         try:
             query = urllib.parse.urlencode({"provider": "telegram", "account_id": account_id,
                                             "conversation_id": conversation_id})

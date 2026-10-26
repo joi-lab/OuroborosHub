@@ -10,22 +10,34 @@ from pathlib import Path
 from .config import _private_dir, _read_json, _write_json, _config_lock
 
 DEFAULT_POLICY = {"mode": "legacy", "outgoing": False, "owner_id": "",
-                  "expected_account_id": "", "blocked_peers": [], "interval": 3}
+                  "expected_account_id": "", "blocked_peers": [], "interval": 3,
+                  "scope": "all", "selected_peers": []}
+# Policies written before receiving scope existed omit these keys: all chats, none selected.
+_ADDED_IN_0_3 = {"scope", "selected_peers"}
+
+def _checked(row):
+    """One validation for reading and saving, so a bad preimage is never written."""
+    if row["mode"] not in {"legacy", "participant"} or type(row["outgoing"]) is not bool:
+        raise ValueError("invalid mode or outgoing control")
+    if type(row["interval"]) is not int or not 1 <= row["interval"] <= 60:
+        raise ValueError("interval must be 1..60 seconds")
+    for key in ("owner_id", "expected_account_id"):
+        if not isinstance(row[key], str) or (row[key] and (not row[key].isascii() or not row[key].isdigit() or int(row[key]) <= 0)):
+            raise ValueError("numeric account ID required")
+    if row["scope"] not in {"all", "selected"}:
+        raise ValueError("receiving scope must be all or selected")
+    for key in ("blocked_peers", "selected_peers"):
+        if type(row[key]) is not list or len(row[key]) > 1000 or any(type(x) is not int or not x for x in row[key]):
+            raise ValueError("peer IDs invalid")
+    return row
 
 def policy(root):
     row = _read_json(_private_dir(root) / "participant.json")
     if row is None:
         return dict(DEFAULT_POLICY)
-    if set(row) != set(DEFAULT_POLICY) or row["mode"] not in {"legacy", "participant"}:
+    if set(row) - set(DEFAULT_POLICY) or set(DEFAULT_POLICY) - _ADDED_IN_0_3 - set(row):
         raise ValueError("participant policy invalid")
-    if type(row["outgoing"]) is not bool or type(row["interval"]) is not int or not 1 <= row["interval"] <= 60:
-        raise ValueError("participant controls invalid")
-    for k in ("owner_id", "expected_account_id"):
-        if not isinstance(row[k], str) or (row[k] and (not row[k].isascii() or not row[k].isdigit() or int(row[k]) <= 0)):
-            raise ValueError("account identity must be a numeric ID")
-    if not isinstance(row["blocked_peers"], list) or any(type(x) is not int or x == 0 for x in row["blocked_peers"]):
-        raise ValueError("blocked peers invalid")
-    return row
+    return _checked({**{k: DEFAULT_POLICY[k] for k in _ADDED_IN_0_3}, **row})
 
 def save_policy(root, values):
     root = _private_dir(root)
@@ -34,21 +46,58 @@ def save_policy(root, values):
         if set(values) - set(row):
             raise ValueError("unknown participant policy field")
         row.update(values)
-        # Validate through the same pure conditions without writing a bad preimage.
-        if row["mode"] not in {"legacy", "participant"} or type(row["outgoing"]) is not bool:
-            raise ValueError("invalid mode or outgoing control")
-        if type(row["interval"]) is not int or not 1 <= row["interval"] <= 60:
-            raise ValueError("interval must be 1..60 seconds")
-        for key in ("owner_id", "expected_account_id"):
-            if not isinstance(row[key], str) or (row[key] and (not row[key].isascii() or not row[key].isdigit() or int(row[key]) <= 0)):
-                raise ValueError("numeric account ID required")
-        if type(row["blocked_peers"]) is not list or len(row["blocked_peers"]) > 1000 or any(type(x) is not int or not x for x in row["blocked_peers"]):
-            raise ValueError("blocked peer IDs invalid")
-        _write_json(root, "participant.json", row)
+        _write_json(root, "participant.json", _checked(row))
         return row
+
+def receiving_refusal(row, peer, account=None):
+    """None when this numeric peer is inside the receiving scope, otherwise a fixed reason.
+
+    The same scope bounds what is captured, read and written. Saved Messages (the
+    account itself) stays reachable so own uploads and sticker packs keep working.
+    """
+    peer = int(peer)
+    if account is not None and peer == int(account):
+        return None
+    if peer in row["blocked_peers"]:
+        return "peer_excluded"
+    if row["scope"] == "selected" and peer not in row["selected_peers"]:
+        return "peer_not_selected"
+    return None
 
 def digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=True, separators=(",", ":")).encode()).hexdigest()
+
+def event_identity(event):
+    """The facts the Host's presence_event_identity compares, from one captured event."""
+    return [event.get("source_event_id"), event.get("account_id"), event.get("conversation_id"),
+            event.get("thread_id"), str((event.get("actor") or {}).get("platform_actor_id") or ""), event.get("text")]
+
+def predates_canonical_text(event):
+    """Captured before 0.3: text could carry staging notes and an edit revision used message bytes."""
+    return "sent_at" not in (event.get("message") or {})
+
+# Local staging outcomes that 0.2 appended to the provider text.
+_LEGACY_NOTES = ("\n[Media not staged: ", "\n[Original Telegram media unavailable: ")
+
+def legacy_text_matches(stored, text, kind):
+    """Whether a pre-0.3 capture's text says ``text``, the provider text of a message.
+
+    0.2 appended staging notes to that text, and wrote ``[Telegram service/media
+    event: <kind>]`` when it had neither text nor a staged file; ``kind`` is the
+    type name of the message's media or service action.
+    """
+    if stored == text or any(stored.startswith(text + note) for note in _LEGACY_NOTES):
+        return True
+    return not text and stored == "[Telegram service/media event: " + kind + "]"
+
+def same_source(stored, event):
+    """The same provider message: equal identity facts, or a pre-0.3 capture of the same IDs and actor.
+
+    A Telegram message ID is unique in its chat and edits get their own source ID, so
+    a pre-0.3 row under the same ID differs only by the old text composition.
+    """
+    first, later = event_identity(stored), event_identity(event)
+    return first == later or (predates_canonical_text(stored) and first[:-1] == later[:-1])
 
 def asset(root, name):
     if not isinstance(name, str) or not re.fullmatch(r"[0-9a-f]{64}\.[a-z0-9]{1,8}", name):
@@ -93,6 +142,11 @@ class Journal:
         CREATE TABLE IF NOT EXISTS raw_updates (seq INTEGER PRIMARY KEY, id TEXT UNIQUE NOT NULL,
           metadata TEXT NOT NULL, payload BLOB NOT NULL, state TEXT NOT NULL DEFAULT 'pending', due REAL NOT NULL DEFAULT 0, code TEXT NOT NULL DEFAULT '');
         CREATE TABLE IF NOT EXISTS reports (id TEXT PRIMARY KEY, body TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'pending', due REAL NOT NULL DEFAULT 0, attempts INTEGER NOT NULL DEFAULT 0, code TEXT NOT NULL DEFAULT '');
+        CREATE TABLE IF NOT EXISTS chats (account TEXT NOT NULL, peer INTEGER NOT NULL, title TEXT NOT NULL DEFAULT '',
+          kind TEXT NOT NULL DEFAULT '', username TEXT NOT NULL DEFAULT '', members INTEGER, source TEXT NOT NULL,
+          seen REAL NOT NULL, PRIMARY KEY(account,peer));
+        CREATE TABLE IF NOT EXISTS imports (id TEXT PRIMARY KEY, account TEXT NOT NULL, spec TEXT NOT NULL,
+          state TEXT NOT NULL, progress TEXT NOT NULL DEFAULT '{}', created REAL NOT NULL, updated REAL NOT NULL);
         ''')
         # Serialize inspect-and-ALTER across companion, tools and status opens.
         self.db.execute('BEGIN IMMEDIATE')
@@ -148,16 +202,64 @@ class Journal:
         held=self.db.execute('SELECT until FROM limits WHERE account=?',(str(account),)).fetchone()
         return max(0,held[0]-time.time()) if held else 0
     def claim(self, account):
+        """The next due operation; writes to one destination keep their admission order.
+
+        A held or backed-off write still comes before later writes to the same peer and
+        topic, so a follow-up never overtakes it; other destinations do not wait for it.
+        A write without topic_id that replies to or acts on a message gets that message's
+        topic only in preparation, so until then it keeps its order with every write to
+        its peer. Topic 1 is General, the same as no topic. Reads are never held and never wait.
+        """
+        from .participant_ops import SPECS, TARGET_TOPIC_OPS
         if self.flood_remaining(account): return None
+        reads = sorted(op for op, (effect, _, _) in SPECS.items() if effect == 'read')
+        targets = sorted(TARGET_TOPIC_OPS)
+        listed = ','.join('?' * len(reads))
+        inferred = ("(json_extract({0}.args,'$.topic_id') IS NULL AND (json_extract({0}.args,'$.reply_id') IS NOT NULL "
+                    "OR {0}.op IN (" + ','.join('?' * len(targets)) + ")))")
         with self.db:
             self.db.execute("BEGIN IMMEDIATE")
-            row = self.db.execute("SELECT * FROM jobs WHERE account=? AND state='queued' AND due<=? ORDER BY seq LIMIT 1", (str(account), time.time())).fetchone()
+            # A held row was never attempted; new work for an Active place goes first.
+            row = self.db.execute("SELECT * FROM jobs AS j WHERE account=? AND state IN ('queued','held') AND due<=? "
+                                  f"AND (op IN ({listed}) OR NOT EXISTS (SELECT 1 FROM jobs AS earlier WHERE earlier.account=j.account "
+                                  f"AND earlier.seq<j.seq AND earlier.state IN ('queued','held','preparing') AND earlier.op NOT IN ({listed}) "
+                                  "AND json_extract(earlier.args,'$.peer') IS json_extract(j.args,'$.peer') "
+                                  "AND (nullif(json_extract(earlier.args,'$.topic_id'),1) IS nullif(json_extract(j.args,'$.topic_id'),1) "
+                                  f"OR {inferred.format('earlier')} OR {inferred.format('j')}))) "
+                                  "ORDER BY state='held', seq LIMIT 1",
+                                  (str(account), time.time(), *reads, *reads, *targets, *targets)).fetchone()
             if row:
                 self.db.execute("UPDATE jobs SET state='preparing' WHERE seq=?", (row["seq"],))
         return dict(row) if row else None
     def set(self, seq, state, result=None, delay=0):
         with self.db:
             self.db.execute("UPDATE jobs SET state=?, result=?, due=? WHERE seq=?", (state, json.dumps(result, ensure_ascii=True), time.time()+delay, seq))
+    def hold(self, row, reason):
+        """Keep an unattempted operation for the place or local switch to reopen.
+
+        Nothing is sent while held; the same row resumes when Active and outgoing
+        allow it. A recheck backs off to one minute and keeps the first hold time.
+        """
+        previous = json.loads(row["result"]) if row.get("result") else None
+        prior = previous if row.get("state") == "held" and type(previous) is dict else {}
+        checks = int(prior.get("checks", 0)) + 1
+        self.set(row["seq"], "held", {"code": "held", "reason": reason, "checks": checks,
+                                      "held_since_unix": prior.get("held_since_unix", time.time())},
+                 min(60, 5 * 2 ** min(checks - 1, 4)))
+    def discard_held(self, account):
+        """Owner choice: held rows were never attempted, so cancelling cannot hide an effect."""
+        with self.db:
+            return self.db.execute("UPDATE jobs SET state='cancelled', result=? WHERE account=? AND state='held'",
+                                   (json.dumps({"code": "discarded_by_owner"}), str(account))).rowcount
+    def remember_chat(self, account, peer, title, kind, source, username='', members=None):
+        with self.db:
+            self.db.execute("INSERT INTO chats(account,peer,title,kind,username,members,source,seen) VALUES(?,?,?,?,?,?,?,?) "
+                            "ON CONFLICT(account,peer) DO UPDATE SET title=excluded.title, kind=excluded.kind, "
+                            "username=excluded.username, members=coalesce(excluded.members,members), "
+                            "source=CASE WHEN source='dialogs' THEN source ELSE excluded.source END, seen=excluded.seen",
+                            (str(account), int(peer), str(title or '')[:256], kind, str(username or '')[:64], members, source, time.time()))
+    def chats(self, account, limit=500):
+        return [dict(r) for r in self.db.execute("SELECT peer,title,kind,username,members,source,seen FROM chats WHERE account=? ORDER BY seen DESC LIMIT ?", (str(account), limit))]
     def capture_raw(self, key, metadata, payload):
         with self.db:
             old = self.db.execute('SELECT payload FROM raw_updates WHERE id=?',(key,)).fetchone()
@@ -187,8 +289,13 @@ class Journal:
         with self.db:
             old = self.db.execute("SELECT event FROM inbox WHERE id=?", (event["source_event_id"],)).fetchone()
             if old:
-                if old[0] != data:
+                # A later observation of the same source (a renamed sender, a reaction
+                # delivered as an edit update) keeps the first capture. Different
+                # identity facts under one source ID remain a visible conflict.
+                if old[0] != data and not same_source(json.loads(old[0]), event):
                     raise ValueError("source event identity conflict")
+                if raw_id is not None:
+                    self.db.execute("UPDATE raw_updates SET state='done' WHERE id=?",(raw_id,))
                 return
             count = self.db.execute("SELECT count(*) FROM inbox WHERE state='pending'").fetchone()[0]
             if count >= 1000:
@@ -196,6 +303,28 @@ class Journal:
             self.db.execute("INSERT INTO inbox(id,event,files) VALUES(?,?,?)", (event["source_event_id"], data, json.dumps(list(files))))
             if raw_id is not None:
                 self.db.execute("UPDATE raw_updates SET state='done' WHERE id=?",(raw_id,))
+    def legacy_edits(self, account, peer, topic, message_id, actor, edit_stamp):
+        """Pre-0.3 captures of this message by this actor at this edit time, with their raw bytes.
+
+        Bounded to the edit rows of this one message through the inbox ID index; no
+        history-wide scan. A pre-0.3 revision is ``str(edit_date) + ':' +
+        sha256(message bytes)``, so with the message IDs it names the transport key of
+        the raw update that capture was hydrated from, read by primary key. The bytes
+        are ``None`` when no raw update with exactly those bytes is retained.
+        """
+        base = f"telegram:{account}:{peer}:{topic or 0}:{message_id}:edit:"
+        found = []
+        for (raw,) in self.db.execute("SELECT event FROM inbox WHERE id >= ? AND id < ?", (base, base + "\uffff")):
+            stored = json.loads(raw)
+            revision = str((stored.get("message") or {}).get("revision") or "")
+            if not (predates_canonical_text(stored) and revision.startswith(edit_stamp + ":")
+                    and str((stored.get("actor") or {}).get("platform_actor_id") or "") == str(actor)):
+                continue
+            sha = revision[len(edit_stamp) + 1:]
+            key = digest([str(account), int(peer), int(message_id), "edit", edit_stamp, sha])
+            row = self.db.execute("SELECT payload FROM raw_updates WHERE id=?", (key,)).fetchone()
+            found.append((stored, row[0] if row and hashlib.sha256(row[0]).hexdigest() == sha else None))
+        return found
     def heads(self, account=None):
         scope = " AND CAST(json_extract(event,'$.account_id') AS TEXT)=?" if account is not None else ''
         params = (str(account),time.time()) if account is not None else (time.time(),)
