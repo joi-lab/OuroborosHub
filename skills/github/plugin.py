@@ -14,7 +14,8 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from gh_presence.config import SECRET_KEYS, connection_account, provider_http, read_config, write_config, writer_http
-from gh_presence.http import HTTP, TransportError
+from gh_presence.http import TransportError
+from gh_presence.identity import connector_identity
 from gh_presence.provider import GitHub
 from gh_presence.outbox import Outbox
 from gh_presence.store import Store, dump
@@ -42,12 +43,10 @@ def register(api):
                 value["connect"].append({"account_id": account, "conversation_id": "",
                                          "label": "Account-wide notifications"})
         writer = value["metadata"].get("auth:writer", {})
-        verified = (writer.get("state") == "valid" and writer.get("id") == config["expected_writer_id"]
-                    and writer.get("auth_mode", "pat") == config["auth_mode"])
-        if config["auth_mode"] == "app":
-            verified = verified and writer.get("app_id") == config["app_id"] and writer.get("installation_id") == config["installation_id"]
-            if writer.get("expires_at"):
-                verified = verified and datetime.fromisoformat(writer["expires_at"].replace("Z", "+00:00")) > datetime.now(timezone.utc)
+        identity = connector_identity(config, value["metadata"])
+        verified = bool(identity)
+        if value["metadata"].get("host_capabilities", {}).get("presence_identity") == 1 and identity:
+            value["identity"] = identity
         value["auth_mode"] = config["auth_mode"]
         value["text"] = "Writing as @" + writer["login"] if verified else "Writer identity unverified"
         if verified and writer.get("auth_mode") == "app":
@@ -78,7 +77,7 @@ def register(api):
             config = await asyncio.to_thread(write_config, state_dir, json.loads(value["configuration"]))
             return JSONResponse({"configuration": json.dumps(config, indent=2), "saved": True,
                                  "note": "Secrets refresh only on a controlled companion restart; place settings remain host-owned."})
-        except (ValueError, OSError) as exc:
+        except (ValueError, OSError):
             # Parser errors can include input text; never return raw exceptions.
             return JSONResponse({"code": "invalid_or_unwritable_configuration"}, status_code=400)
 

@@ -9,6 +9,7 @@ import time
 from urllib.parse import quote, urlencode
 
 from .http import TransportError
+from .identity import connector_identity
 from .store import digest, dump, now
 
 REQUIRED_HOST_VERSIONS = {"presence_main_contact_version": 1, "presence_work_output_version": 1}
@@ -53,7 +54,7 @@ class Host:
         ready = not any(missing.values())
         self.store.set_meta("host_capabilities", {**{k: value.get(k) for k in
                             tuple(REQUIRED_HOST_VERSIONS) +
-                            ("places_version", "presence_continuation_version", "presence_delivery_version")},
+                            ("places_version", "presence_continuation_version", "presence_delivery_version", "presence_identity")},
                             "ready": ready, "missing": missing, "observed_at": now()})
         if not ready:
             self.store.gap("host_capabilities", "host_capability_gap", missing)
@@ -209,6 +210,18 @@ class Host:
                         payload["staged_files"] = [str(path)]
                     db.execute("INSERT INTO meta VALUES(?,?)", (key, dump(payload)))
                 db.execute("UPDATE inbox SET state='submitting' WHERE id=?", (row["id"],))
+            # Keep the first identity snapshot with the existing dispatch view,
+            # including queued views made before identity support was available.
+            if self.store.meta("host_capabilities", {}).get("presence_identity") == 1:
+                if "identity" not in payload["event"]:
+                    identity = connector_identity(self.outbox.config, {
+                        name: self.store.meta(name, {}) for name in ("auth:writer", "auth:notifications")})
+                    if identity:
+                        payload["event"]["identity"] = identity
+                        self.store.set_meta(key, payload)
+            else:
+                # A cached modern view must still be readable by an older host.
+                payload["event"].pop("identity", None)
             try:
                 self.stage_context(payload)
             except (OSError, ValueError):

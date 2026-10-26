@@ -13,8 +13,10 @@ from starlette.responses import JSONResponse
 from .lib.client import MailClient
 from .lib.delivery import tool_origin
 from .lib.host_adapter import HostContractError, normalize_binding_id
+from .lib.facts import mailbox_identity
 from .lib.mime import reply_all_recipients
-from .lib.store import EmailStore
+from .lib.settings import SENDING_OFF, load_settings, normalize_words
+from .lib.store import EmailStore, RequestIdConflict
 
 SETTING_KEYS = ["EMAIL_IMAP_HOST", "EMAIL_IMAP_PORT", "EMAIL_SMTP_HOST", "EMAIL_SMTP_PORT",
                 "EMAIL_USER", "EMAIL_PASSWORD", "EMAIL_DEFAULT_FOLDER", "EMAIL_AUTH_MODE",
@@ -37,13 +39,7 @@ def _json_tool(handler):
 
 
 def _load(api):
-    path = Path(api.get_state_dir()) / "settings.json"
-    if not path.exists():
-        return {}
-    value = json.loads(path.read_text())
-    if not isinstance(value, dict):
-        raise ValueError("Email settings must be a JSON object")
-    return value
+    return load_settings(api.get_state_dir())
 
 
 def register(api):
@@ -62,6 +58,8 @@ def register(api):
 
     def send(ctx=None, *, to="", body="", subject="", reply_to_message_id="", references=None,
              cc=None, bcc=None, reply_all=False, html_body="", body_type="plain", attachments=None, request_id=""):
+        if _load(api).get("sending", "on") == "off":
+            return {"ok": False, "code": "sending_off", "error": SENDING_OFF}
         recipients = addresses(to)
         visible_cc = addresses(cc)
         visible_bcc = addresses(bcc)
@@ -80,14 +78,14 @@ def register(api):
             raise ValueError("to (or reply_all source) and body are required")
         rid = request_id or uuid.uuid4().hex
         mailbox = store()
-        existing = mailbox.receipt(rid) if request_id else None
-        if existing:
-            return {"ok": True, "request_id": rid, "deduplicated": True, "receipt": existing}
         staged = mailbox.stage_outbound_attachments(rid, attachments or [])
-        inserted = mailbox.enqueue_outbox(request_id=rid, to=recipients, cc=visible_cc, bcc=visible_bcc, subject=subject,
-                                          body=body, in_reply_to=reply_to_message_id, references=references or [],
-                                          attachments=staged, html_body=html_body, body_type=body_type,
-                                          reporting={"version": -1, "origin": tool_origin(ctx)})
+        try:
+            inserted = mailbox.enqueue_outbox(request_id=rid, to=recipients, cc=visible_cc, bcc=visible_bcc, subject=subject,
+                                              body=body, in_reply_to=reply_to_message_id, references=references or [],
+                                              attachments=staged, html_body=html_body, body_type=body_type,
+                                              reporting={"version": -1, "origin": tool_origin(ctx)})
+        except RequestIdConflict as exc:
+            return {"ok": False, "code": "request_id_conflict", "error": str(exc), "request_id": rid}
         return {"ok": True, "request_id": rid, "deduplicated": not inserted, "receipt": mailbox.receipt(rid)}
 
     def default_folder():
@@ -170,6 +168,14 @@ def register(api):
     async def status(_request=None):
         settings = api.get_settings(SETTING_KEYS)
         payload = store().status()
+        payload["labels"] = {"direct_message": "Mail addressed to you"}
+        current = _load(api)
+        sending = current.get("sending", "on")
+        payload["readiness"] = {"sending": sending, "text": "Sending on" if sending == "on" else SENDING_OFF}
+        account = str(settings.get("EMAIL_USER") or "").strip()
+        payload["connect"] = [{"account_id": account, "conversation_id": "", "label": account}] if account else []
+        if account and (store().get("delivery_support") or {}).get("presence_identity") == 1:
+            payload["identity"] = mailbox_identity(account)
         payload.update(binding_id_configured=bool(_load(api).get("binding_id")),
                        imap_host_configured=bool(settings.get("EMAIL_IMAP_HOST")),
                        smtp_host_configured=bool(settings.get("EMAIL_SMTP_HOST")),
@@ -188,6 +194,8 @@ def register(api):
                     "binding_id": current.get("binding_id") or "",
                     "folder": current.get("folder") or api.get_settings(["EMAIL_DEFAULT_FOLDER"]).get("EMAIL_DEFAULT_FOLDER") or "INBOX",
                     "poll_interval_sec": current.get("poll_interval_sec") or 30,
+                    "sending": current.get("sending", "on"),
+                    "words": "\n".join(current.get("words", [])),
                 })
             body = await request.json()
             if not isinstance(body, dict):
@@ -198,6 +206,12 @@ def register(api):
                 current["poll_interval_sec"] = max(5, min(3600, int(body["poll_interval_sec"])))
             if "folder" in body:
                 current["folder"] = str(body["folder"]).strip() or "INBOX"
+            if "sending" in body:
+                if body["sending"] not in ("on", "off"):
+                    raise ValueError("Sending must be on or off")
+                current["sending"] = body["sending"]
+            if "words" in body:
+                current["words"] = normalize_words(body["words"])
         except (ValueError, TypeError, HostContractError) as exc:
             return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
         state.mkdir(parents=True, exist_ok=True)
@@ -217,4 +231,7 @@ def register(api):
         {"type": "markdown", "text": "Configure granted IMAP/SMTP credentials and connect an Email place. First connection records the intake baseline; older mail remains accessible through tools."},
         {"type": "form", "route": "settings/save", "method": "POST", "submit_label": "Save email settings", "fields": [
             {"name": "folder", "label": "Intake folder", "type": "text", "placeholder": "INBOX"},
+            {"name": "sending", "label": "Sending", "type": "select", "default": "on",
+             "options": [{"value": "on", "label": "On"}, {"value": "off", "label": "Off"}]},
+            {"name": "words", "label": "Words to notice (one per line)", "type": "textarea"},
             {"name": "poll_interval_sec", "label": "Maximum idle poll interval (seconds)", "type": "number", "placeholder": "30"}]}]})

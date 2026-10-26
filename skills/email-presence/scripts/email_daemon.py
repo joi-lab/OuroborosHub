@@ -29,7 +29,7 @@ async def run():
             loop.add_signal_handler(sig, stop.set)
         except (NotImplementedError, RuntimeError):
             pass  # Host process supervision remains authoritative on Windows.
-    host = create_host_adapter(str(cfg.get("binding_id") or ""))
+    host = create_host_adapter(str(cfg.get("binding_id") or ""), words=cfg.get("words", []))
     runtime = EmailRuntime(EmailStore(state), MailClient(), host,
                            folder=cfg.get("folder") or os.environ.get("EMAIL_DEFAULT_FOLDER") or "INBOX",
                            account=os.environ.get("EMAIL_USER", ""),

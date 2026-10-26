@@ -157,6 +157,7 @@ def _status_payload() -> Dict[str, Any]:
     return {
         "runtime_state": runtime.get("runtime_state", "not_started"),
         "bot_label": runtime.get("bot_label", "not connected"),
+        **({"identity": runtime["identity"]} if "identity" in runtime else {}),
         "last_event_at": runtime.get("last_event_at", ""),
         "last_delivery_at": runtime.get("last_delivery_at", ""),
         "last_error": runtime.get("last_error", ""),

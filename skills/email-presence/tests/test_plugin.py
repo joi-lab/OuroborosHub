@@ -42,7 +42,7 @@ def _settings_app(tmp_path, settings=None):
 
 
 def test_settings_hydration_roundtrip_preserves_binding_and_allows_explicit_clear(tmp_path):
-    saved = {"binding_id": "a" * 32, "folder": "Тестовая папка", "poll_interval_sec": 75}
+    saved = {"binding_id": "a" * 32, "folder": "Тестовая папка", "poll_interval_sec": 75, "sending": "on", "words": ""}
     path = tmp_path / "settings.json"
     path.write_text(json.dumps({**saved, "EMAIL_PASSWORD": "must-not-return"}), encoding="utf-8")
     before = path.read_bytes()
@@ -65,7 +65,7 @@ def test_settings_hydration_defaults_and_blank_poll_interval(tmp_path):
     with TestClient(_settings_app(tmp_path, {"EMAIL_DEFAULT_FOLDER": "Configured", "EMAIL_PASSWORD": "hidden"})) as client:
         response = client.get("/settings/save")
         assert response.status_code == 200
-        assert response.json() == {"binding_id": "", "folder": "Configured", "poll_interval_sec": 30}
+        assert response.json() == {"binding_id": "", "folder": "Configured", "poll_interval_sec": 30, "sending": "on", "words": ""}
         assert not (tmp_path / "settings.json").exists()
         assert client.post("/settings/save", json={"poll_interval_sec": " "}).status_code == 200
         assert client.get("/settings/save").json()["poll_interval_sec"] == 30

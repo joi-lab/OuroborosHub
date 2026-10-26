@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from .delivery import email_report
 from .host_adapter import HostBindingTerminalError
 from .mime import extract_body
+from .settings import SENDING_OFF, load_settings
 
 log = logging.getLogger("email_presence")
 
@@ -88,14 +89,19 @@ class EmailRuntime:
                                                  "origin": {"kind": "automatic", "task_id": turn_ref,
                                                             "source_event_id": item.provider_event_key}})
 
+    async def discover_support(self):
+        discover = getattr(self.host, "discover_delivery_support", None)
+        mode = await discover() if discover else 0
+        self.store.put("delivery_support", {"version": mode,
+                       "status": getattr(self.host, "delivery_reporting_status", "unsupported"),
+                       "presence_identity": getattr(self.host, "presence_identity", 0)})
+
     async def process_inbox(self):
         item = self.store.claim_inbox()
         if not item:
             return False
         try:
-            discover = getattr(self.host, "discover_delivery_support", None)
-            if discover:
-                await discover()
+            await self.discover_support()
             if not self.host.available:
                 self.store.retry_inbox(item.row_id, item.lease_token, "Presence binding is not configured", 30)
                 return True
@@ -131,6 +137,9 @@ class EmailRuntime:
             return False
         sending = False
         try:
+            if load_settings(self.store.state_dir).get("sending", "on") == "off":
+                self.store.hold_outbox(item, "Held: " + SENDING_OFF)
+                return True
             message = self.client.message(item)
             reporting = dict(item.reporting)
             if reporting.get("version") == -1:
@@ -220,9 +229,7 @@ class EmailRuntime:
         return True
 
     async def run(self, stop):
-        discover = getattr(self.host, "discover_delivery_support", None)
-        mode = await discover() if discover else 0
-        self.store.put("delivery_support", {"version": mode, "status": getattr(self.host, "delivery_reporting_status", "unsupported")})
+        await self.discover_support()
         async def wait(seconds):
             try:
                 await asyncio.wait_for(stop.wait(), seconds)
