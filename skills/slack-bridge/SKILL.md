@@ -1,7 +1,7 @@
 ---
 name: slack-bridge
 description: Slack presence transport with durable delivery, directory discovery, provider updates, file transfer, message actions, and provider context.
-version: 1.7.0
+version: 1.7.2
 type: extension
 entry: plugin.py
 plugin_api: "2.0"
@@ -681,3 +681,10 @@ retry-only refusal. Existing completed delivery receipts remain unchanged.
 The existing Host-reference envelope retains the receipt and each observed
 reference. Upgrade through the normal payload review/enable lifecycle; old
 references are not reinterpreted as new submissions.
+
+## Identity (1.7.2)
+
+When `/identity` advertises `presence_identity: 1`, the status route and every
+turn event declare `identity.sends_as` with the bot's `user_id` and `user` name
+from Slack `auth.test`, and `kind: bot`. This is the credential that speaks,
+separate from the incoming message's actor. Older hosts receive no identity key.

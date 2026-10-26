@@ -6,18 +6,19 @@
     "GitHub"
   ],
   "description": "GitHub places for issues, pull requests, reviews and Discussions, with separate Notifications readers, owner questions in Main and durable reply receipts.",
-  "digest": "9c4d3bb79e9c39dbff035e95eeff09c9bb83a102632c474987a1bfefd341c892",
+  "digest": "70d9e24cbae81275774544df673e952f17212f8b78e2e63c65792411d61f22d1",
+  "icon": "ui/icon.svg",
   "install_specs": [
     "PyJWT[crypto]>=2.13,<3"
   ],
-  "name": "github-presence",
+  "name": "github",
   "owner": "ouroboros-agent",
   "schema_version": 2,
   "source": {
     "kind": "hosted",
-    "path": "skills/github-presence"
+    "path": "skills/github"
   },
   "type": "extension",
-  "version": "0.1.0",
+  "version": "0.1.3",
   "withdrawn": null
 }

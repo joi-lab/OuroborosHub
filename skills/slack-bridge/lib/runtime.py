@@ -37,6 +37,8 @@ async def _discover_reporting(host: Any, store: BridgeStore) -> int:
     store.set_runtime(
         presence_delivery_version=mode,
         presence_continuation_version=getattr(host, "continuation_version", 0),
+        presence_identity=getattr(host, "presence_identity", 0),
+        connector_identity=getattr(host, "connector_identity", {}),
         history_reporting_state=getattr(host, "delivery_reporting_status", "unsupported"),
         history_reporting_limitation="" if mode else "Host delivery reporting unavailable; provider sending remains enabled.",
     )

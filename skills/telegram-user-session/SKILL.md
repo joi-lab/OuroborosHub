@@ -28,6 +28,7 @@ companion_processes:
     runtime: python3
     restart_policy: on_failure
     max_restarts: 5
+icon: ui/icon.svg
 contributes:
   - id: place
     provides: place
@@ -36,21 +37,22 @@ contributes:
     scope: account
     wakes: [direct_message, mention, reply_to_me]
     source: {route: participant/status, refresh_s: 30}
+    icon: ui/icon.svg
 tools:
-  - {name: tg_dialogs, effect: read}
+  - {name: tg_dialogs, effect: read, target: []}
   - {name: tg_resolve, effect: read, target: peer, conversation: peer}
-  - {name: tg_search, effect: read}
+  - {name: tg_search, effect: read, target: []}
   - {name: tg_history, effect: read, target: peer, conversation: peer, thread: topic_id}
   - {name: tg_members, effect: read, target: peer, conversation: peer}
   - {name: tg_topics, effect: read, target: peer, conversation: peer}
-  - {name: tg_sticker_pack, effect: read}
-  - {name: tg_profile, effect: read}
-  - {name: tg_username_check, effect: read}
-  - {name: tg_username_set, effect: write}
-  - {name: tg_profile_update, effect: write}
-  - {name: tg_avatar_set, effect: write}
-  - {name: tg_status, effect: read}
-  - {name: tg_stage_asset, effect: write}
+  - {name: tg_sticker_pack, effect: read, target: []}
+  - {name: tg_profile, effect: read, target: []}
+  - {name: tg_username_check, effect: read, target: []}
+  - {name: tg_username_set, effect: write, target: []}
+  - {name: tg_profile_update, effect: write, target: []}
+  - {name: tg_avatar_set, effect: write, target: []}
+  - {name: tg_status, effect: read, target: []}
+  - {name: tg_stage_asset, effect: write, target: []}
   - {name: tg_send_text, effect: message, target: peer, conversation: peer, thread: topic_id}
   - {name: tg_send_media, effect: message, target: peer, conversation: peer, thread: topic_id}
   - {name: tg_send_sticker, effect: message, target: peer, conversation: peer, thread: topic_id}
@@ -60,7 +62,7 @@ tools:
   - {name: tg_react, effect: message, target: peer, conversation: peer, thread: topic_id}
   - {name: tg_join, effect: write, target: peer, conversation: peer}
   - {name: tg_leave, effect: write, target: peer, conversation: peer}
-  - {name: tg_create_chat, effect: write}
+  - {name: tg_create_chat, effect: write, target: []}
   - {name: tg_invite, effect: write, target: [peer, user], conversation: peer}
   - {name: tg_ban, effect: write, target: [peer, user], conversation: peer}
   - {name: tg_unban, effect: write, target: [peer, user], conversation: peer}
@@ -71,13 +73,13 @@ tools:
   - {name: tg_chat_title, effect: write, target: peer, conversation: peer}
   - {name: tg_topic_create, effect: write, target: peer, conversation: peer}
   - {name: tg_topic_edit, effect: write, target: peer, conversation: peer, thread: topic_id}
-  - {name: tg_pack_create, effect: write}
-  - {name: tg_pack_add, effect: write}
-  - {name: tg_pack_remove, effect: write}
-  - {name: tg_pack_move, effect: write}
-  - {name: tg_pack_rename, effect: write}
-  - {name: tg_pack_install, effect: write}
-  - {name: tg_sticker_upload, effect: write}
+  - {name: tg_pack_create, effect: write, target: []}
+  - {name: tg_pack_add, effect: write, target: []}
+  - {name: tg_pack_remove, effect: write, target: []}
+  - {name: tg_pack_move, effect: write, target: []}
+  - {name: tg_pack_rename, effect: write, target: []}
+  - {name: tg_pack_install, effect: write, target: []}
+  - {name: tg_sticker_upload, effect: write, target: []}
 ---
 # Ouroboros in Telegram
 

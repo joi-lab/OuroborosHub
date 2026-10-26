@@ -147,6 +147,14 @@ contributes:
     scope: account
     source: {route: status, refresh_s: 15}
     icon: ui/icon.svg
+    settings: transport
+    facts:
+      - any_message
+      - direct_message
+      - mention
+      - reply_to_me
+      - from_bot
+      - {id: signal.words, label: "Words you chose appear (connector setting)"}
     wakes: [direct_message, mention, reply_to_me]
 ---
 
@@ -178,12 +186,13 @@ bot account ID. On hosts advertising `places_version >= 1`, private chats,
 groups and channels are captured without a binding ID. A private chat carries
 the `direct_message` fact; the person opened that chat with the bot, and the
 bot cannot open one first (Telegram refuses it). Suggested wakes are direct
-messages, explicit mentions and replies to the bot. Typed facts come from
-Telegram entities, chat type and reply identities, not text interpretation.
-Other bots carry `from_bot`; own bot echoes are ignored. Owner identity is the
-numeric Telegram ID the owner confirms in the Places sheet; a private chat with
-this bot grants no owner authority by itself. The owner-control chat remains the
-built-in Telegram bridge with its own bot token.
+messages, explicit mentions and replies to the bot. Provider facts come from
+Telegram entities, chat type and reply identities; the optional `signal.words`
+comes from the connector's word setting. Other bots carry `from_bot`; own bot
+echoes are ignored. Owner identity is the numeric Telegram ID the owner confirms
+in the Places sheet; a private chat with this bot grants no owner authority by
+itself. The owner-control chat remains the built-in Telegram bridge with its own
+bot token.
 
 The Bot API has no method for reading earlier chat history. This connector
 receives only updates delivered while it runs (Telegram keeps undelivered
@@ -288,6 +297,40 @@ Reply context comes only from that incoming update. It does not fetch history,
 follow nested reply chains, or download the replied-to message's media. Direct
 photo/document attachments continue through the existing staging path.
 
+## Connector settings and facts (0.6.3)
+
+The place's connector settings open the Telegram section. `words` is empty by
+default; its form takes one entry per line and stores a list of plain strings.
+Surrounding whitespace and empty lines are removed. Settings apply to newly
+captured updates without a restart; queued events keep their captured facts.
+
+How I decide each event fact:
+
+- `any_message`: every supported message or edit, including media captions.
+- `direct_message`: the message or edit is in a private chat, which exists only
+  after that person opened it with the bot.
+- `mention`: a Telegram mention entity names this bot's username or user id;
+  plain text alone never manufactures a provider mention.
+- `reply_to_me`: the replied-to message's sender id is this bot's id.
+- `from_bot`: Telegram identifies the sender as a bot. Own bot echoes are ignored.
+- `signal.words`: at least one configured plain string in `words` matches a whole
+  word or phrase in the message text or caption, case-insensitively, with non-word
+  boundaries on each side. Punctuation is literal, never a pattern. The settings
+  form takes one entry per line and stores a list; an empty list reports no word
+  signal. Sender names, chat titles and replied-to text are not searched.
+  Reactions have no message text and report no word signal.
+
+The signal's manifest label is "Words you chose appear (connector setting)";
+the status payload adds nothing for it. It is sent only when the host advertises
+`presence_wake_signals: 1`. It grants no owner identity, addressed status or
+permission to speak. To notice a name in a group, add it to `words` and choose
+this signal under "What calls it here" on that place's sheet. Suggested wakes
+remain direct messages, mentions and replies. A matching event can wake a
+Silent place through ordinary intake, while Silent still holds replies and
+writes. Bot events still require the owner's `from_bot` wake choice; that
+choice itself can wake on bots.
+Every supported event is reported whether or not words match.
+
 ## Configured room and selected actions
 
 The optional `management_group_id` in the transport settings is a numeric group
@@ -375,6 +418,13 @@ remain unchanged. See `FORMATTER_PROVENANCE.md` for the included helper source.
   longer matches: those events now carry an empty thread and the Host refuses
   them (403). Re-check such bindings and use the chat-level conversation.
 - Reactions in forums stay on the chat's conversation (`:0`), not the topic.
+
+## Identity (0.6.2)
+
+When `/identity` advertises `presence_identity: 1`, the status route and every
+turn event declare `identity.sends_as` with the bot id and `@username` returned
+by Telegram `getMe`, and `kind: bot`. This is the sending credential, separate
+from the incoming message's actor. Older hosts receive no identity key.
 
 ## Upgrading to 0.7.0
 

@@ -23,7 +23,9 @@ is required. No new connector endpoint, scheduler or Main transport.
    `staged_files` (empty unless a held-context source is attached), and both
    negotiated versions set to 1. `review_requested`
    and `assigned` must be accepted as facts/wake choices by the host upgrade.
-   Manifest suggestions use existing `any_message`; Discussion is never new_issue.
+   Manifest suggestions name `new_issue`, `new_pull_request`, `mention`,
+   `my_thread`, `review_requested` and `assigned`; `any_message` stays an owner
+   choice. Discussion is never new_issue.
 3. Reply projections must retain actual `output_ref`, including retained original
    and late child outputs. `work_ref` identifies the polled work;
    `child_work_ref` exposes a late child even on terminal failure. Released
@@ -107,3 +109,12 @@ The real delivery schema's immutable key includes **state**. Reconciliation
 therefore retains an earlier `uncertain` report and later `delivered` report
 under the same physical part index. No nonnumeric part IDs or revised reports
 are sent. The local report queue uses distinct keys for those immutable states.
+
+Optional `/identity.presence_identity: 1` enables the same credential `identity`
+on the connector's status route and each `/presence/turn` event. The sending
+entry uses the verified numeric PAT user id (`user`) or App bot user id (`bot`),
+as a string matching incoming `platform_actor_id`; its login is the label. An
+unresolved App bot user has no sending declaration. A distinct verified Notifications
+reader uses its numeric user id under `reads_as`. Neither identity nor `actor.authenticated`
+is required from older hosts. GitHub's existing platform actor attestation stays
+unchanged; this connector does not add an `authenticated` actor field.

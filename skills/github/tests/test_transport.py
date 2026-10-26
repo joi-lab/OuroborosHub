@@ -166,7 +166,7 @@ class FakeHost:
 
 class Case(unittest.TestCase):
     def setUp(self):
-        self.scratch = tempfile.TemporaryDirectory(prefix="github-presence-test-")
+        self.scratch = tempfile.TemporaryDirectory(prefix="github-test-")
         self.store = Store(self.scratch.name)
         self.provider = FakeProvider()
         self.outbox = Outbox(self.store, CONFIG)

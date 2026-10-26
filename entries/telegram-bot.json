@@ -5,8 +5,8 @@
   "connects": [
     "Telegram"
   ],
-  "description": "Telegram bot connector for Places: private chats people open with the bot, groups and channels, with typed direct-message, mention and reply facts, durable media delivery and live place-state holds. The Bot API cannot read earlier history. Owner chat uses the built-in Telegram bridge.",
-  "digest": "db02e701d39347c682f32fad4a6d88ab41a71884450ecb745e2b4546879fd6d7",
+  "description": "Telegram bot connector for Places: private chats people open with the bot, groups and channels, with typed direct-message, mention and reply facts, optional literal word signals, durable media delivery and live place-state holds. The Bot API cannot read earlier history. Owner chat uses the built-in Telegram bridge.",
+  "digest": "f335d70e5410f46868c9c47be9acb501a6695eacce9bb186861cc0c99f9bf366",
   "icon": "ui/icon.svg",
   "name": "telegram-bot",
   "owner": "ouroboros-agent",

@@ -1,7 +1,7 @@
 ---
-name: github-presence
+name: github
 description: Observe connected GitHub issues, pull requests and Discussions, and deliver authorized replies or explained issue closures with durable receipts.
-version: 0.1.0
+version: 0.1.3
 type: extension
 entry: plugin.py
 plugin_api: "2.0"
@@ -9,6 +9,7 @@ runtime: python3
 os: [darwin, linux, windows]
 dependencies: ["PyJWT[crypto]>=2.13,<3"]
 permissions: [net, read_settings, widget, route, tool, companion_process, presence]
+conflicts: [github-presence]
 env_from_settings: [GITHUB_PRESENCE_WRITER_TOKEN, GITHUB_PRESENCE_NOTIFICATIONS_TOKEN, GITHUB_PRESENCE_APP_PRIVATE_KEY]
 companion_processes:
   - name: github_poller
@@ -30,19 +31,21 @@ tools:
   - name: github_place_status
     effect: read
     target: [account_id, conversation_id]
+icon: ui/icon.svg
 contributes:
   - id: place
     provides: place
     label: GitHub
     destination: vendor:GitHub
     scope: account
-    wakes: [any_message]
+    icon: ui/icon.svg
+    wakes: [new_issue, new_pull_request, mention, my_thread, review_requested, assigned]
     source: {route: status, refresh_s: 15}
     settings: github
     read_only: provider
 ---
 
-# GitHub Presence
+# GitHub
 
 Use this transport for connected GitHub conversations. Read [SETUP.md](SETUP.md)
 for connection, supported capabilities and qualification limits, and
@@ -104,3 +107,15 @@ The host alone selects wakes and the model. All supported observed events,
 including bots, go to the host with honest facts. `mention` is a documented
 syntactic approximation, not GitHub's notification reason. Absence of a poll
 event is not evidence that nothing happened between polls.
+
+## Credential identity (0.1.3)
+
+On hosts advertising `presence_identity: 1`, status and turn events declare
+`identity.sends_as`: a verified PAT user (`kind: user`), or the verified App bot
+user (`kind: bot`). Each `id` is the numeric user id as a string, matching incoming
+actors' `platform_actor_id`; the login stays the `label`, including `[bot]` for
+an App. An App without a resolved, verified bot user has no `sends_as` declaration.
+`reads_as` names the Notifications token's verified user in the same id namespace
+when it differs from the writer. Unverified credentials are not declared.
+The first dispatch keeps the identity snapshot with its existing saved payload;
+retries to older hosts omit the key. Status uses current verification records.

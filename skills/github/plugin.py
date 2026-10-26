@@ -14,7 +14,8 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from gh_presence.config import SECRET_KEYS, connection_account, provider_http, read_config, write_config, writer_http
-from gh_presence.http import HTTP, TransportError
+from gh_presence.http import TransportError
+from gh_presence.identity import connector_identity
 from gh_presence.provider import GitHub
 from gh_presence.outbox import Outbox
 from gh_presence.store import Store, dump
@@ -32,19 +33,20 @@ def register(api):
             store.close()
         value["enabled"] = config["enabled"]
         value["host_contract_ready"] = value["metadata"].get("host_capabilities", {}).get("ready", False)
-        value["account_id"] = connection_account(config) if config["expected_writer_id"] else None
-        value["connect"] = [{"account_id": value["account_id"], "conversation_id": "repo." + str(r["id"]),
-                             "label": r["full_name"]} for r in config["repositories"]]
-        if value["account_id"] and (config["writer_notifications"] or config["notifications_user_id"]):
-            value["connect"].append({"account_id": value["account_id"], "conversation_id": "",
-                                     "label": "Public notification discovery (choose Silent)"})
+        value["account_id"] = account = connection_account(config) if config["expected_writer_id"] else None
+        # Connect rows name a real account; until the writer is configured nothing is offered yet.
+        value["connect"] = []
+        if isinstance(account, str) and account:
+            value["connect"] = [{"account_id": account, "conversation_id": "repo." + str(r["id"]),
+                                 "label": r["full_name"]} for r in config["repositories"]]
+            if config["writer_notifications"] or config["notifications_user_id"]:
+                value["connect"].append({"account_id": account, "conversation_id": "",
+                                         "label": "Account-wide notifications"})
         writer = value["metadata"].get("auth:writer", {})
-        verified = (writer.get("state") == "valid" and writer.get("id") == config["expected_writer_id"]
-                    and writer.get("auth_mode", "pat") == config["auth_mode"])
-        if config["auth_mode"] == "app":
-            verified = verified and writer.get("app_id") == config["app_id"] and writer.get("installation_id") == config["installation_id"]
-            if writer.get("expires_at"):
-                verified = verified and datetime.fromisoformat(writer["expires_at"].replace("Z", "+00:00")) > datetime.now(timezone.utc)
+        identity = connector_identity(config, value["metadata"])
+        verified = bool(identity)
+        if value["metadata"].get("host_capabilities", {}).get("presence_identity") == 1 and identity:
+            value["identity"] = identity
         value["auth_mode"] = config["auth_mode"]
         value["text"] = "Writing as @" + writer["login"] if verified else "Writer identity unverified"
         if verified and writer.get("auth_mode") == "app":
@@ -75,7 +77,7 @@ def register(api):
             config = await asyncio.to_thread(write_config, state_dir, json.loads(value["configuration"]))
             return JSONResponse({"configuration": json.dumps(config, indent=2), "saved": True,
                                  "note": "Secrets refresh only on a controlled companion restart; place settings remain host-owned."})
-        except (ValueError, OSError) as exc:
+        except (ValueError, OSError):
             # Parser errors can include input text; never return raw exceptions.
             return JSONResponse({"code": "invalid_or_unwritable_configuration"}, status_code=400)
 
@@ -164,14 +166,14 @@ def register(api):
     api.register_route("status", handler=status, methods=("GET",))
     api.register_route("settings", handler=settings, methods=("GET", "POST"))
     api.register_route("probe", handler=probe, methods=("POST",))
-    api.register_settings_section("github", title="GitHub Presence", schema={"components": [
-        {"type": "markdown", "text": "Configure a PAT writer or an App installation and explicit repository IDs; see SETUP.md. App mode verifies the App bot's numeric writer ID and mints expiring tokens. Notifications require separate classic PAT credentials. Start disabled, verify identities, connect in Places and choose Silent, then enable collection. For public notification discovery, use a Silent account-wide place with any_message. Private IDs require explicit selection. Credentials belong in Settings → Secrets. Windows and live App/GHES operation still require native qualification."},
+    api.register_settings_section("github", title="GitHub", schema={"components": [
+        {"type": "markdown", "text": "Configure a PAT writer or an App installation and explicit repository IDs; see SETUP.md. App mode verifies the App bot's numeric writer ID and mints expiring tokens. Notifications require separate classic PAT credentials. Start with collection disabled, verify identities, then connect each repository in Places. New places start Silent (on an older host, set them Silent); keep them Silent for the first trial. For public notifications outside the selected repositories, connect Account-wide notifications and add every message to that place's attention list. Private IDs require explicit selection. Credentials belong in Settings → Secrets. Windows and live App/GHES operation still require native qualification."},
         {"type": "form", "route": "settings", "method": "POST", "fields": [
             {"name": "configuration", "label": "Configuration JSON", "type": "textarea"}], "submit_label": "Save configuration"},
         {"type": "action", "route": "probe", "method": "POST", "label": "Verify identities and repositories", "target": "probe"},
         {"type": "json", "target": "probe"},
     ]})
-    api.register_ui_tab("status", title="GitHub Presence", render={"kind": "declarative", "schema_version": 1, "components": [
+    api.register_ui_tab("status", title="GitHub", render={"kind": "declarative", "schema_version": 1, "components": [
         {"type": "poll", "route": "status", "interval_ms": 15000, "target": "status"},
         {"type": "json", "target": "status"},
     ]})

@@ -5,7 +5,7 @@ import time
 import threading
 import contextlib
 from datetime import datetime
-from urllib.parse import quote, urlencode
+from urllib.parse import quote
 
 from .http import Effect, TransportError, classify, next_link, retry_at
 from .store import digest, dump, now
@@ -153,12 +153,17 @@ class GitHub:
                 raise
             self.store.set_meta("auth:" + self.credential_name,
                                 {"state": "valid", "auth_mode": "app", "id": user["id"], "login": user["login"],
-                                 "app_id": auth.app_id, "installation_id": auth.installation_id,
+                                 "app_id": auth.app_id, "installation_id": auth.installation_id, "slug": auth.slug,
                                  "expires_at": auth.expires_at, "permissions": auth.permissions, "checked_at": now()})
             return user
-        user = self.get("/user").data
-        if user.get("id") != expected:
-            raise TransportError("credential_identity_mismatch")
+        try:
+            user = self.get("/user").data
+            if user.get("id") != expected:
+                raise TransportError("credential_identity_mismatch")
+        except TransportError:
+            self.store.set_meta("auth:" + self.credential_name,
+                                {"state": "invalid", "auth_mode": "pat", "checked_at": now()})
+            raise
         self.store.set_meta("auth:" + self.credential_name,
                             {"state": "valid", "auth_mode": "pat", "id": user["id"], "login": user.get("login"),
                              "expires_at": "unknown", "checked_at": now()})

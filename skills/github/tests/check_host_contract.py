@@ -31,7 +31,7 @@ def main():
     payload = Path(__file__).resolve().parents[1]
     original_cwd = Path.cwd()
     copied = {}
-    with tempfile.TemporaryDirectory(prefix="github-presence-host-check-") as scratch:
+    with tempfile.TemporaryDirectory(prefix="github-host-check-") as scratch:
         root = Path(scratch)
         for folder in ("home", "data", "repo", "state", "tmp"):
             (root / folder).mkdir()
@@ -91,7 +91,7 @@ def main():
                     settings_reader=lambda: {}, drive_root=root / "data", skill_dir=payload,
                     companion_processes=manifest.companion_processes, plugin_api_generation="2.0")
             api = PluginAPIImpl(config)
-            spec = importlib.util.spec_from_file_location("github_presence_candidate", payload / "plugin.py")
+            spec = importlib.util.spec_from_file_location("github_candidate", payload / "plugin.py")
             plugin = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(plugin)
             plugin.register(api)
@@ -104,15 +104,15 @@ def main():
             assert registrations.companion_names == ["github_poller"]
             assert not registrations.companion_spawns  # catalog only, never enabled
             from starlette.requests import Request
-            status_handler = registrations.routes["/api/extensions/github-presence/status"]["handler"]
+            status_handler = registrations.routes["/api/extensions/github/status"]["handler"]
             async def inspect_status():
                 response = await status_handler(Request({"type": "http", "method": "GET", "path": "/status", "query_string": b"", "headers": []}))
                 assert response.status_code == 200, response.body
                 assert not (root / "state/transport.sqlite3").exists(), "status created a database"
             asyncio.run(inspect_status())
             for item in contributions:
-                assert "/api/extensions/github-presence/" + item["source"]["route"] in registrations.routes
-                assert "github-presence:" + item["settings"] in registrations.settings_sections
+                assert "/api/extensions/github/" + item["source"]["route"] in registrations.routes
+                assert "github:" + item["settings"] in registrations.settings_sections
             receipt = {"schema_version": 1, "delivery_id": "tool:fixture", "part_id": "0", "state": "delivered",
                        "provider": "github", "account_id": "fixture-account", "conversation_id": "repo.321", "thread_id": "issue.1",
                        "text": "synthetic reply", "format": "markdown", "message": {"provider_id": 701},
@@ -138,7 +138,7 @@ def main():
                 reports = [validate_delivery(json.loads(r["value"])) for r in case.store.rows("SELECT value FROM reports")]
                 assert {r["state"] for r in reports} == {"uncertain", "delivered"}
                 from ouroboros.presence_delivery import _key
-                assert len({_key("github-presence", r) for r in reports}) == 2
+                assert len({_key("github", r) for r in reports}) == 2
                 # Exact source-backed discovery, through the real place resolver.
                 # These are temporary synthetic Places, never the host's Places.
                 from test_repairs import DiscoveryTests
@@ -151,14 +151,14 @@ def main():
                 from ouroboros.places import connect_place, edit_place, load_places, wake_matches
                 address = {k: discovery[k] for k in ("provider", "account_id", "conversation_id", "thread_id")}
                 def admit():
-                    return admit_presence_turn(drive_root=root / "data", authenticated_transport_skill="github-presence", **address)
+                    return admit_presence_turn(drive_root=root / "data", authenticated_transport_skill="github", **address)
                 try:
                     admit()
                 except PresenceAdmissionError as exc:
                     assert exc.code == "place_not_connected"
                 else:
                     raise AssertionError("unconnected discovery was admitted")
-                place = connect_place(root / "data", connector="github-presence", provider="github",
+                place = connect_place(root / "data", connector="github", provider="github",
                                       account_id=discovery["account_id"], conversation_id="", wakes=["any_message"])
                 edit_place(root / "data", place.place_id, "set_state", author="owner", state="silent")
                 admitted = admit()
@@ -182,7 +182,7 @@ def main():
             source_event = {"source_event_id": "fixture-event", "conversation_key": "github:fixture-account:repo.321:issue.1", "conversation": {}}
             patch_document(root / "data", "fixture-work", lambda _: stamp_task_result_schema({
                 "task_id": "fixture-work", "status": "completed", "output_ref": "retained-output",
-                "metadata": {"presence": {"binding_id": "fixture-binding", "transport_skill": "github-presence", "event": source_event}}}))
+                "metadata": {"presence": {"binding_id": "fixture-binding", "transport_skill": "github", "event": source_event}}}))
             assert record_transport_queue(root / "data", "fixture-work", "fixture-binding", queue_observation)["status"] == "recorded"
             assert record_transport_queue(root / "data", "fixture-work", "fixture-binding", queue_observation)["status"] == "duplicate"
             observed = transport_queue_observation(root / "data", "fixture-work", SimpleNamespace(**source_event))

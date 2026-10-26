@@ -1,7 +1,7 @@
 ---
 name: email-presence
 description: Bidirectional email Presence transport with IMAP polling, durable delivery, and RFC 5322 reply threading.
-version: 0.5.0
+version: 0.7.0
 type: extension
 entry: plugin.py
 plugin_api: "2.0"
@@ -28,9 +28,13 @@ tools:
     target: []
     description: Search old and new mailbox messages using IMAP criteria.
   - name: email_read
+    effect: read
+    target: []
+    description: Read a message by stable UID and UIDVALIDITY without changing its flags.
+  - name: email_mark_read
     effect: write
     target: []
-    description: Read a message by stable UID and UIDVALIDITY.
+    description: Mark one message read by stable UID and UIDVALIDITY.
   - name: email_mailbox
     effect: write
     target: []
@@ -57,7 +61,13 @@ contributes:
     scope: account
     source: {route: status, refresh_s: 15}
     icon: ui/icon.svg
-    wakes: [any_message]
+    settings: email_presence
+    facts:
+      - any_message
+      - direct_message
+      - from_bot
+      - {id: signal.words, label: "Words you chose appear (connector setting)"}
+    wakes: []
 ---
 
 # Email Presence
@@ -67,8 +77,8 @@ Email place. Incoming messages are persisted before they are submitted to
 the loopback Presence endpoint. Replies use `Message-ID`, `In-Reply-To`, and
 `References` so normal mail clients keep one conversation thread.
 
-The transport carries provider facts only. Identity, memory, behavior, and
-capabilities are selected by the host place. The companion keeps its
+The transport declares the mailbox identity and observed mail facts. Memory,
+behavior and attention are selected by the host place. The companion keeps its
 SQLite inbox/outbox and cursor in the skill state directory, survives restarts,
 and retries transient provider or Host failures with bounded backoff.
 
@@ -85,7 +95,8 @@ and retries transient provider or Host failures with bounded backoff.
    The skill does not start login, create accounts or configure domain delegation.
    A service-account JSON by itself is not a mailbox credential for this skill.
 3. Connect an Email place with provider `email` and account `EMAIL_USER`.
-   Choose wakes and notes in Places. Enable the skill after grants and review.
+   No mail wakes immediately by default: arrivals remain available for the scheduled
+   own wake. Choose immediate wakes and notes per place. Enable the skill after grants and review.
 4. The first successful connection records UIDNEXT as the activation baseline;
    only subsequent arrivals enter Presence. Existing mail remains fully reachable
    through `email_search` and `email_read`. Disabling/re-enabling preserves the
@@ -93,19 +104,23 @@ and retries transient provider or Host failures with bounded backoff.
 
 ## Mailbox tools and transport behavior
 
-- All seven tools return JSON text, preserving structured values across the host
+- All eight tools return JSON text, preserving structured values across the host
   process boundary. A missing `email_receipt` is JSON `null`; delivery errors
   retain their ordinary error path rather than becoming successful receipts.
 - `email_search` accepts ordinary IMAP search tokens (ALL, UNSEEN, FROM, SUBJECT,
   SINCE, HEADER) and returns UID/UIDVALIDITY, which `email_read` uses to address
   the same message even if other messages disappear. Mailbox tools do not submit
   historical mail to Presence or alter the automatic intake cursor.
+- `email_read` only peeks: it opens the folder read-only and fetches `BODY.PEEK[]`,
+  so no flag changes. `email_mark_read` is the separate write that adds `\Seen`.
 - `email_mailbox` lists/creates folders, copies/moves individual messages and
   adds/removes flags. Archive by moving to the desired folder. UID MOVE needs
   server support; the skill never substitutes a mailbox-wide expunge.
 - `email_draft` saves a text draft in a selected mailbox folder without sending.
 - `email_send` queues text and supports reply headers. Supply a stable request_id
-  when retrying the same logical send; `email_receipt` reports its actual state.
+  when retrying the same logical send; the same payload returns the original
+  receipt, while a changed recipient, body, subject, reply header or attachment
+  returns `request_id_conflict`. `email_receipt` reports its actual state.
 - IMAP intake persists messages before cursor advancement. UIDVALIDITY changes
   rescan from the original activation date and deduplicate by Message-ID.
 - The companion backs off from 5 seconds to the configured idle interval.
@@ -209,13 +224,57 @@ References: [Gmail XOAUTH2](https://developers.google.com/workspace/gmail/imap/x
 ## Place protocol
 
 Hosts advertising `places_version >= 1` receive every captured email with
-`facts: [any_message]`, without a binding ID. Older hosts receive the saved
+observed `facts`, without a binding ID. Older hosts receive the saved
 legacy binding and event shape. Existing Message-IDs, UIDVALIDITY epochs,
 staged attachments, work references and delivery reports are preserved.
 The SMTP worker re-reads the place immediately before sending. Silent/Paused
 or an unavailable lookup holds the same queue item with a visible reason;
 Active resumes it without spending the retry budget on policy holds.
 
-Mixed tools (`email_read` can mark mail as read, and `email_mailbox` can mutate)
-are declared write. Sending is message; search, receipts and connection checks
-are declared read. To/Cc/Bcc are all destination arguments.
+`email_read` is declared read, so a Silent or Advises place can read mail;
+`email_mark_read` and the mixed `email_mailbox` (it can mutate) are declared
+write. Sending is message; search, receipts and connection checks are declared
+read. To/Cc/Bcc are all destination arguments.
+
+## Mailbox identity, settings and facts
+
+On hosts advertising `presence_identity: 1`, the status route and every event
+declare `identity.sends_as` and `identity.reads_as[0]` as
+`{id: EMAIL_USER, label: EMAIL_USER, kind: user}`. The host's owner-account
+confirmation determines whether that mailbox is the human's own account.
+Every such event declares `actor.authenticated: false`: a sender-controlled
+`From:` header is not proof. A follow-up will verify the sender using the
+receiving server's trusted `Authentication-Results` (DKIM/SPF/DMARC) before
+reporting `true`. Older hosts receive neither new key.
+
+In the connector settings, `sending` is `on` by default. `off` makes
+`email_send` refuse with `sending_off`: "Sending is off for this mailbox in its
+connector settings; reading, drafts and tidying keep working". Reads,
+`email_draft`, `email_mark_read` and `email_mailbox` still work. The SMTP worker
+also holds queued and automatic replies until sending is on; the status route
+shows this switch under `readiness`. This setting applies immediately.
+
+How I decide each event fact:
+
+- `any_message`: every captured arrival, regardless of sender, text or place state.
+- `direct_message` (Mail addressed to you): the mailbox address is in To or Cc,
+  case-insensitively, and there is no `List-Id`, `List-Unsubscribe` or
+  `Precedence: bulk|list|junk`. Bcc-only delivery does not imply this fact.
+- `from_bot`: `Auto-Submitted` is present and is not `no`, `Precedence` is
+  bulk/list/junk, or the sender local part is `noreply` / `donotreply`, optionally
+  separated with hyphens, underscores or dots and optionally followed by a `+` tag.
+- `signal.words`: at least one configured plain string in `words` matches a whole
+  word or phrase in subject or decoded body, case-insensitively, with non-word
+  boundaries on each side. Punctuation is literal, never a pattern. The full
+  retained body is used when the displayed excerpt is clipped. The settings form
+  takes one entry per line and stores a list; an empty list reports no word signal.
+  Restart the companion after editing words. This signal is sent only when the
+  host advertises `presence_wake_signals: 1`.
+
+The manifest declares the plain core kind `direct_message`: older hosts reject
+a label on a core kind in the manifest and drop the whole place declaration.
+The status route the owner's browser fetches for readiness always includes
+`labels: {"direct_message": "Mail addressed to you"}`. This needs no capability
+gate; older browsers ignore unknown status keys.
+No signature, footer, delegate line or `Auto-Submitted` header is appended: each
+reply is a judged, paid turn under the allowance, with no machine marker to break loops.

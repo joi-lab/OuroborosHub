@@ -14,6 +14,7 @@ from urllib.parse import quote, urlsplit
 import httpx
 
 from .store import InboxItem
+from .facts import email_facts, mailbox_identity
 
 _OUTCOMES = frozenset({"message", "silent", "tool_delivered", "deferred"})
 _DISPOSITIONS = frozenset({"retained", "rejected", "blocked", "retry"})
@@ -55,7 +56,8 @@ def normalize_binding_id(value: Any) -> str:
         raise HostContractError("binding_id must be 32 lowercase hexadecimal characters")
     return value
 
-def email_presence_event(item: InboxItem, *, account_id: str, places: bool = False) -> dict[str, Any]:
+def email_presence_event(item: InboxItem, *, account_id: str, places: bool = False,
+                         identity: bool = False, words=()) -> dict[str, Any]:
     return {
         "source_event_id": item.provider_event_key,
         "provider": "email",
@@ -64,7 +66,8 @@ def email_presence_event(item: InboxItem, *, account_id: str, places: bool = Fal
         "thread_id": item.thread_key,
         "conversation_key": f"email:{item.thread_key}",
         "actor": {"platform": "email", "platform_actor_id": item.sender,
-                  "display_name": item.context.get("sender_name", "")},
+                  "display_name": item.context.get("sender_name", ""),
+                  **({"authenticated": False} if identity else {})},
         "conversation": {"platform": "email", "mailbox": str(account_id or "").strip(), "thread_id": item.thread_key},
         "message": {"message_id": item.message_id, "in_reply_to": item.in_reply_to,
                     "references": list(item.references), "imap_uid": item.uid,
@@ -72,7 +75,8 @@ def email_presence_event(item: InboxItem, *, account_id: str, places: bool = Fal
                     "subject": item.subject, "to": list(item.recipients),
                     **item.context},
         "text": f"Subject: {item.subject}\n\n{item.body}",
-        **({"facts": ["any_message"]} if places else {}),
+        **({"facts": email_facts(item, account_id, words)} if places else {}),
+        **({"identity": mailbox_identity(account_id)} if identity else {}),
     }
 
 def _ref(kind: str, payload: Mapping[str, Any]) -> str:
@@ -119,7 +123,7 @@ class _SkillToken:
 
 class LoopbackPresenceHostAdapter:
     def __init__(self, binding_id: str, *, host_service_url: str, skill_token: str, http_client: httpx.AsyncClient | None = None,
-                 place_http_client: httpx.Client | None = None):
+                 place_http_client: httpx.Client | None = None, words=()):
         self.binding_id = normalize_binding_id(binding_id) if str(binding_id or "").strip() else ""
         self.host_service_url = host_service_url.rstrip("/")
         if not _loopback(self.host_service_url): raise HostContractError("HOST_SERVICE_URL must be an HTTP loopback URL")
@@ -128,11 +132,16 @@ class LoopbackPresenceHostAdapter:
         self.delivery_reporting_status = "unknown"
         self.delivery_reporting_version = 0
         self.places_version = 0
+        self.presence_identity = 0
+        self.presence_wake_signals = 0
+        self.words = words
         self._place_http = place_http_client
 
     def _identity(self, payload):
         version = payload.get("places_version")
         self.places_version = int(type(version) is int and version >= 1)
+        self.presence_identity = int(payload.get("presence_identity") == 1)
+        self.presence_wake_signals = int(payload.get("presence_wake_signals") == 1)
         self.available = bool(self._token._value and (self.binding_id or self.places_version))
         self.delivery_reporting_version = int(payload.get("presence_delivery_version") == 1)
         self.delivery_reporting_status = "supported" if self.delivery_reporting_version else "unsupported"
@@ -197,7 +206,9 @@ class LoopbackPresenceHostAdapter:
         mode = await self.discover_delivery_support()
         if not self.available: raise HostAdapterUnavailable("Place or legacy binding is not configured")
         request = {**({"binding_id": self.binding_id} if not self.places_version else {}),
-                   "event": email_presence_event(item, account_id=os.environ.get("EMAIL_USER", ""), places=bool(self.places_version))}
+                   "event": email_presence_event(item, account_id=os.environ.get("EMAIL_USER", ""),
+                                                  places=bool(self.places_version), identity=bool(self.presence_identity),
+                                                  words=self.words if self.presence_wake_signals else ())}
         if item.staged_files:
             request["staged_files"] = [str(file.get("path") or "") for file in item.staged_files if str(file.get("path") or "").strip()]
         if mode:
@@ -292,5 +303,5 @@ class LoopbackPresenceHostAdapter:
         if self._owns: await self._http.aclose()
         if self._place_http is not None: self._place_http.close()
 
-def create_host_adapter(binding_id: str, *, http_client=None):
-    return LoopbackPresenceHostAdapter(binding_id,host_service_url=os.environ.get("HOST_SERVICE_URL","http://127.0.0.1:8767"),skill_token=os.environ.get("HOST_SERVICE_TOKEN",""),http_client=http_client)
+def create_host_adapter(binding_id: str, *, http_client=None, words=()):
+    return LoopbackPresenceHostAdapter(binding_id,host_service_url=os.environ.get("HOST_SERVICE_URL","http://127.0.0.1:8767"),skill_token=os.environ.get("HOST_SERVICE_TOKEN",""),http_client=http_client, words=words)
