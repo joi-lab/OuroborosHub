@@ -16,6 +16,7 @@ from .telegram_bot.delivery import tool_origin
 from .telegram_bot.formatting import prepare_text, prepare_caption
 from .telegram_bot.host import PresenceHostClient
 from .telegram_bot.runtime import TelegramTransportRuntime
+from .telegram_bot.settings import load_settings, normalize_words
 from .telegram_bot.tools import (
     make_moderation_tool,
     make_operation_tool,
@@ -180,14 +181,7 @@ async def _status_route(_request: Any) -> JSONResponse:
 
 
 def _load_local_settings() -> Dict[str, Any]:
-    if _STATE_DIR is None:
-        return {}
-    path = _STATE_DIR / "settings.json"
-    try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except (FileNotFoundError, OSError, UnicodeDecodeError, json.JSONDecodeError):
-        return {}
-    return value if isinstance(value, dict) else {}
+    return load_settings(_STATE_DIR) if _STATE_DIR is not None else {}
 
 
 def _make_telegram_send(api: Any):
@@ -261,13 +255,19 @@ def _make_telegram_send(api: Any):
 
 
 async def _settings_save_route(request: Any) -> JSONResponse:
+    if request.method == "GET":
+        settings = _load_local_settings()
+        return JSONResponse({
+            "management_group_id": settings.get("management_group_id") or "",
+            "words": "\n".join(settings.get("words", [])),
+        })
     try:
         body = await request.json()
     except Exception:
         body = None
     if (
         not isinstance(body, dict)
-        or set(body) - {"binding_id", "management_group_id"}
+        or set(body) - {"binding_id", "management_group_id", "words"}
     ):
         return JSONResponse(
             {
@@ -288,6 +288,11 @@ async def _settings_save_route(request: Any) -> JSONResponse:
             status_code=503,
         )
     settings = _load_local_settings()
+    if "words" in body:
+        try:
+            settings["words"] = normalize_words(body["words"])
+        except ValueError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
     if "management_group_id" in body:
         group_id = str(body.get("management_group_id") or "").strip()
         if group_id and re.fullmatch(r"-[0-9]+", group_id) is None:
@@ -425,7 +430,13 @@ def register(api: Any) -> None:
         },
     )
     api.register_route("status", _status_route, methods=("GET",))
-    api.register_route("settings/save", _settings_save_route, methods=("POST",))
+    api.register_route("settings/save", _settings_save_route, methods=("GET", "POST"))
+    api.register_settings_section("transport", title="Telegram", schema={"components": [
+        {"type": "form", "route": "settings/save", "method": "POST",
+         "submit_label": "Save transport settings", "fields": [
+             {"name": "words", "label": "Words to notice (one per line)", "type": "textarea"},
+         ]},
+    ]})
     api.register_ui_tab(
         "transport",
         "Telegram Transport",

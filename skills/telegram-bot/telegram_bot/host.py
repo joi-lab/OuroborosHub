@@ -176,6 +176,7 @@ class PresenceHostClient:
         self.delivery_reporting_status = "unknown"
         self.delivery_reporting_version = 0
         self.places_version = 0
+        self.presence_wake_signals = 0
         self.presence_identity = 0
         self.connector_identity = {}
 
@@ -190,6 +191,7 @@ class PresenceHostClient:
             self.delivery_reporting_version = int(response.get("presence_delivery_version") == 1)
             version = response.get("places_version")
             self.places_version = int(type(version) is int and version >= 1)
+            self.presence_wake_signals = int(response.get("presence_wake_signals") == 1)
             self.presence_identity = int(response.get("presence_identity") == 1)
             self.delivery_reporting_status = "supported" if self.delivery_reporting_version else "unsupported"
         except (PresenceHostError, OSError, TimeoutError, asyncio.TimeoutError):
@@ -235,6 +237,8 @@ class PresenceHostClient:
         event = dict(event)
         if not self.places_version:
             event.pop("facts", None)
+        elif not self.presence_wake_signals and "facts" in event:
+            event["facts"] = [fact for fact in event["facts"] if fact != "signal.words"]
         if self.presence_identity and self.connector_identity:
             event["identity"] = self.connector_identity
         try:
