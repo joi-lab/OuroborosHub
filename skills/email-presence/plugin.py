@@ -168,6 +168,7 @@ def register(api):
     async def status(_request=None):
         settings = api.get_settings(SETTING_KEYS)
         payload = store().status()
+        payload["labels"] = {"direct_message": "Mail addressed to you"}
         current = _load(api)
         sending = current.get("sending", "on")
         payload["readiness"] = {"sending": sending, "text": "Sending on" if sending == "on" else SENDING_OFF}

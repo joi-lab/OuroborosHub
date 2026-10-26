@@ -64,7 +64,7 @@ contributes:
     settings: email_presence
     facts:
       - any_message
-      - {id: direct_message, label: "Mail addressed to you"}
+      - direct_message
       - from_bot
       - {id: signal.words, label: "Words you chose appear (connector setting)"}
     wakes: []
@@ -271,7 +271,10 @@ How I decide each event fact:
   Restart the companion after editing words. This signal is sent only when the
   host advertises `presence_wake_signals: 1`.
 
-`direct_message` is declared with its label "Mail addressed to you" (a core kind with a
-connector label); the fact itself is the core kind.
+The manifest declares the plain core kind `direct_message`: older hosts reject
+a label on a core kind in the manifest and drop the whole place declaration.
+The status route the owner's browser fetches for readiness always includes
+`labels: {"direct_message": "Mail addressed to you"}`. This needs no capability
+gate; older browsers ignore unknown status keys.
 No signature, footer, delegate line or `Auto-Submitted` header is appended: each
 reply is a judged, paid turn under the allowance, with no machine marker to break loops.

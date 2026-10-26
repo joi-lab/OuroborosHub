@@ -125,6 +125,7 @@ def test_identity_authentication_and_words_are_negotiated_on_wire_and_status(tmp
     assert ("signal.words" in sent[0].get("facts", [])) is (capabilities.get("presence_wake_signals") == 1)
     assert ("facts" in sent[0]) is bool(capabilities.get("places_version"))
     assert status["connect"] == [{"account_id": ACCOUNT, "conversation_id": "", "label": ACCOUNT}]
+    assert status["labels"] == {"direct_message": "Mail addressed to you"}
 
 
 def registered(tmp_path, monkeypatch):
@@ -233,5 +234,5 @@ def test_manifest_offers_facts_without_default_wakes():
     place = manifest["contributes"][0]
     assert place["wakes"] == []
     assert place["settings"] == "email_presence"
-    assert place["facts"] == ["any_message", {"id": "direct_message", "label": "Mail addressed to you"}, "from_bot",
+    assert place["facts"] == ["any_message", "direct_message", "from_bot",
                               {"id": "signal.words", "label": "Words you chose appear (connector setting)"}]

@@ -2,6 +2,8 @@
 
 ## 0.7.0
 
+- Keep the core mail fact plain in the manifest for older hosts; publish
+  "Mail addressed to you" in the status payload for the place sheet.
 - Declare the mailbox's sending/reading identity and unverified sender status
   only to hosts advertising `presence_identity: 1`.
 - Report direct mail, automated senders and configured whole-word signals;
