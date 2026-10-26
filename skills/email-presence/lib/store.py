@@ -21,6 +21,10 @@ _MAX_ATTACHMENT_FILES = 10
 _MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024
 
 
+class RequestIdConflict(ValueError):
+    """A request id already names a different outgoing message."""
+
+
 def _safe_filename(value, fallback="attachment"):
     name = Path(str(value or "")).name.strip()
     name = re.sub(r"[\x00-\x1f\x7f/\\]+", "_", name)
@@ -433,6 +437,17 @@ class EmailStore:
         envelope = visible_to + visible_cc + visible_bcc
         message_id = "<" + hashlib.sha256((str(self.path.resolve()) + ":" + request_id).encode()).hexdigest() + "@ouroboros.local>"
         with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            existing = db.execute("SELECT * FROM outbox WHERE request_id=?", (request_id,)).fetchone()
+            if existing:
+                candidate = {"subject": subject, "body": body, "in_reply_to": in_reply_to,
+                             "html_body": str(html_body or ""), "body_type": str(body_type or "plain")}
+                groups = {"to_json": visible_to, "cc_json": visible_cc, "bcc_json": visible_bcc,
+                          "references_json": list(references), "attachments_json": list(attachments)}
+                if (any(existing[key] != value for key, value in candidate.items())
+                        or any(json.loads(existing[key]) != value for key, value in groups.items())):
+                    raise RequestIdConflict("This request_id already names a different email; use a new request_id for a new send")
+                return False
             cur = db.execute("""INSERT OR IGNORE INTO outbox(request_id,recipients_json,subject,body,in_reply_to,references_json,provider_message_id,created_at,updated_at,reporting_json,to_json,cc_json,bcc_json,attachments_json,html_body,body_type)
                 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (request_id, json.dumps(envelope), subject, body,
                                                in_reply_to, json.dumps(list(references)), message_id, now, now, json.dumps(reporting or {}),

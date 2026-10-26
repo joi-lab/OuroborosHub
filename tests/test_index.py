@@ -586,7 +586,7 @@ CONNECTORS = sorted(directory.name for directory in (ROOT / "skills").iterdir()
 CORE_WAKE_FACTS = ("direct_message", "group_dm", "mention", "reply_to_me", "my_thread", "new_issue",
                    "new_pull_request", "review_requested", "assigned", "any_message", "from_bot")
 CORE_PLACE_KEYS = {"id", "label", "title", "icon", "order", "render",
-                   "provides", "destination", "scope", "wakes", "source", "settings", "read_only"}
+                   "provides", "destination", "scope", "wakes", "source", "settings", "read_only", "facts"}
 ICON_GEOMETRY = {"svg": {"viewBox", "width", "height"}, "path": {"d"}, "circle": {"cx", "cy", "r"},
                  "line": {"x1", "y1", "x2", "y2"}, "polyline": {"points"}, "polygon": {"points"},
                  "rect": {"x", "y", "width", "height", "rx", "ry"}}
@@ -661,7 +661,7 @@ def test_place_contribution_meets_the_core_contract(name):
     assert place["destination"].startswith("vendor:") and service.strip() and place["label"] == service
     assert place["scope"] == "account"
     wakes = place["wakes"]
-    assert wakes and len(wakes) == len(set(wakes)) and set(wakes) <= set(CORE_WAKE_FACTS)
+    assert isinstance(wakes, list) and len(wakes) == len(set(wakes)) and set(wakes) <= set(CORE_WAKE_FACTS)
     assert manifest["type"] == "extension"
     assert "presence" in manifest["permissions"] and "inject_chat" not in manifest["permissions"]
     if "source" in place:
