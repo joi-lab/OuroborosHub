@@ -4,6 +4,8 @@ import base64
 import hashlib
 import json
 import os
+import sqlite3
+import stat
 import tempfile
 import time
 from pathlib import Path
@@ -51,6 +53,14 @@ GUIDANCE = {
  **{op: ' Chat administration follows the place notes; rights alone grant no role.' for op in ('pin','chat_title','topic_edit')},
 }
 _FINAL = frozenset({'done', 'sent', 'failed', 'unknown', 'cancelled'})
+# Why Start and Resume run nothing although the Host may support imports; saving, Pause and Cancel still work.
+_IMPORT_BLOCKED = {
+ 'participant_mode_required': 'Importing earlier history runs only in Free participant mode, so nothing starts. Choose Free participant under Participation; the mode starts after the skill is turned off and on.',
+ 'restart_required': 'Free participant mode is saved but has not started yet, so nothing starts. It starts after the skill is turned off and on.',
+ 'host_source_order_missing': 'This Ouroboros records imported history but cannot keep messages sent within the same second in their order, so nothing starts: an import could store them out of order. Update Ouroboros first.'}
+_PLAN_SAVED = {'': 'Nothing is read from Telegram until you press Start.',
+ 'host_support_pending': 'Nothing is read from Telegram for it: this Ouroboros has not confirmed that it can record imported history.',
+ 'host_source_order_missing': 'Nothing is read from Telegram for it: this Ouroboros cannot keep messages sent within the same second in their order.'}
 
 def admission_note(state):
     """What this call did. An intent_id runs at most once, so a repeat queues nothing."""
@@ -212,32 +222,69 @@ def register(api,legacy):
             return response({'ok':True,'discarded':count,'message':str(count)+' held operation(s) discarded. They were never attempted, so nothing was sent.'})
         except (ValueError,OSError,TimeoutError,ConfigError):
             return response({'ok':False,'code':'held_unavailable','message':'Held operations unchanged; retry.'},409)
+    # Counted records of each plan between the widget's polls; a plan's stamp says when to count again.
+    import_counts={}
+    def written_at(name):
+        """When a companion last wrote this private file; 0 when none did."""
+        try:
+            found=os.lstat(root/name)
+        except FileNotFoundError:
+            return 0
+        return found.st_mtime_ns if stat.S_ISREG(found.st_mode) else 0
+    def import_blocked(p,host):
+        """Why Start and Resume cannot run an import, or '' when nothing known stands in the way.
+
+        Only a companion started in Free participant mode runs imports, and a saved mode takes
+        effect only when the skill is turned off and on. Each mode's companion records its own
+        Host check as it starts, once it holds the session lock: participant mode
+        host-capabilities.json and legacy mode presence-capability.json. Host support recorded
+        before a later legacy start therefore belongs to an earlier companion, and a start the
+        lock refused records nothing. Neither record proves that a companion runs now.
+        """
+        if p['mode']!='participant':
+            return 'participant_mode_required'
+        if written_at('presence-capability.json')>written_at('host-capabilities.json'):
+            return 'restart_required'
+        if not history_import.host_supports_import(host):
+            return 'host_support_pending'
+        return '' if history_import.host_keeps_source_order(host) else 'host_source_order_missing'
     async def import_route(request):
         try:
             account=account_id(); p=policy(root)
-            host=private_row('host-capabilities.json',{'at','presence_history_import_version'})
+            host=private_row('host-capabilities.json',{'at','presence_history_import_version','presence_source_order_version'})
             supported=history_import.host_supports_import(host)
+            blocked=import_blocked(p,host)
             if request.method=='POST':
                 body=await request.json()
-                if type(body) is not dict or body.get('action') not in {'plan','cancel'}: raise ValueError('expected action plan or cancel')
+                if type(body) is not dict or body.get('action') not in {'plan','start','pause','resume','cancel'}:
+                    raise ValueError('expected action plan, start, pause, resume or cancel')
                 if not account:
                     return response({'ok':False,'code':'account_not_verified','message':'Log in to the dedicated account first.'},409)
+                if body['action']!='plan':
+                    if set(body)!={'action','id'}: raise ValueError('expected action and id')
+                    if body['action'] in {'start','resume'} and blocked in _IMPORT_BLOCKED:
+                        return response({'ok':False,'code':blocked,'message':_IMPORT_BLOCKED[blocked]+' The plan stays as it is.'},409)
+                    if body['action'] in {'start','resume'} and blocked=='host_support_pending':
+                        # The companion checks the Host again before any Telegram read; this is the owner-facing gate.
+                        return response({'ok':False,'code':'import_unavailable','message':'This Ouroboros has not confirmed that it can record imported history, so nothing starts. The plan stays saved.'},409)
+                    with Journal(root) as journal:
+                        message=history_import.transition(journal,account,body['id'],body['action'],p)
+                    return response({'ok':True,'message':message})
                 with Journal(root) as journal:
-                    if body['action']=='cancel':
-                        if history_import.cancel_plan(journal,account,body.get('id'))!=1: raise ValueError('no saved plan with that id')
-                        return response({'ok':True,'message':'Import plan cancelled.'})
                     spec=history_import.validate_plan({k:v for k,v in body.items() if k!='action'},p,account)
                     plan=history_import.save_plan(journal,account,spec)
-                return response({'ok':True,'id':plan,'message':'Import plan saved. Nothing is read from Telegram, and a saved plan never starts by itself.'})
-            saved=[]
+                return response({'ok':True,'id':plan,'message':'Import plan saved. '+_PLAN_SAVED.get(blocked,'Nothing is read from Telegram for it until the companion runs in Free participant mode.')})
+            saved,older=[],0
             if account and (root/'participant.sqlite3').exists():
                 with Journal(root) as journal:
-                    saved=history_import.plans(journal,account)
-            return response({'ok':True,'available':False,'host_supports_import':supported,'host_checked_at':host.get('at',''),
-                             'reason':'host_support_pending' if not supported else 'connector_update_pending','plans':saved})
+                    saved=history_import.plans(journal,account,counted=import_counts)
+                    # Listed: the newest plans and every unfinished one. The others are counted, never dropped silently.
+                    older=history_import.plan_count(journal,account)-len(saved)
+            return response({'ok':True,'available':bool(account and not blocked),'host_supports_import':supported,'host_checked_at':host.get('at',''),
+                             'mode':p['mode'],'reason':blocked,'plans':saved,'older_plans':max(0,older)})
         except ValueError as exc:
             return response({'ok':False,'code':'import_plan_invalid','message':str(exc)[:300]},400)
-        except (OSError,TimeoutError,ConfigError):
+        except (OSError,TimeoutError,ConfigError,sqlite3.Error):
             return response({'ok':False,'code':'import_unavailable','message':'Import plans unavailable; retry.'},409)
     async def status_route(request):
         try:
@@ -263,7 +310,7 @@ def register(api,legacy):
             body['place']=private_row('place-state.json',{'state','label','at'})
             profile=private_row('account-profile.json',{'id','username','first_name','last_name'})
             body['profile']=profile if profile.get('id') and profile['id']==body['account_id'] else {}
-            body['host_facts']=private_row('host-capabilities.json',{'at','places_version','presence_delivery_version','presence_history_import_version'})
+            body['host_facts']=private_row('host-capabilities.json',{'at','places_version','presence_delivery_version','presence_history_import_version','presence_source_order_version'})
             body['message']='Mode: '+p['mode']+'; outgoing actions '+('on' if p['outgoing'] else 'off')+'; recorded account '+body['account_id']+'. '+body['message']
             return response(body)
         except (ValueError,OSError):

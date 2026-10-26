@@ -269,12 +269,13 @@ class UserSessionBridge:
         return catalog
 
     async def _resolve_forum_target(self, peer: int, target_id: int,
-                                    catalog: set[int], *, first: Any = None) -> int | None:
+                                    catalog: set[int], *, first: Any = None, guard: Any = None) -> int | None:
         """Bounded, cycle-safe ancestry proof for a forum reply lacking top_msg_id.
 
         Return General only after reaching a fetched headerless ordinary root.
         Unknown, deleted or cyclic chains remain pending; never borrow another
-        topic's binding. The same proof is used before outgoing sends.
+        topic's binding. The same proof is used before outgoing sends. ``guard``,
+        when given, runs before each message read and may raise to stop it.
         """
         seen: set[int] = set()
         current = target_id
@@ -282,8 +283,12 @@ class UserSessionBridge:
             if type(current) is not int or not 0 < current < (1 << 31) or current in seen:
                 raise ValueError("forum reply ancestry invalid or cyclic")
             seen.add(current)
-            target = first if current == target_id and first is not None else (
-                await self.adapter.client.get_messages(peer, ids=current))
+            if current == target_id and first is not None:
+                target = first
+            else:
+                if guard is not None:
+                    guard()
+                target = await self.adapter.client.get_messages(peer, ids=current)
             if target is None or getattr(target, "id", None) != current:
                 raise ValueError("forum reply ancestry unavailable")
             try:

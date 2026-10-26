@@ -147,6 +147,10 @@ class Journal:
           seen REAL NOT NULL, PRIMARY KEY(account,peer));
         CREATE TABLE IF NOT EXISTS imports (id TEXT PRIMARY KEY, account TEXT NOT NULL, spec TEXT NOT NULL,
           state TEXT NOT NULL, progress TEXT NOT NULL DEFAULT '{}', created REAL NOT NULL, updated REAL NOT NULL);
+        CREATE TABLE IF NOT EXISTS import_records (plan TEXT NOT NULL, seq INTEGER NOT NULL, peer INTEGER NOT NULL,
+          thread TEXT NOT NULL, source_event_id TEXT NOT NULL, record TEXT NOT NULL, state TEXT NOT NULL,
+          result TEXT NOT NULL DEFAULT '{}', PRIMARY KEY(plan, source_event_id));
+        CREATE INDEX IF NOT EXISTS import_records_order ON import_records(plan, state, seq);
         ''')
         # Serialize inspect-and-ALTER across companion, tools and status opens.
         self.db.execute('BEGIN IMMEDIATE')

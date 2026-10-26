@@ -77,11 +77,15 @@ def _number(value: int, label: str, *, signed: bool = False) -> int:
     return value
 
 
+MAX_SOURCE_ORDER = 2**53 - 1
+
+
 def build_event(
     account_id: int, peer_id: int, message_id: int, actor_id: int, text: str, *,
     topic_id: int | None = None, provider: str = "telegram",
     conversation: dict[str, Any] | None = None, message: dict[str, Any] | None = None,
     event_kind: str = "new", revision: str = "", actor: dict[str, Any] | None = None,
+    source_order: bool = False,
 ) -> dict[str, Any]:
     """Build the exact Host event from numeric Telegram identities.
 
@@ -94,6 +98,12 @@ def build_event(
     repeated delivery of one revision must reuse exactly the same payload.
     Changed text with the same revision causes a Host identity conflict rather
     than silently overwriting the first observed event.
+
+    ``source_order`` adds ``message.source_order``, the provider's own order of
+    the conversation's messages: for Telegram the message id, by which a Host
+    keeps messages sent within one second in their order. An edit carries the
+    id of the message it changes. Retained legacy intake leaves it out, so the
+    events it already reserved keep their exact bytes.
     """
     _number(account_id, "account_id")
     _number(peer_id, "peer_id", signed=True)
@@ -123,6 +133,9 @@ def build_event(
     if event_kind == "edit":
         event_id += ":edit:" + parse.quote(revision, safe="")
     message_facts = {**(message or {}), "message_id": str(message_id)}
+    message_facts.pop("source_order", None)  # only ever the provider's own id, never a caller's value
+    if source_order and message_id <= MAX_SOURCE_ORDER:
+        message_facts["source_order"] = message_id
     if event_kind == "edit":
         message_facts.update({"event_kind": "edit", "revision": revision})
     return {

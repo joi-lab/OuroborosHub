@@ -2672,8 +2672,8 @@
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "c5b12fdee11b72a89c2bcf87908227db0358a1ffceebb9b671c2f8c8931203ba",
-          "size": 25740
+          "sha256": "a1bc6f5869137afb63f8ac4bac2153dc7448f48a5c65509e9af8e95846ac28f6",
+          "size": 33803
         },
         {
           "path": "plugin.py",
@@ -2686,9 +2686,19 @@
           "size": 18183
         },
         {
+          "path": "tests/history_fakes.py",
+          "sha256": "63d12fc414d0a2bea313bfc4de798f693fb4d592b5aeb07fa4008e41bc137270",
+          "size": 22023
+        },
+        {
+          "path": "tests/test_history_import.py",
+          "sha256": "084d14c89b5fd9b738297bee479783266c786b64617b984ab2d7114b3425589e",
+          "size": 97011
+        },
+        {
           "path": "tests/test_intake_loop.py",
-          "sha256": "7e54f80792017d138a1ee873fd3bc443afa0753dc82c40a8e29f1bf3d3bdb33f",
-          "size": 6247
+          "sha256": "0db13ac1b828c9c276197c9a2b390b91f26f68f405b6ed144e3684406d8ec0da",
+          "size": 6273
         },
         {
           "path": "tests/test_legacy_intake.py",
@@ -2707,13 +2717,13 @@
         },
         {
           "path": "tests/test_participant_delivery.py",
-          "sha256": "bdb1a3a7c8335daae40407342dc4cb451483d6ed2a239c3b9ec21c83ea13fa0c",
-          "size": 63634
+          "sha256": "c983eb4fd418ee8843fc15db5dce1ddd81b9c5191f85c7c684419f24c1e20a5a",
+          "size": 63948
         },
         {
           "path": "tests/test_participant_routes.py",
-          "sha256": "e3ae48e3b06926cec3e275e9cfe50bc1ecd921cf8458bb145b05192c8893726f",
-          "size": 12516
+          "sha256": "de9fdf92d32c2a12bd1425e54694faafeeb44d61792195e0e4f91f01ddb9c5ca",
+          "size": 24858
         },
         {
           "path": "userbot/__init__.py",
@@ -2742,8 +2752,8 @@
         },
         {
           "path": "userbot/history_import.py",
-          "sha256": "5c02473174b6d5b4eccba05b444c8f2c71a0e871a07a0facdb862c692ba95b7b",
-          "size": 6170
+          "sha256": "4affd37b91d4eee116f31598538cfd00759a27f6d1ce3324e7b79d5adeadd4cf",
+          "size": 52773
         },
         {
           "path": "userbot/normalize.py",
@@ -2752,8 +2762,8 @@
         },
         {
           "path": "userbot/participant.py",
-          "sha256": "5d36a343a4b7c721050326de7f12eb0b253407586c483e522efd6805c8acf6d3",
-          "size": 41802
+          "sha256": "d8d27bbc0e44ebebf1e3c984ce543d557c5174743ba5c0e6a979fcb27259b7c9",
+          "size": 43698
         },
         {
           "path": "userbot/participant_ops.py",
@@ -2762,23 +2772,23 @@
         },
         {
           "path": "userbot/participant_plugin.py",
-          "sha256": "156fd7628c582cdb7b21bb320bbadf4843f9085c1f9bed069c1723a310e53249",
-          "size": 22392
+          "sha256": "8c6e105a07191ecd0fcf627de686e2fef25a91a49386f458e2556c9ba625329d",
+          "size": 26209
         },
         {
           "path": "userbot/participant_state.py",
-          "sha256": "1e499dc1db88501f6aec427bb7b4935c9dd9328bbbeaf7af128fe5d6da9dfa77",
-          "size": 23768
+          "sha256": "e4462286249352d71231d1d4caf4f80b2457c6a4cd95ec5ad5e99d995d9bed88",
+          "size": 24165
         },
         {
           "path": "userbot/presence.py",
-          "sha256": "799491ca6511d2694c956c945bb4c8b7c13a1c6ea95e205ee4cd8779d403686a",
-          "size": 17768
+          "sha256": "6e1424c40a170488a8bbd5791ce94b9961fafd58b315711d1f052f4d2b2477f6",
+          "size": 18412
         },
         {
           "path": "userbot/runtime.py",
-          "sha256": "f0ce0a7daf590ca50c938b94ac48815e38eb48f909b3b174a0d352fa8471cbfc",
-          "size": 56635
+          "sha256": "ef0f03caa9d150da6baf5fb40e0576264d926a7cd9ca7f51849a13aa5ad87046",
+          "size": 56843
         },
         {
           "path": "userbot/store.py",
@@ -2787,8 +2797,8 @@
         },
         {
           "path": "userbot/telegram.py",
-          "sha256": "b4f42a2924facd1898fe213ff19fb0778a5c76b20aab26db0e0b001d3da0fc7a",
-          "size": 14225
+          "sha256": "747b48fee5dbaf84b0b60a89c7699559b0a91ff90e9a363332a58752c11da3fb",
+          "size": 14508
         },
         {
           "path": "userbot/topic.py",
@@ -2797,8 +2807,8 @@
         },
         {
           "path": "widget.js",
-          "sha256": "f5171e8a25e5557568446f1e36d902fabc798bc8306bb04204595b7960aceb60",
-          "size": 49854
+          "sha256": "0883d30145e43e3dad04677d91fed814920a1488b4fa37218776c742d0f6799d",
+          "size": 65549
         }
       ],
       "install_specs": [

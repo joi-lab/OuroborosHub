@@ -110,7 +110,7 @@ class IntakeLoopTests(unittest.IsolatedAsyncioTestCase):
                     self.assertTrue(state['place_finished'], 'display read cancelled/joined before shutdown')
                 self.assertTrue(state.get('hydration_stopped'))
                 self.assertFalse([t for t in asyncio.all_tasks()
-                    if t is not asyncio.current_task() and t.get_name().startswith(('telegram-host-intake','telegram-media-hydration','telegram-chat-list','telegram-place-display'))])
+                    if t is not asyncio.current_task() and t.get_name().startswith(('telegram-host-intake','telegram-media-hydration','telegram-chat-list','telegram-place-display','telegram-history-import'))])
 
     async def test_tool_and_reports_progress_while_actual_serve_waits_on_host(self):
         await self.check_loop()

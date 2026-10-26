@@ -232,20 +232,26 @@ class TelegramAdapter:
             raise LoginRequired("Telegram session is not authorized")
         return [message async for message in self.client.iter_messages(peer, limit=limit, min_id=min_id)]
 
-    async def topic_ids(self, peer_id: int) -> set[int]:
+    async def topic_ids(self, peer_id: int, *, guard: Any = None) -> set[int]:
         """Fetch a complete, current forum catalog; refuse non-forum/monoforum peers.
 
         The returned set contains General (1) for every validated forum. We do
         not return a partial catalog if pagination cannot advance: callers use
         this set to reject unknown outgoing topics and classify inbound threads.
         Caller should refresh it when Telegram reports a moved/deleted topic.
+        ``guard``, when given, runs before each Telegram request here, every
+        catalog page included, and may raise to stop the read between them.
         """
         from telethon.tl import types
         from telethon.tl.functions.messages import GetForumTopicsRequest
 
+        check = guard or (lambda: None)
+        check()
         peer = await self.client.get_input_entity(peer_id)
+        check()
         if not await self.client.is_user_authorized():
             raise LoginRequired("Telegram session is not authorized")
+        check()
         channel = await self.client.get_entity(peer)
         if (not isinstance(channel, types.Channel) or not channel.megagroup
                 or not channel.forum or channel.monoforum):
@@ -259,6 +265,7 @@ class TelegramAdapter:
         # A server can return endlessly advancing pages; never monopolize the
         # companion beyond one bounded catalog operation or return partial data.
         for _ in range(100):
+            check()
             result = await self.client(GetForumTopicsRequest(
                 peer=peer,
                 offset_date=cursor_date,

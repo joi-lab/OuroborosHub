@@ -47,7 +47,8 @@ def session_lock(root):
 
 # Host facts worth showing the owner; any other identity field stays private.
 HOST_FACTS = ('places_version', 'presence_work_output_version', 'presence_continuation_version',
-              'presence_delivery_version', 'presence_main_contact_version', 'presence_history_import_version')
+              'presence_delivery_version', 'presence_main_contact_version', 'presence_history_import_version',
+              'presence_source_order_version')
 
 class Host:
     def __init__(self, url, token, transport=None):
@@ -335,9 +336,7 @@ class Participant:
             # keep the authenticated numeric actor and leave profile/bot unknown.
             sender = None
         chat = await event.get_chat()
-        topic = getattr(getattr(m,'reply_to',None), 'reply_to_top_id', None)
-        if getattr(chat,'forum',False):
-            topic = await self.forum_topic(event.chat_id, m)
+        topic = await self.thread_of(chat, event.chat_id, m)
         if kind == 'edit' and self.legacy_edit_seen(event.chat_id, topic, m, event.sender_id):
             return  # Already captured before 0.3 under its byte-based revision; never a second wake.
         facts = ['any_message']
@@ -391,12 +390,16 @@ class Participant:
         if media is not None:
             message['media'] = media
         e = build_event(int(self.account),event.chat_id,m.id,event.sender_id,canonical_text(m),topic_id=topic,event_kind=kind,revision=revision,
-              actor=actor_facts(sender), conversation={'title': title, 'chat_type': chat_kind}, message=message)
+              actor=actor_facts(sender), conversation={'title': title, 'chat_type': chat_kind}, message=message, source_order=True)
         e['facts'] = facts
         self.journal.capture(e, files, raw_id=raw_id)
         self.journal.remember_chat(self.account, event.chat_id, title, chat_kind, 'incoming', chat_username, members)
     def legacy_edit_seen(self, peer, topic, message, actor):
-        """Whether a pre-0.3 capture of this edit time already says what this edit says.
+        """Whether a pre-0.3 capture of this edit time already says what this edit says."""
+        return bool(self.legacy_edit_captures(peer, topic, message, actor))
+
+    def legacy_edit_captures(self, peer, topic, message, actor):
+        """Source IDs of the pre-0.3 captures of this edit time that say what this edit says.
 
         The evidence is that one message's edit rows. A retained raw update is compared
         by content, so other text, entities or media edited within the same Telegram
@@ -408,6 +411,7 @@ class Participant:
         from telethon.extensions import BinaryReader
         revision = content_revision(message)
         kind = type(getattr(message, 'media', None) or getattr(message, 'action', None)).__name__
+        found = []
         for stored, payload in self.journal.legacy_edits(self.account, peer, topic, message.id, actor, str(message.edit_date)):
             earlier = None
             if payload is not None:
@@ -418,10 +422,10 @@ class Participant:
                     pass  # This Telethon cannot read those bytes; the stored text remains.
             if earlier is not None:
                 if content_revision(earlier) == revision:
-                    return True
+                    found.append(stored['source_event_id'])
             elif legacy_text_matches(str(stored.get('text') or ''), getattr(message, 'message', '') or '', kind):
-                return True
-        return False
+                found.append(stored['source_event_id'])
+        return found
     async def download_snapshot(self, peer, message, temporary):
         """Refresh expiring references, never a changed immutable media snapshot."""
         from telethon import errors, utils
@@ -446,16 +450,33 @@ class Participant:
                 # explicit missing attachment, not a forever-blocked peer.
                 return type(exc).__name__
 
-    async def forum_topic(self, peer, message):
+    async def thread_of(self, chat, peer, message, catalog=None, guard=None):
+        """The thread a message belongs to, the same for live capture and history import.
+
+        A forum message gets its forum topic; elsewhere a message thread's top names it.
+        A history page passes the forum catalog it already read; live capture reads one.
+        ``guard``, when given, runs before each Telegram read and may raise to stop it.
+        """
+        if getattr(chat,'forum',False):
+            return await self.forum_topic(peer, message, catalog, guard)
+        return getattr(getattr(message,'reply_to',None), 'reply_to_top_id', None)
+
+    async def forum_topic(self, peer, message, catalog=None, guard=None):
         """Refresh once, preserving an explicit top over any reply ancestry."""
         from .topic import classify_message
         from .runtime import UserSessionBridge
+        check = guard or (lambda: None)
+        # A guard also runs between the catalog's own pages; without one the adapter is called as before.
+        topics = (lambda: self.adapter.topic_ids(peer)) if guard is None else (lambda: self.adapter.topic_ids(peer, guard=guard))
         try:
-            catalog = await self.adapter.topic_ids(peer)
+            if catalog is None:
+                check()
+                catalog = await topics()
             try:
                 return classify_message(message, catalog)
             except ValueError:
-                catalog = await self.adapter.topic_ids(peer)
+                check()
+                catalog = await topics()
                 try:
                     return classify_message(message, catalog)
                 except ValueError:
@@ -468,7 +489,7 @@ class Participant:
                         raise
                     resolver = object.__new__(UserSessionBridge)
                     resolver.adapter = self.adapter
-                    return await resolver._resolve_forum_target(peer, reply_id, catalog)
+                    return await resolver._resolve_forum_target(peer, reply_id, catalog, guard=guard)
         except ValueError as exc:
             raise TopicRoutingUnavailable('forum destination unresolved; raw event retained') from exc
 
@@ -623,9 +644,11 @@ async def serve(root, host_url, token, adapter_factory, login, verify, health):
         await asyncio.sleep(2); cfg=load_config(root)
     host = Host(host_url, token)
     identity = await asyncio.to_thread(host.identity)
-    if isinstance(identity, dict):
-        record_host_facts(root, identity)
     with session_lock(root):
+        # Recorded only once this companion owns the session: a start the lock refused beside a
+        # running companion must not stand as the latest start (see the import route).
+        if isinstance(identity, dict):
+            record_host_facts(root, identity)
         adapter=adapter_factory(Path(root)/'mtproto.session',cfg.api_id,cfg.api_hash)
         await adapter.connect()
         try:
@@ -640,7 +663,11 @@ async def serve(root, host_url, token, adapter_factory, login, verify, health):
             # Under the session lock no other companion can be reading the chat list.
             (Path(root)/'chats-refresh.inflight').unlink(missing_ok=True)
             with Journal(root,recover=True) as journal:
+                from .history_import import HistoryImporter, interrupt_running
+                # A restart interrupts a running import; the owner resumes it explicitly.
+                interrupt_running(journal)
                 engine=Participant(root,adapter,host,journal,account)
+                importer=HistoryImporter(engine,journal,account)
                 engine.current()
                 faults=[]
                 async def capture(e,kind):
@@ -692,6 +719,8 @@ async def serve(root, host_url, token, adapter_factory, login, verify, health):
                         keep('telegram-chat-list', engine.refresh_chats)
                         # The place chip is display only; a slow Host read must not hold tools.
                         keep('telegram-place-display', engine.observe_place)
+                        # An owner-started history import takes one bounded step at a time.
+                        keep('telegram-history-import', importer.once)
                         if asyncio.get_running_loop().time() >= engine.next_send:
                             await engine.dispatch_one()
                         await engine.reports_once()

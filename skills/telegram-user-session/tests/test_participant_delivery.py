@@ -578,44 +578,47 @@ class ChatListAndPlace(Base):
 
 
 class LiveAndImportIdentity(Capturing):
-    """An import (when a Host can record one) must deduplicate against live capture."""
+    """An imported copy of a message must deduplicate against its live capture."""
     def identity(self, event):
         return (event['source_event_id'], event['actor']['platform_actor_id'], event['text'])
 
     async def test_unedited_message_has_one_identity_live_and_imported(self):
-        from userbot.history_import import history_event
+        from userbot.history_import import history_record
         m = text_message(21, 809, 'Has anyone tried this with six players?')
         await self.capture(m)
         live = json.loads(self.j.heads()[0]['event'])
-        imported = history_event(ACCOUNT, 809, None, m, self.sender)
-        self.assertEqual(self.identity(live), self.identity(imported))
+        imported = history_record(ACCOUNT, 809, None, m, self.sender)
+        self.assertEqual(self.identity(live), self.identity(imported['event']))
         self.assertEqual(imported['authorship'], 'participant')
-        self.assertEqual(imported['message']['sent_at'], live['message']['sent_at'])
+        self.assertEqual(imported['event']['message']['sent_at'], live['message']['sent_at'])
+        self.assertEqual(imported['source_timestamp'], live['message']['sent_at'])
 
     async def test_edited_message_imports_as_its_current_revision(self):
-        from userbot.history_import import history_event
+        from userbot.history_import import history_record
         edited = datetime(2026, 10, 25, 19, 0, tzinfo=timezone.utc)
         m = text_message(22, 809, 'corrected', edit_date=edited)
         await self.capture(m, kind='edit')
         live = json.loads(self.j.heads()[0]['event'])
-        imported = history_event(ACCOUNT, 809, None, m, self.sender)
-        self.assertEqual(self.identity(live), self.identity(imported))
-        self.assertIn(':edit:', imported['source_event_id'])
-        self.assertEqual(imported['message']['edited_at'], edited.isoformat())
+        imported = history_record(ACCOUNT, 809, None, m, self.sender)
+        self.assertEqual(self.identity(live), self.identity(imported['event']))
+        self.assertIn(':edit:', imported['event']['source_event_id'])
+        self.assertEqual(imported['event']['message']['edited_at'], edited.isoformat())
+        self.assertEqual(imported['source_timestamp'], m.date.isoformat())  # the original send time
 
     async def test_own_past_message_is_platform_account_history(self):
-        from userbot.history_import import history_event
+        from userbot.history_import import history_record
         own = text_message(23, 809, 'earlier reply from this account', out=True, sender=ACCOUNT)
-        imported = history_event(ACCOUNT, 809, None, own, None)
+        imported = history_record(ACCOUNT, 809, None, own, None)
         self.assertEqual(imported['authorship'], 'platform_account')
-        self.assertEqual(imported['actor'], {'platform_actor_id': str(ACCOUNT)})
+        self.assertEqual(imported['event']['actor'], {'platform_actor_id': str(ACCOUNT)})
 
     async def test_media_import_never_claims_a_download(self):
-        from userbot.history_import import history_event
+        from userbot.history_import import history_record
         photo = T.Photo(id=78, access_hash=1, file_reference=b'r', date=None, sizes=[], dc_id=1)
-        imported = history_event(ACCOUNT, 809, None, text_message(24, 809, '', media=T.MessageMediaPhoto(photo=photo)), None)
-        self.assertEqual(imported['text'], '[Telegram photo]')
-        self.assertEqual(imported['message']['media']['status'], 'not_downloaded')
+        imported = history_record(ACCOUNT, 809, None, text_message(24, 809, '', media=T.MessageMediaPhoto(photo=photo)), None)
+        self.assertEqual(imported['event']['text'], '[Telegram photo]')
+        self.assertEqual(imported['event']['message']['media']['status'], 'not_downloaded')
+        self.assertEqual(imported['staged_files'], [])
 
 
 class UpgradeFromByteRevisions(Capturing):

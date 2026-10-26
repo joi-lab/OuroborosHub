@@ -81,6 +81,15 @@
     .inline .field{flex:1;margin-top:0}
     .note{white-space:pre-wrap}
     .empty{color:var(--muted);padding:12px 0}
+    .plan+.plan{border-top:1px solid var(--tray)}
+    .plan .row{flex-wrap:wrap}
+    .plan .row>div:first-child{flex:1 1 240px}
+    .plan .row>.strip{flex:none}
+    .plan .row>div>.mark{display:flex;align-items:flex-start;margin-top:4px;white-space:normal}
+    .plan .row>div>.mark::before{flex:none;margin-top:5px}
+    .plan details{margin:0 0 10px}
+    .plan-lines{margin:8px 0 0;padding-left:18px}
+    .plan-lines li+li{margin-top:4px}
     .first-step{margin-bottom:20px}
     .hidden,[hidden]{display:none!important}
     @media (max-width:720px){.grid{grid-template-columns:minmax(0,1fr)}}
@@ -176,6 +185,13 @@
   async function loadImports() {
     try { state.imports = await call('participant/import'); state.importsError = ''; }
     catch (error) { state.importsError = error.message; }
+  }
+  async function followImports() {
+    if (disposed || state.scene !== 'history' || !(state.imports?.plans || []).some((plan) => plan.state === 'running')) return;
+    const before = JSON.stringify(state.imports), states = (state.imports?.plans || []).map((plan) => plan.state).join();
+    await loadImports();
+    if (states !== (state.imports?.plans || []).map((plan) => plan.state).join()) result('plans', '');
+    if (JSON.stringify(state.imports) !== before && state.scene === 'history') render();
   }
   const peers = (text) => new Set(String(text || '').split(',').map((x) => x.trim()).filter(Boolean));
   function resetScopeDraft() {
@@ -347,7 +363,11 @@
     const right = `<section class="object"><h2>Receiving is not replying to every message</h2>
       <div class="arrowline" aria-label="What happens to a received message"><b>Received</b><span aria-hidden="true">→</span><b>Stored by the host</b><span aria-hidden="true">→</span><b>Available to attention</b></div>
       <p class="secondary">Wake events in Places can call me at once. Everything else stays readable for later; a message does not turn into a paid reply by itself.</p>
-      <div class="tray"><strong>What about messages from before?</strong><p class="secondary">New messages and the old archive are separate. Importing earlier history is planned and not available yet; a saved plan reads nothing from Telegram. I can still read earlier messages in a chat when a conversation needs them.</p>
+      <div class="tray"><strong>What about messages from before?</strong><p class="secondary">${IMPORT_BLOCKED[state.imports?.reason]
+        ? `New messages and the old archive are separate. ${IMPORT_BLOCKED[state.imports.reason].scope} I can still read earlier messages in a chat when a conversation needs them.`
+        : state.imports?.host_supports_import
+        ? 'New messages and the old archive are separate. On the History tab you can import chosen earlier messages once; they wake no one and get no replies. I can also read earlier messages when a conversation needs them.'
+        : 'New messages and the old archive are separate. Importing earlier history needs an Ouroboros version that can record it, and this one has not confirmed that; a saved plan reads nothing from Telegram. I can still read earlier messages in a chat when a conversation needs them.'}</p>
         <button type="button" class="quiet" data-action="go" data-value="history">Earlier history →</button></div>
       <p class="meta">Silent and Paused are not storage filters; not receiving a chat is set only here. Excluded chats are also never read or written.</p>
     </section>`;
@@ -399,23 +419,159 @@
   }
 
   // ---- scene 4: history ------------------------------------------------------
+  // Why Start and Resume run nothing, as the import route names it; saving a plan, Pause and Cancel stay available.
+  // Only a companion started in Free participant mode runs an import, and a saved mode starts with the skill.
+  const NEEDS_PARTICIPANT = 'Importing chosen earlier messages once needs Free participant mode, which starts after the skill is turned off and on.';
+  const IMPORT_BLOCKED = {
+    participant_mode_required: {scope: NEEDS_PARTICIPANT, saved: 'needs Free participant mode', started: 'nothing is read in Legacy scoped transport mode',
+      tray: 'Not available in Legacy scoped transport mode, which has no history import. Choose Free participant under Participation; the mode starts after the skill is turned off and on. Until then you can save plans and pause or cancel them; nothing is read from Telegram.'},
+    restart_required: {scope: NEEDS_PARTICIPANT, saved: 'Start needs the skill turned off and on', started: 'nothing is read until the skill is turned off and on',
+      tray: 'Not available yet: Free participant mode is saved but has not started. It starts after the skill is turned off and on. Until then you can save plans and pause or cancel them; nothing is read from Telegram.'},
+    host_source_order_missing: {saved: 'cannot start with this Ouroboros',
+      scope: 'Importing earlier history needs an Ouroboros version that keeps messages sent within the same second in their order, and this one does not; a saved plan reads nothing from Telegram.',
+      tray: 'Not available with this Ouroboros version: it records imported history but cannot keep messages sent within the same second in their order, so an import could store them out of order. Update Ouroboros. You can save a plan; nothing is read from Telegram for it.'}};
+  // Plan states and reasons come from the companion's journal; the words below only name them.
+  const IMPORT_PAUSES = {owner: 'by you', interrupted: 'the companion restarted; resume when ready',
+    host_support_missing: 'this Ouroboros cannot record imported history', host_auth_blocked: 'Ouroboros refused this connector; check the skill',
+    host_source_order_missing: 'this Ouroboros cannot keep messages sent within the same second in their order; update it, then resume',
+    presence_auth_blocked: 'Ouroboros refused this connector; check the skill', place_not_connected: 'connect Telegram in Places, then resume',
+    place_ambiguous: 'more than one Telegram place matches; fix Places, then resume', places_unreadable: 'Places could not be read; resume later',
+    presence_binding_wrong_transport: 'the place belongs to another connector', presence_history_invalid: 'Ouroboros refused the request as malformed',
+    host_answer_invalid: 'Ouroboros answered in an unexpected form', host_refused: 'Ouroboros refused the import', import_error: 'it stopped on an internal error'};
+  const IMPORT_WAITS = {host_unreachable: 'Ouroboros is not answering', host_unconfirmed: 'Ouroboros did not confirm some records; they go again unchanged',
+    host_answer_invalid: 'Ouroboros answered in an unexpected form', presence_rate_limited: 'Ouroboros asked to slow down',
+    presence_capacity_full: 'Ouroboros is busy', presence_history_importing: 'Ouroboros is still loading saved history',
+    presence_history_unavailable: 'Ouroboros could not record history just now', presence_auth_unavailable: 'Ouroboros could not check the connector',
+    host_retry: 'Ouroboros asked to retry', telegram_flood_wait: 'Telegram asked to wait', telegram_unavailable: 'Telegram is not answering',
+    live_capture_settling: 'new messages in a chat are still arriving', places_unavailable: 'Places could not be read just now'};
+  const CHAT_REASONS = {peer_excluded: 'excluded from receiving', peer_not_selected: 'not selected for receiving', outside_receiving_scope: 'no longer received',
+    saved_messages: 'Saved Messages are not imported', chat_unavailable: 'unknown to this session; refresh the chat list', outside_place: 'outside the Telegram place'};
+  const HELD = {conflict: 'already recorded with other content', invalid: 'refused by Ouroboros as malformed',
+    withheld: 'chat no longer received', rejected: 'outside the Telegram place'};
+  // Read but left out while reading; Host-held messages are listed by ID instead. Plans read by earlier
+  // versions may count messages they left to new-message delivery; nothing says those reached the conversation.
+  const LEFT_OUT = {service: 'service', topic_unresolved: 'without a known forum topic', invalid_source: 'unreadable',
+    live_pending: 'left to new-message delivery when read'};
+  // A held-back message waits for the owner's Resume, which checks it again.
+  const heldWords = (h) => h.state !== 'residual' ? HELD[h.state] || h.state
+    : h.reason === 'live_pending' ? 'held back: it was still arriving as a new message when this chat was read; Resume checks again'
+    : h.reason === 'receipt_unreadable' ? 'own message held back: the delivery receipts could not be read; Resume checks again'
+    : h.receipt === 'refused' ? 'own message held back: its delivery receipt was refused; Resume sends the saved copy'
+    : 'own message held back: its delivery receipt is not confirmed yet; Resume checks again';
+  // A Resume sends a held-back message once nothing else will deliver it; the line says what became of it.
+  const RELEASED = {receipt_refused: 'its delivery receipt had been refused', receipt_absent: 'its delivery receipt was no longer there',
+    live_held: 'it never reached the conversation as a new message', live_absent: 'it never reached the conversation as a new message'};
+  function releasedWords(r, running) {
+    const outcome = r.state === 'recorded' ? 'imported on your Resume'
+      : r.state === 'duplicate' ? 'already in the conversation when your Resume sent it'
+      : r.state === 'pending' ? 'sent on your Resume, ' + (running ? 'waiting for Ouroboros to confirm' : 'not confirmed by Ouroboros')
+      : 'sent on your Resume but not imported: ' + (HELD[r.state] || r.state);
+    return `${outcome} (${RELEASED[r.released] || 'its delivery receipt no longer stood for a delivery'})`;
+  }
+  // Already in the conversation: admitted by the Host from live intake, or delivered by this connector.
+  const ALREADY = ['live_captured', 'delivered'];
   const isoDay = (date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+  const chatName = (id) => (state.chats?.chats || []).find((c) => c.id === String(id))?.title || 'Chat ' + id;
   function planLine(plan) {
     const spec = plan.spec || {};
-    const names = new Map((state.chats?.chats || []).map((c) => [c.id, c.title || c.id]));
-    const chats = spec.chats === 'receiving' ? 'All receiving chats' + (spec.exclude?.length ? `, ${spec.exclude.length} left out` : '')
-      : (spec.chats || []).map((id) => names.get(String(id)) || String(id)).join(', ');
+    const started = (plan.chats || []).length;
+    const leftOut = new Set((spec.exclude || []).map(String));
+    const chats = spec.chats === 'receiving' ? (started ? `All receiving chats (${started})` : 'All receiving chats' + (spec.exclude?.length ? `, ${spec.exclude.length} left out` : ''))
+      : (spec.chats || []).filter((id) => !leftOut.has(String(id))).map(chatName).join(', ');
     const day = (value) => new Date(value).toLocaleDateString();
     return `${chats} · ${day(spec.from)} – ${day(new Date(new Date(spec.to) - 1))} · up to ${spec.max_per_chat} each`;
+  }
+  const sum = (values) => values.reduce((total, value) => total + (value || 0), 0);
+  // Read but not imported, as [count, reason]: held by Ouroboros, or left out while reading.
+  const notImported = (counts, skipped) => [...Object.keys(HELD).map((k) => [counts[k], HELD[k]]),
+    ...Object.entries(skipped).filter(([k]) => !ALREADY.includes(k)).map(([k, n]) => [n, LEFT_OUT[k] || k.replace(/_/g, ' ')])]
+    .filter(([n]) => n);
+  const notImportedTotal = (plan) => sum(Object.keys(HELD).map((k) => plan.counts?.[k]))
+    + sum((plan.chats || []).flatMap((chat) => notImported({}, chat.skipped || {}).map(([n]) => n)));
+  function planCounts(plan) {
+    const c = plan.counts || {};
+    const skipped = (plan.chats || []).map((chat) => chat.skipped || {});
+    const already = (c.duplicate || 0) + (c.delivered || 0) + sum(skipped.flatMap((s) => ALREADY.map((k) => s[k])));
+    const left = notImportedTotal(plan);
+    const parts = [];
+    if (c.recorded) parts.push(`${c.recorded} recorded`);
+    if (already) parts.push(`${already} already in the conversation`);
+    if (c.residual) parts.push(`${c.residual} held back`);
+    if (left) parts.push(`${left} not imported`);
+    if (c.pending && plan.state !== 'running') parts.push(`${c.pending} not confirmed by Ouroboros`);
+    return parts.join(' · ');
+  }
+  function planStatus(plan, blocked) {
+    const chats = plan.chats || [];
+    const why = IMPORT_BLOCKED[blocked];
+    if (plan.state === 'saved') return ['tone-quiet', 'Saved · ' + (!blocked ? 'not started' : why ? why.saved : 'cannot start with this Ouroboros')];
+    if (plan.state === 'running') {
+      // Started earlier, but no companion that runs imports has started since: it stays running and reads nothing.
+      if (why?.started) return ['tone-warn', 'Started · ' + why.started];
+      if (plan.waiting) return ['tone-warn', 'Importing · waiting: ' + (IMPORT_WAITS[plan.waiting.reason] || plan.waiting.reason)];
+      const at = chats.findIndex((c) => c.state === 'pending');
+      return ['tone-good', at < 0 ? 'Importing · finishing' : `Importing · chat ${at + 1} of ${chats.length}`];
+    }
+    if (plan.state === 'paused') return ['tone-warn', 'Paused · ' + (IMPORT_PAUSES[plan.reason] || plan.reason || 'resume when ready')];
+    if (plan.state === 'partial') {
+      const held = plan.counts?.residual || 0;
+      return ['tone-warn', `Partial · ${held} message${held === 1 ? '' : 's'} held back`];
+    }
+    if (plan.state === 'done') {
+      // Every chat read is not every message imported: what was left out keeps a finished plan amber.
+      const left = notImportedTotal(plan), unread = chats.filter((c) => c.state === 'skipped').length;
+      const gaps = [left && `${left} not imported`, unread && `${unread} chat${unread === 1 ? '' : 's'} not read`].filter(Boolean);
+      return gaps.length ? ['tone-warn', ['Done', ...gaps].join(' · ')] : ['tone-good', 'Done'];
+    }
+    return ['tone-quiet', 'Cancelled'];
+  }
+  function chatOutcome(chat, running) {
+    if (chat.state === 'skipped') return CHAT_REASONS[chat.reason] || (String(chat.reason).startsWith('chat_unreadable') ? 'Telegram refused to read it' : chat.reason);
+    if (chat.state === 'done') return chat.truncated ? 'stopped at the limit; older messages in these dates were not read' : 'every message in these dates read';
+    return running ? 'in progress or waiting its turn' : 'not finished';
+  }
+  function planDetails(plan) {
+    const chats = plan.chats || [];
+    if (!chats.length) return '';
+    const lines = chats.map((chat) => {
+      const c = chat.counts || {};
+      const parts = [`${chat.read} read`];
+      if (c.recorded) parts.push(`${c.recorded} recorded`);
+      const already = (c.duplicate || 0) + (c.delivered || 0) + sum(ALREADY.map((k) => (chat.skipped || {})[k]));
+      if (already) parts.push(`${already} already in the conversation`);
+      if (c.residual) parts.push(`${c.residual} held back`);
+      const left = notImported(c, chat.skipped || {});
+      if (left.length) parts.push(`${sum(left.map(([n]) => n))} not imported (${left.length === 1 ? left[0][1] : left.map(([n, why]) => `${n} ${why}`).join(', ')})`);
+      return `<li>${esc(chatName(chat.id))}: ${esc(parts.join(' · '))} · ${esc(chatOutcome(chat, plan.state === 'running'))}</li>`;
+    });
+    // Every held or released message is counted; IDs beyond the listed ones are said, never dropped.
+    const more = (n) => n ? [`<li>and ${n} more not listed</li>`] : [];
+    const held = (plan.held || []).map((h) => `<li>${esc(chatName(h.chat))}, message ${esc(h.message_id)}: ${esc(heldWords(h))}</li>`)
+      .concat(more(plan.held_omitted));
+    const released = (plan.released || []).map((r) => `<li>${esc(chatName(r.chat))}, message ${esc(r.message_id)}: ${esc(releasedWords(r, plan.state === 'running'))}</li>`)
+      .concat(more(plan.released_omitted));
+    const key = 'plan-' + plan.id;
+    return `<details data-section="${esc(key)}" ${state.open.has(key) ? 'open' : ''}><summary class="secondary">Chats${held.length || released.length ? ' and held messages' : ''}</summary>
+      <ul class="meta plan-lines">${lines.join('')}</ul>${held.length ? `<ul class="meta plan-lines">${held.join('')}</ul>` : ''}${released.length ? `<ul class="meta plan-lines">${released.join('')}</ul>` : ''}</details>`;
+  }
+  function planActions(plan, ready) {
+    const id = esc(plan.id), held = busy('plan:' + plan.id) ? 'disabled' : '';
+    const button = (action, label, quiet) => `<button type="button" ${quiet ? 'class="quiet"' : ''} data-action="import-action" data-value="${action}:${id}" ${held}>${label}</button>`;
+    if (plan.state === 'saved') return `<div class="strip">${ready ? button('start', 'Start', false) : ''}${button('cancel', 'Cancel', true)}</div>`;
+    if (plan.state === 'running') return `<div class="strip">${button('pause', 'Pause', false)}${button('cancel', 'Cancel', true)}</div>`;
+    if (plan.state === 'paused' || plan.state === 'partial') return `<div class="strip">${ready ? button('resume', 'Resume', false) : ''}${button('cancel', 'Cancel', true)}</div>`;
+    return '';
   }
   function historyScene() {
     const d = state.drafts;
     const imports = state.imports;
-    const supported = imports?.host_supports_import;
+    const blocked = imports?.reason || '';
+    const ready = !!imports?.host_supports_import && !blocked;
     const availability = !imports ? (state.importsError || 'Reading import support…')
-      : supported ? 'This Ouroboros can record imported history, but this connector version does not import yet. A saved plan never starts by itself; importing will need a connector version that supports it and your explicit start.'
-      : imports.host_checked_at ? 'Not available yet: this Ouroboros version offers no way to record imported history in conversations. You can save a plan; nothing is read from Telegram for it.'
-      : 'Not available yet: imports need Ouroboros support that has not been confirmed (the companion checks when it starts). You can save a plan; nothing is read from Telegram for it.';
+      : ready ? 'This Ouroboros can record imported history. A saved plan never starts by itself: it runs after your explicit Start, and you can pause or cancel it.'
+      : IMPORT_BLOCKED[blocked] ? IMPORT_BLOCKED[blocked].tray
+      : imports.host_checked_at ? 'Not available: this Ouroboros version cannot record imported history in conversations. You can save a plan; nothing is read from Telegram for it.'
+      : 'Not available yet: Ouroboros support has not been confirmed (the companion checks when it starts). You can save a plan; nothing is read from Telegram for it.';
     const receivingChats = (state.chats?.chats || []).filter((c) => c.receiving);
     const picking = d.importMode === 'chosen';
     const choices = receivingChats.length ? receivingChats.map((c) => {
@@ -425,8 +581,18 @@
         <input type="checkbox" data-import-chat="${esc(c.id)}" ${checked ? 'checked' : ''} aria-label="Import ${esc(c.title || c.id)}"></label>`;
     }).join('') : '<p class="empty">No receiving chats listed yet. Refresh the chat list on What I hear.</p>';
     const plans = imports?.plans || [];
+    const rows = plans.map((plan) => {
+      const [tone, word] = planStatus(plan, blocked);
+      const counts = planCounts(plan);
+      const hint = plan.state === 'partial' ? 'Resume checks each held message again: one that has reached the conversation since is skipped, one still on its way stays held, and for the others the copy saved when the chat was read is sent.' : '';
+      return `<div class="plan" data-plan="${esc(plan.id)}"><div class="row"><div>${esc(planLine(plan))}<span class="mark ${tone} plan-state">${esc(word)}</span>
+        ${counts ? `<span class="meta plan-counts">${esc(counts)}</span>` : ''}${hint ? `<span class="meta plan-hint">${esc(hint)}</span>` : ''}</div>${planActions(plan, ready)}</div>${planDetails(plan)}</div>`;
+    }).join('');
+    // The route lists the newest plans and every running, paused or partial one; it counts the rest.
+    const older = imports?.older_plans || 0;
+    const unlisted = older ? `<p class="meta" id="older-plans">${older} older saved, done or cancelled plan${older === 1 ? ' is' : 's are'} not listed.</p>` : '';
     const left = `<section class="object"><h2>Import earlier history</h2>
-      <div class="tray"><p class="warning">${esc(availability)}</p></div>
+      <div class="tray"><p class="${ready ? 'secondary' : 'warning'}" id="import-availability">${esc(availability)}</p></div>
       <div class="strip small" role="group" aria-label="Chats to import"><button type="button" data-action="import-mode" data-value="receiving" ${pressed('receiving', d.importMode)}>All receiving chats</button>
         <button type="button" data-action="import-mode" data-value="chosen" ${pressed('chosen', d.importMode)}>Chosen chats</button></div>
       <p class="hint">${picking ? 'Tick the chats to import.' : 'Untick a chat to leave it out. Chats you do not receive are never imported.'}</p>
@@ -435,13 +601,12 @@
         <label class="field"><span>To, inclusive</span><input type="date" data-draft="importTo" value="${esc(d.importTo)}"></label>
         <label class="field"><span>Messages per chat, at most</span><input type="number" min="1" max="5000" data-draft="importCap" value="${esc(d.importCap)}"></label></div>
       <div class="actionbar"><button type="button" data-action="save-import" ${busy('import') || !imports ? 'disabled' : ''}>${busy('import') ? 'Saving…' : 'Save import plan'}</button></div>${resultLine('import')}
-      ${plans.length ? `<h3 style="margin-top:20px">Saved plans</h3>${plans.map((plan) => `<div class="row"><div>${esc(planLine(plan))}<span class="meta">${plan.state === 'saved' ? 'Saved · not started' : 'Cancelled'}</span></div>
-        ${plan.state === 'saved' ? `<button type="button" class="quiet" data-action="cancel-import" data-value="${esc(plan.id)}">Cancel</button>` : ''}</div>`).join('')}` : ''}
+      ${plans.length ? `<h3 style="margin-top:20px">Plans</h3>${rows}${unlisted}${resultLine('plans')}` : ''}
     </section>`;
     const right = `<section class="object"><h2>What an import does</h2>
       <p class="secondary">Old messages go into the conversation history with their authors and dates. They do not wake me, and nobody gets a reply to them.</p>
       <div class="capline"><strong>Telegram bot</strong><span class="secondary">The Bot API cannot read earlier chat history. A bot only receives messages that arrive while it runs.</span></div>
-      <div class="capline"><strong>Dedicated account</strong><span class="secondary">Reads the history this account can see, newest first, within the chosen dates. Media is described, not downloaded.</span></div>
+      <div class="capline"><strong>Dedicated account</strong><span class="secondary">Reads the history this account can see, newest first, within the chosen dates and the per-chat limit. Media is described, not downloaded. Its own earlier messages are recorded as sent from this account; messages already in the conversation are skipped.</span></div>
       <div class="capline"><strong>Where to read it</strong><span class="secondary">Ouroboros versions with a Conversations view show the history the host recorded under Places → Telegram → Conversations; other versions do not have it. It is not a browser of all of Telegram.</span></div>
     </section>`;
     return `<div class="grid">${left}${right}</div>`;
@@ -450,10 +615,11 @@
   // ---- render and actions -----------------------------------------------------
   function render() {
     if (disposed) return;
-    // Open sections, the focused field and its caret survive a re-render, including the status poll's.
+    // Open sections, the focused field or button and a field's caret survive a re-render, including a poll's.
     for (const node of root.querySelectorAll('details[data-section]')) node.open ? state.open.add(node.dataset.section) : state.open.delete(node.dataset.section);
     const focused = document.activeElement && root.contains(document.activeElement) ? document.activeElement : null;
     const key = focused && (focused.dataset.draft || focused.dataset.control || focused.dataset.chat || focused.dataset.importChat);
+    const button = focused?.matches('button[data-action]') ? [focused.dataset.action, focused.dataset.value ?? ''] : null;
     let caret = null;
     try { if (typeof focused?.selectionStart === 'number') caret = [focused.selectionStart, focused.selectionEnd]; } catch { caret = null; }
     const strip = `<nav class="strip" aria-label="Telegram connector">${SCENES.map(([id, label]) => `<button type="button" data-action="go" data-value="${id}" ${pressed(id, state.scene)}>${label}</button>`).join('')}</nav>`;
@@ -464,6 +630,7 @@
     if (note) note.style.height = Math.max(232, note.scrollHeight + 2) + 'px';
     const next = key && root.querySelector(`[data-draft="${key}"],[data-control="${key}"],[data-chat="${key}"],[data-import-chat="${key}"]`);
     if (next) { next.focus(); if (caret) try { next.setSelectionRange(...caret); } catch { /* type without a caret */ } }
+    else if (button) [...root.querySelectorAll('button[data-action]')].find((b) => b.dataset.action === button[0] && (b.dataset.value ?? '') === button[1])?.focus();
   }
   function setBusy(key, value) { value ? state.busy.add(key) : state.busy.delete(key); render(); }
   function controlsBody() {
@@ -471,7 +638,7 @@
     return Object.fromEntries(CONTROLS.map((name) => [name, String(draft[name] ?? '')]));
   }
   const actions = {
-    go(value) { state.scene = value; render(); },
+    go(value) { state.scene = value; render(); if (value === 'history') loadImports().then(render); },
     method(value) { state.method = value; render(); },
     async reload() { await Promise.all([loadPolicy(), loadChats(), loadImports()]); render(); },
     async 'refresh-status'() { await Promise.all([loadStatus(), state.setup ? null : loadSetup()]); render(); },
@@ -565,9 +732,12 @@
       catch (error) { result('import', error.message, true); }
       finally { setBusy('import', false); }
     },
-    async 'cancel-import'(value) {
-      try { result('import', (await call('participant/import', {action: 'cancel', id: value})).message); await loadImports(); render(); }
-      catch (error) { result('import', error.message, true); }
+    async 'import-action'(value) {
+      const [action, id] = String(value).split(':');
+      setBusy('plan:' + id, true); result('plans', ''); result('import', '');
+      try { result('plans', (await call('participant/import', {action, id})).message); await loadImports(); }
+      catch (error) { result('plans', error.message, true); }
+      finally { setBusy('plan:' + id, false); }
     },
   };
   // Module frames lack allow-forms: every action is a button handled here, never a form submit.
@@ -603,6 +773,7 @@
   state.drafts.importFrom = isoDay(monthAgo); state.drafts.importTo = isoDay(today);
   const statusTimer = setInterval(loadStatus, 20000); cleanups.push(() => clearInterval(statusTimer));
   const refreshTimer = setInterval(followRefresh, 5000); cleanups.push(() => clearInterval(refreshTimer));
+  const importTimer = setInterval(followImports, 4000); cleanups.push(() => clearInterval(importTimer));
   const waitTimer = setInterval(() => { const node = $('#wait-line'); if (node && !disposed) node.textContent = waitLine(); }, 1000);
   cleanups.push(() => clearInterval(waitTimer));
   const disposeTheme = bridge.onTheme?.((theme) => { document.documentElement.dataset.theme = theme === 'light' ? 'light' : 'dark'; });
