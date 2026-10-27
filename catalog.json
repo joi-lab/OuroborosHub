@@ -1,7 +1,7 @@
 {
   "description": "Official Ouroboros skills catalog.",
   "name": "OuroborosHub",
-  "raw_base_url": "https://raw.githubusercontent.com/razzant/OuroborosHub/995571053d2f1aa5ef16535d168139653b720ec1",
+  "raw_base_url": "https://raw.githubusercontent.com/razzant/OuroborosHub/main",
   "schema_version": 1,
   "skills": [
     {
@@ -677,8 +677,8 @@
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "497551a58806c027b07294b7e0a2c50ce23ed9d805b707e52ae9fc0d1343f203",
-          "size": 79207
+          "sha256": "94d5d91268ae349f4a8df694f006a5b02dec022e509188cd58650f81631ba18e",
+          "size": 79807
         },
         {
           "path": "plugin.py",
@@ -884,7 +884,7 @@
       "name": "claudexor_quotas",
       "slug": "claudexor_quotas",
       "type": "extension",
-      "version": "0.12.1",
+      "version": "0.12.2",
       "when_to_use": "The owner wants quota windows, resets and remaining reserve of the authorized Claudexor accounts; or, before choosing executors, the model wants measured reserve by family and limit. Advisory only: never a dispatch guarantee or a pin change."
     },
     {
