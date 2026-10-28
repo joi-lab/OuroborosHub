@@ -101,9 +101,6 @@ def main():
             assert len(registrations.routes) == 3
             assert len(registrations.settings_sections) == 1
             assert not registrations.ui_tabs
-            components = registrations.settings_sections["github:github"]["render"]["components"]
-            assert any(c.get("type") == "action" and c.get("route") == "status"
-                       and c.get("method") == "GET" for c in components)
             assert registrations.companion_names == ["github_poller"]
             assert not registrations.companion_spawns  # catalog only, never enabled
             from starlette.requests import Request

@@ -2,8 +2,12 @@
   "category": [
     "messaging"
   ],
-  "description": "Observe connected GitHub issues, pull requests and Discussions, and deliver authorized replies or explained issue closures with durable receipts.",
-  "digest": "a3ee737f78bb290ecc90ebac8cc582c11f567661decf6042ccc6e46e89b82567",
+  "connects": [
+    "GitHub"
+  ],
+  "description": "GitHub places for issues, pull requests, reviews and Discussions, with separate Notifications readers, owner questions in Main and durable reply receipts.",
+  "digest": "5c1af3f64088ebd88cc1e64bbaf1562c47eb3d4b1dd90802c73ef98c61fa3802",
+  "icon": "ui/icon.svg",
   "install_specs": [
     "PyJWT[crypto]>=2.13,<3"
   ],

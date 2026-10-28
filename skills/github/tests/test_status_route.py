@@ -17,7 +17,7 @@ REPOSITORIES = [{"id": 303, "full_name": "example/project"}]
 
 class RecordingAPI:
     def __init__(self, state_dir):
-        self.state_dir, self.routes = state_dir, {}
+        self.state_dir, self.routes, self.methods = state_dir, {}, {}
         self.settings, self.tabs, self.companions, self.tools = {}, [], [], {}
 
     def get_runtime_info(self):
@@ -25,6 +25,7 @@ class RecordingAPI:
 
     def register_route(self, path, handler, methods):
         self.routes[path] = handler
+        self.methods[path] = methods
 
     def register_settings_section(self, section_id, **kwargs):
         self.settings[section_id] = kwargs
@@ -55,17 +56,16 @@ class StatusRouteTests(unittest.TestCase):
         response = asyncio.run(self.api.routes["status"](SimpleNamespace(query_params={})))
         return json.loads(response.body)
 
-    def test_diagnostics_are_on_demand_in_settings_without_a_widget(self):
+    def test_diagnostics_and_companion_survive_without_a_widget(self):
         self.assertEqual(self.api.tabs, [])
         self.assertEqual(self.api.companions, ["github_poller"])
         self.assertEqual(set(self.api.tools), {"github_place_message", "github_place_close", "github_place_status"})
         components = self.api.settings["github"]["schema"]["components"]
-        action = next(c for c in components if c.get("route") == "status")
-        self.assertEqual(action["type"], "action")
-        self.assertEqual(action["method"], "GET")
-        self.assertTrue(any(c["type"] == "json" and c.get("target") == action["target"] for c in components))
+        self.assertTrue(any(c.get("route") == "settings" for c in components))
+        self.assertTrue(any(c.get("route") == "probe" for c in components))
         self.assertFalse(any(c["type"] == "poll" for c in components))
-        response = asyncio.run(self.api.routes[action["route"]](SimpleNamespace(query_params={})))
+        self.assertEqual(self.api.methods["status"], ("GET",))
+        response = asyncio.run(self.api.routes["status"](SimpleNamespace(query_params={})))
         self.assertEqual(response.status_code, 200)
         self.assertIn("host_contract_ready", json.loads(response.body))
         tool_status = json.loads(self.api.tools["github_place_status"]["handler"]())
