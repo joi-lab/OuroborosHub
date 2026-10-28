@@ -322,9 +322,10 @@ does not decide whether an issue is a duplicate/non-bug or grant authority to ac
 
 Physical receipts commit locally before host reporting. Report ACK failures
 retry the immutable report, never the GitHub operation. The status tool can inspect
-an exact event or delivery; the status widget lists outstanding IDs/refs, queued
-allowance work, uncertainty, gaps, quota, database bytes and heartbeat time. No
-queue expires automatically. Routine status is read-only and paginated (100 rows
+an exact event or delivery. In the GitHub connector settings, **Show diagnostics**
+reads outstanding IDs/refs, queued allowance work, uncertainty, gaps, quota,
+database bytes and heartbeat time on demand. There is no GitHub card on Widgets;
+collection runs independently in the companion. No queue expires automatically. Routine status is read-only and paginated (100 rows
 per list); use `status_offset`/`next_offsets` to see every retained obligation.
 Exact event/delivery lookup returns the complete retained evidence. State/receipt backups must be taken as a consistent
 SQLite backup by the eventual operator; deleting the database destroys custody.

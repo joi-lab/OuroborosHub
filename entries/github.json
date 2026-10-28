@@ -2,12 +2,8 @@
   "category": [
     "messaging"
   ],
-  "connects": [
-    "GitHub"
-  ],
-  "description": "GitHub places for issues, pull requests, reviews and Discussions, with separate Notifications readers, owner questions in Main and durable reply receipts.",
-  "digest": "70d9e24cbae81275774544df673e952f17212f8b78e2e63c65792411d61f22d1",
-  "icon": "ui/icon.svg",
+  "description": "Observe connected GitHub issues, pull requests and Discussions, and deliver authorized replies or explained issue closures with durable receipts.",
+  "digest": "a3ee737f78bb290ecc90ebac8cc582c11f567661decf6042ccc6e46e89b82567",
   "install_specs": [
     "PyJWT[crypto]>=2.13,<3"
   ],
@@ -19,6 +15,6 @@
     "path": "skills/github"
   },
   "type": "extension",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "withdrawn": null
 }
