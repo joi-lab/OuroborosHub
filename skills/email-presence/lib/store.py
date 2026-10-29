@@ -366,7 +366,7 @@ class EmailStore:
                 self._put(db, cursor_key, cursor)
             return int(cur.lastrowid or 0), bool(cur.rowcount)
 
-    def _claim(self, table, lease_seconds):
+    def _claim(self, table, lease_seconds, scope="", order="id"):
         now = time.time()
         token = uuid.uuid4().hex
         with self._connect() as db:
@@ -378,7 +378,7 @@ class EmailStore:
                     self._freeze_reports(db, row["id"], [report] if report else [])
                 db.execute("UPDATE outbox SET state='uncertain',last_error='Process lost during SMTP delivery; inspect Message-ID before retry',updated_at=? WHERE state='sending' AND lease_until<=?", (now, now))
             fifo = "AND NOT EXISTS (SELECT 1 FROM inbox earlier WHERE earlier.id < inbox.id AND earlier.thread_key = inbox.thread_key AND earlier.state IN ('pending','retry','processing') AND earlier.host_reference='')" if table == "inbox" else ""
-            row = db.execute(f"SELECT * FROM {table} WHERE ((state IN ('pending','retry') AND available_at<=?) OR (state='processing' AND lease_until<=?)) {fifo} ORDER BY id LIMIT 1", (now, now)).fetchone()
+            row = db.execute(f"SELECT * FROM {table} WHERE ((state IN ('pending','retry') AND available_at<=?) OR (state='processing' AND lease_until<=?)) {scope} {fifo} ORDER BY {order} LIMIT 1", (now, now)).fetchone()
             if not row:
                 return None
             db.execute(f"UPDATE {table} SET state='processing',lease_token=?,lease_until=?,attempts=attempts+1,updated_at=? WHERE id=?", (token, now + lease_seconds, now, row["id"]))
@@ -386,16 +386,37 @@ class EmailStore:
             result.update(lease_token=token, attempts=row["attempts"] + 1)
             return result
 
-    def claim_inbox(self, lease_seconds=2100):
-        r = self._claim("inbox", lease_seconds)
+    def claim_inbox(self, lease_seconds=2100, submitted=None):
+        """Lease claimable mail, keeping each thread's FIFO.
+
+        ``submitted=False`` claims only mail without a stored Host reference (new
+        input), oldest first; ``True`` only mail that has one (observation of
+        admitted work), earliest due first, so a reference released after its poll
+        never overtakes one already waiting; ``None`` new mail first, then either.
+        """
+        scope, order = {None: ("", "host_reference<>'', CASE WHEN host_reference<>'' THEN available_at END, id"),
+                        False: ("AND host_reference=''", "id"),
+                        True: ("AND host_reference<>''", "available_at, id")}[submitted]
+        r = self._claim("inbox", lease_seconds, scope, order)
         if not r:
             return None
+        return self._inbox_item(r)
+
+    @staticmethod
+    def _inbox_item(r):
         return InboxItem(r["id"], r["lease_token"], r["folder"], r["uid"], r["message_id"], r["in_reply_to"],
                          tuple(json.loads(r["references_json"])), r["sender"], r["subject"], r["body"],
                          tuple(json.loads(r["recipients_json"])), r["host_reference"], r["attempts"], r["uidvalidity"],
                          json.loads(r["context_json"]), tuple(json.loads(r["cc_json"] or "[]")),
                          tuple(json.loads(r["reply_to_json"] or "[]")), tuple(json.loads(r["attachments_json"] or "[]")),
                          tuple(json.loads(r["staged_files_json"] or "[]")))
+
+    def inbox_event(self, folder, uidvalidity, uid):
+        """The captured message at this folder/UIDVALIDITY/UID (its unique key), or None (read-only)."""
+        with self._connect() as db:
+            row = db.execute("SELECT * FROM inbox WHERE folder=? AND uidvalidity=? AND uid=?",
+                             (folder, uidvalidity, uid)).fetchone()
+        return self._inbox_item({**dict(row), "lease_token": ""}) if row else None
 
     def set_host_reference(self, row_id, token, reference):
         with self._connect() as db:

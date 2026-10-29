@@ -10,8 +10,11 @@ from __future__ import annotations
 
 from copy import Error as CopyError
 from dataclasses import dataclass
+from datetime import datetime
 import json
+import math
 import os
+import time
 from typing import Any, Callable
 from urllib import error, parse, request
 
@@ -154,12 +157,72 @@ def build_event(
 
 _OUTCOMES = frozenset({"message", "silent", "tool_delivered", "deferred"})
 
+# Continuation version 2: the Host answers an event as soon as its author takes the
+# conversation's later events, and a busy conversation or slot is a typed retry, not a wait.
+EARLY_CONTINUATION = 2
+
+
+def lists_early_continuation(identity: Any) -> bool:
+    """Whether ``GET /identity`` lists continuation version 2.
+
+    Such a Host keeps the scalar ``presence_continuation_version`` at 1, because deployed
+    consumers compare it exactly; only the additive ``presence_continuation_versions``
+    list says that version 2 may be requested.
+    """
+    versions = identity.get("presence_continuation_versions") if isinstance(identity, dict) else None
+    return isinstance(versions, list) and any(type(v) is int and v == EARLY_CONTINUATION for v in versions)
+
+
+def anchored_message_id(anchor: Any, conversation_key: str) -> int | None:
+    """The Telegram message a version-2 output answers, when its anchor stays in this conversation.
+
+    ``reply_anchor`` names the last input the output covers: its ``source_event_id`` and the
+    exact captured ``message``. Only an anchor whose source event belongs to
+    ``conversation_key`` (the same account, chat and topic) and whose message id is the one
+    that event names counts. Anything else, or no anchor at all (promoted children and
+    retained refusals carry none), returns None: the caller keeps its own event as the target.
+    """
+    if not isinstance(anchor, dict) or not isinstance(conversation_key, str) or not conversation_key:
+        return None
+    source, message = anchor.get("source_event_id"), anchor.get("message")
+    if not isinstance(source, str) or not isinstance(message, dict) or not source.startswith(conversation_key + ":"):
+        return None
+    named = source[len(conversation_key) + 1:].split(":", 1)[0]
+    mid = message.get("message_id")
+    if not isinstance(mid, str) or mid != named or not mid.isascii() or not mid.isdecimal() or not 0 < int(mid) < 2**31:
+        return None
+    return int(mid)
+
+
+def retry_seconds(value: Any) -> float | None:
+    """A Host ``retry_after``: positive seconds, or a timezone-qualified ISO time; else None."""
+    if type(value) in (int, float) and math.isfinite(value) and value > 0:
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return max(1.0, datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp() - time.time())
+        except (ValueError, TypeError, OverflowError):
+            return None
+    return None
+
+
+def busy_delay(field: str, retry_after: float | None) -> float:
+    """How long a busy event stays its conversation's head before the same event goes again.
+
+    A ``presence_capacity_full`` answer names the held resource: ``conversation`` (its author
+    is starting or closing; the Host says 1 s, so a starting author's intake stays responsive)
+    or ``capacity`` (every active slot is held; 5 s). The Host's ``retry_after`` is a floor and
+    is used as it is, for every consecutive busy answer; the older in-flight refusal names
+    neither and carries no hint, so it waits like capacity. Never the long backoff of a failure.
+    """
+    return retry_after or (1.0 if field == "conversation" else 5.0)
+
 
 @dataclass(frozen=True)
 class PresenceResult:
     """Host outcome, with ambiguous transport failure represented as retry."""
 
-    kind: str  # completed (ended work or a receipt), pending, retained, retry, blocked, rejected
+    kind: str  # completed (ended work or a receipt), continuing, pending, retained, retry, blocked, rejected
     outcome: str = ""  # message, silent, tool_delivered, deferred on ended work
     text: str = ""
     turn_ref: str = ""
@@ -176,6 +239,13 @@ class PresenceResult:
     output_ref: str = ""
     child_work_ref: str = ""
     outputs: tuple[tuple[str, str, str], ...] = ()
+    # Version 2: the author that holds the event (``continuing``), the resource a busy retry
+    # names (``conversation`` or ``capacity``), and the ``reply_anchor`` of the terminal output
+    # and of released outputs as (output_ref, anchor). Absent anchors stay absent.
+    continuation_ref: str = ""
+    field: str = ""
+    reply_anchor: Any = None
+    anchors: tuple[tuple[str, Any], ...] = ()
 
 
 def _urllib_transport(base_url: str, *, timeout: float) -> Transport:
@@ -248,6 +318,33 @@ class PresenceClient:
             return 1, "available"
         return 0, "host_does_not_advertise_delivery"
 
+    def continuation_capability(self) -> int:
+        """2 when ``/identity`` lists continuation version 2, else 0 (the version-0 request shape).
+
+        Read once at startup. Without the list, or without a readable identity, nothing is
+        requested that the Host has not offered: version 0 still waits for the terminal.
+        """
+        try:
+            status, body = self._transport("GET", "/identity", None, {
+                "x-skill-token": self._token.use_in_request(),
+            })
+        except (OSError, TimeoutError, ValueError, TypeError):
+            return 0
+        if status != 200 or not isinstance(body, dict) or body.get("ok") is not True:
+            return 0
+        return EARLY_CONTINUATION if lists_early_continuation(body) else 0
+
+    @staticmethod
+    def _released(body: dict[str, Any]) -> tuple[tuple[tuple[str, str, str], ...], tuple[tuple[str, Any], ...]]:
+        """Released outputs with an identity and speech, and the anchors those rows carry."""
+        rows = [row for row in (body.get("outputs") if isinstance(body.get("outputs"), list) else [])
+                if isinstance(row, dict) and isinstance(row.get("output_ref"), str) and row["output_ref"]
+                and row.get("outcome") in {"message", "deferred"}
+                and isinstance(row.get("text"), str) and row["text"].strip()]
+        return (tuple((row["output_ref"], row["outcome"], row["text"]) for row in rows),
+                tuple((row["output_ref"], row["reply_anchor"]) for row in rows
+                      if isinstance(row.get("reply_anchor"), dict)))
+
     def _call(self, method: str, path: str, payload: dict[str, Any] | None = None) -> PresenceResult:
         try:
             # The revealed string and header exist only for this transport call;
@@ -262,29 +359,41 @@ class PresenceClient:
             return PresenceResult("retry", code="protocol_invalid", error="Host response is not an object")
         if body.get("ok") is True:
             host_status = body.get("status")
+            anchor = body.get("reply_anchor") if isinstance(body.get("reply_anchor"), dict) else None
             if status == 202 and host_status == "pending" and isinstance(body.get("work_ref"), str):
-                return PresenceResult("pending", work_ref=body["work_ref"])
-            if status == 200 and host_status in {"completed", "failed", "cancelled"}:
+                # A live author's released outputs and a child it promoted are read while it runs;
+                # a released output keeps the reporting version the Host echoes for that work.
+                version = body.get("delivery_reporting_version", 0)
+                if type(version) is not int or version not in (0, 1):
+                    return PresenceResult("retry", code="protocol_invalid", error="invalid delivery version")
+                outputs, anchors = self._released(body)
+                return PresenceResult("pending", work_ref=body["work_ref"],
+                                      task_id=str(body.get("task_id") or ""),
+                                      child_work_ref=str(body.get("child_work_ref") or ""),
+                                      outputs=outputs, anchors=anchors, delivery_reporting_version=version)
+            if status == 200 and host_status in {"completed", "failed", "cancelled", "continuing"}:
                 outcome, text = body.get("outcome"), body.get("text")
                 if outcome not in _OUTCOMES or not isinstance(text, str):
-                    if host_status == "completed":
+                    if host_status in {"completed", "continuing"}:
                         return PresenceResult("retry", code="protocol_invalid", error="unexpected Host success shape")
                     outcome, text = "silent", ""  # an ended attempt without an answer
                 version = body.get("delivery_reporting_version", 0)
                 if type(version) is not int or version not in (0, 1):
                     return PresenceResult("retry", code="protocol_invalid", error="invalid delivery version")
-                released = body.get("outputs") if isinstance(body.get("outputs"), list) else []
-                return PresenceResult("completed", outcome=outcome, text=text, status=host_status,
-                                      turn_ref=str(body.get("turn_ref") or ""),
+                turn_ref = str(body.get("turn_ref") or "")
+                if host_status == "continuing" and not turn_ref:
+                    # Custody without a reference to observe is not custody.
+                    return PresenceResult("retry", code="protocol_invalid", error="continuing without turn_ref")
+                outputs, anchors = self._released(body)
+                return PresenceResult("continuing" if host_status == "continuing" else "completed",
+                                      outcome=outcome, text=text, status=host_status,
+                                      turn_ref=turn_ref,
                                       work_ref=str(body.get("work_ref") or ""),
                                       task_id=str(body.get("task_id") or ""),
                                       output_ref=str(body.get("output_ref") or ""),
                                       child_work_ref=str(body.get("child_work_ref") or ""),
-                                      outputs=tuple(
-                                          (row["output_ref"], row["outcome"], row["text"]) for row in released
-                                          if isinstance(row, dict) and isinstance(row.get("output_ref"), str)
-                                          and row["output_ref"] and row.get("outcome") in {"message", "deferred"}
-                                          and isinstance(row.get("text"), str) and row["text"].strip()),
+                                      continuation_ref=str(body.get("continuation_ref") or ""),
+                                      outputs=outputs, anchors=anchors, reply_anchor=anchor,
                                       delivery_reporting_version=version)
             if status == 200 and body.get("recorded") is True:
                 return PresenceResult("completed")
@@ -294,18 +403,31 @@ class PresenceClient:
             return PresenceResult(disposition, code=str(body.get("code") or ""),
                                   error=str(body.get("error") or ""),
                                   turn_ref=str(body.get("turn_ref") or ""),
-                                  work_ref=str(body.get("work_ref") or ""))
+                                  work_ref=str(body.get("work_ref") or ""),
+                                  field=str(body.get("field") or ""),
+                                  retry_after=retry_seconds(body.get("retry_after")))
         return PresenceResult("retry", code="protocol_invalid", error="untyped Host response")
 
-    def turn(self, event: dict[str, Any], *, delivery_reporting_version: int = 0) -> PresenceResult:
+    def turn(self, event: dict[str, Any], *, delivery_reporting_version: int = 0,
+             continuation_version: int = 0) -> PresenceResult:
+        """Submit one event. ``continuation_version`` is sent only when nonzero and offered.
+
+        Version 0 keeps the earlier request bytes and waits for the author's terminal.
+        Version 2 answers ``continuing`` once the author takes the conversation's later
+        events, or a typed ``presence_capacity_full`` retry while its conversation or every
+        active slot is held.
+        """
         if not isinstance(event, dict) or set(event) != _EVENT_FIELDS:
             raise ValueError("event must have exactly the Host Presence event fields")
         if type(delivery_reporting_version) is not int or delivery_reporting_version not in (0, 1):
             raise ValueError("delivery_reporting_version must be 0 or 1")
-        return self._call("POST", "/presence/turn", {
-            "binding_id": self.binding_id, "event": dict(event),
-            "delivery_reporting_version": delivery_reporting_version,
-        })
+        if type(continuation_version) is not int or continuation_version not in (0, EARLY_CONTINUATION):
+            raise ValueError("continuation_version must be 0 or 2")
+        body = {"binding_id": self.binding_id, "event": dict(event),
+                "delivery_reporting_version": delivery_reporting_version}
+        if continuation_version:
+            body["continuation_version"] = continuation_version
+        return self._call("POST", "/presence/turn", body)
 
     def work(self, work_ref: str) -> PresenceResult:
         if not isinstance(work_ref, str) or not work_ref or "/" in work_ref:

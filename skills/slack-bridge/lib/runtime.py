@@ -11,7 +11,7 @@ import re
 import httpx
 from typing import Any, Sequence
 
-from .host_adapter import HostBindingTerminalError, HostOutput, HostTurnStatus, PresenceHostAdapter
+from .host_adapter import HostBindingTerminalError, HostOutput, HostRetryError, HostTurnStatus, PresenceHostAdapter
 from .provider_context import capture_context
 from .slack_api import SlackApiError, SlackClient, SlackConfigurationError, SlackMutationUncertain, chunk_message, mutation_may_have_applied
 from .socket_mode import SocketModeClient
@@ -19,10 +19,26 @@ from .store import BridgeStore, InboxItem, InboxLeaseLost, OutboxItem
 
 log = logging.getLogger(__name__)
 _MAX_OUTBOX_ATTEMPTS = 5
-# Budget the Host's 1800-second initial request plus a recovery buffer, and
-# refresh once before its finite continuation poll. Staging or suspension can
-# still outlast this budget; the token checks remain the ownership authority.
+# Budget the Host's 1800-second initial request plus a recovery buffer. A worker
+# without a role refreshes once before its finite continuation poll; a companion
+# input claim ends at the durable reference and an observation claim gets its own
+# budget. Staging or suspension can still outlast this budget; the token checks
+# remain the ownership authority.
 _INBOUND_LEASE_SECONDS = 2100.0
+# Which inbox rows each worker role claims: new input (no Host reference yet),
+# admitted work to observe (a stored reference), or both in one claim.
+_ROLE_CLAIMS = {None: None, "intake": False, "observe": True}
+# A busy conversation or full capacity refusal resubmits the same event after the
+# larger of the Host's retry_after and the bridge's own backoff, which starts at one
+# second, doubles per refusal and is capped here. The Host's hint is never cut.
+_CAPACITY_BACKOFF_MAX_SECONDS = 30.0
+
+
+def _retry_delay(exc: BaseException, attempts: int) -> float:
+    if isinstance(exc, HostRetryError) and exc.code == "presence_capacity_full":
+        backoff = min(_CAPACITY_BACKOFF_MAX_SECONDS, 2.0 ** min(max(attempts - 1, 0), 5))
+        return backoff if exc.retry_after is None else max(exc.retry_after, backoff)
+    return min(60.0, 2.0 ** min(attempts, 5))
 
 
 def _event_directory_name(item: InboxItem) -> str:
@@ -65,6 +81,14 @@ def _delivery_report(item: Any, state: str, *, result: dict[str, Any] | None = N
 
 
 class InboundWorker:
+    """Submit Slack events to Host and observe the work they admit.
+
+    ``role=None`` does both in one claim. The companion runs ``"intake"``
+    workers, which only submit rows without a Host reference and release each
+    one as soon as its reference is durable, and ``"observe"`` workers, which only
+    poll stored references. A poll therefore never occupies an input worker.
+    """
+
     def __init__(
         self,
         store: BridgeStore,
@@ -72,11 +96,15 @@ class InboundWorker:
         host: PresenceHostAdapter,
         *,
         staged_root: pathlib.Path,
+        role: str | None = None,
     ) -> None:
+        if role not in _ROLE_CLAIMS:
+            raise ValueError(f"Unknown inbound worker role: {role}")
         self.store = store
         self.slack = slack
         self.host = host
         self.staged_root = staged_root
+        self.role = role
 
     def _enqueue_outputs(self, item: InboxItem, outputs: Sequence[HostOutput], mode: int) -> None:
         for output in outputs:
@@ -107,7 +135,11 @@ class InboundWorker:
         self._enqueue_outputs(item, status.outputs, status.delivery_reporting_version)
 
     async def process_once(self) -> bool:
-        item = self.store.claim_inbox(lease_seconds=_INBOUND_LEASE_SECONDS)
+        if self.role is None:
+            item = self.store.claim_inbox(lease_seconds=_INBOUND_LEASE_SECONDS)
+        else:
+            item = self.store.claim_inbox(lease_seconds=_INBOUND_LEASE_SECONDS,
+                                          submitted=_ROLE_CLAIMS[self.role])
         if item is None:
             return False
         try:
@@ -150,6 +182,8 @@ class InboundWorker:
                         "Presence Host adapter returned an empty reference"
                     )
                 self.store.set_host_reference(item.row_id, item.lease_token, reference)
+                if self.role == "intake":
+                    return await self._settle_submission(item, reference)
                 if reference.startswith(("continuing:", "refused:", "retained:")):
                     # The durable reference separates submit from the new finite
                     # queue-report/poll phase. Later attempts already claim fresh
@@ -184,7 +218,6 @@ class InboundWorker:
                             snapshot = None
                 finally:
                     await updates.aclose()
-            delivery_key = hashlib.sha256(reference.encode("utf-8")).hexdigest()
             if status.state == "failed":
                 self.store.fail_inbox(
                     item.row_id,
@@ -202,21 +235,7 @@ class InboundWorker:
                 )
                 return True
 
-            delivery = await self.host.deliver(reference)
-            self._enqueue_outputs(item, getattr(delivery, "outputs", ()), delivery.delivery_reporting_version)
-            for index, text in enumerate(delivery.texts):
-                chunks = chunk_message(text)
-                if not chunks:
-                    continue
-                self.store.enqueue_outbox(
-                    request_id=f"presence:{delivery_key}:final:{index}",
-                    target=item.channel_id,
-                    thread_ts=item.reply_thread_ts,
-                    chunks=chunks,
-                    origin=_automatic_origin(item, delivery.turn_ref),
-                    delivery_reporting_version=delivery.delivery_reporting_version,
-                )
-            self.store.complete_inbox(item.row_id, item.lease_token)
+            await self._deliver(item, reference)
             return True
         except asyncio.CancelledError:
             raise
@@ -229,15 +248,54 @@ class InboundWorker:
             )
             return True
         except Exception as exc:
-            delay = min(60.0, 2.0 ** min(item.attempts, 5))
+            # A capacity refusal keeps the same event first in its thread and frees
+            # this worker for other conversations; it is paced by the Host's hint.
+            delay = _retry_delay(exc, item.attempts)
             self.store.retry_inbox(
                 item.row_id,
                 item.lease_token,
                 str(exc),
                 delay_seconds=delay,
             )
-            log.warning("Slack inbound event %s will retry: %s", item.row_id, exc)
+            log.warning("Slack inbound event %s will retry in %.0fs: %s", item.row_id, delay, exc)
             return True
+
+    async def _settle_submission(self, item: InboxItem, reference: str) -> bool:
+        """Commit what a just-stored reference already says, then free this input worker.
+
+        Speech its envelope carries is queued first. A reference that still names
+        Host work returns to the inbox due now, for an observation worker: the
+        conversation's next event no longer waits for it, and no poll or queue
+        report runs here.
+        """
+        initial = getattr(self.host, "initial_status", None)
+        status = initial(reference) if initial is not None else HostTurnStatus("pending")
+        self._enqueue_status(item, reference, status)
+        if status.state == "failed":
+            self.store.fail_inbox(item.row_id, item.lease_token, status.error or "Presence Host turn failed")
+        elif status.state == "ready":
+            await self._deliver(item, reference)
+        else:
+            self.store.retry_inbox(item.row_id, item.lease_token, status.error, delay_seconds=0.0)
+        return True
+
+    async def _deliver(self, item: InboxItem, reference: str) -> None:
+        delivery_key = hashlib.sha256(reference.encode("utf-8")).hexdigest()
+        delivery = await self.host.deliver(reference)
+        self._enqueue_outputs(item, getattr(delivery, "outputs", ()), delivery.delivery_reporting_version)
+        for index, text in enumerate(delivery.texts):
+            chunks = chunk_message(text)
+            if not chunks:
+                continue
+            self.store.enqueue_outbox(
+                request_id=f"presence:{delivery_key}:final:{index}",
+                target=item.channel_id,
+                thread_ts=item.reply_thread_ts,
+                chunks=chunks,
+                origin=_automatic_origin(item, delivery.turn_ref),
+                delivery_reporting_version=delivery.delivery_reporting_version,
+            )
+        self.store.complete_inbox(item.row_id, item.lease_token)
 
 
 class PlaceHeld(RuntimeError):
@@ -609,19 +667,23 @@ class BridgeRuntime:
             )
         if self.host.available or getattr(self.host, "delivery_reporting_status", "") == "unavailable":
             staged_root = self.store.state_dir / "staged"
-            for index in range(self.inbound_workers):
-                worker = InboundWorker(
-                    self.store,
-                    self.slack,
-                    self.host,
-                    staged_root=staged_root,
-                )
-                self._tasks.append(
-                    asyncio.create_task(
-                        _worker_loop(worker, self._stop),
-                        name=f"slack-inbound-{index}",
+            # Two pools of the configured size: input is submitted by workers that
+            # never poll, and stored references are observed by their own workers.
+            for role, prefix in (("intake", "slack-inbound"), ("observe", "slack-observe")):
+                for index in range(self.inbound_workers):
+                    worker = InboundWorker(
+                        self.store,
+                        self.slack,
+                        self.host,
+                        staged_root=staged_root,
+                        role=role,
                     )
-                )
+                    self._tasks.append(
+                        asyncio.create_task(
+                            _worker_loop(worker, self._stop),
+                            name=f"{prefix}-{index}",
+                        )
+                    )
         try:
             await asyncio.gather(*self._tasks)
         finally:

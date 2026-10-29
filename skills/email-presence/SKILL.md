@@ -1,7 +1,7 @@
 ---
 name: email-presence
 description: Bidirectional email Presence transport with IMAP polling, durable delivery, and RFC 5322 reply threading.
-version: 0.7.0
+version: 0.8.0
 type: extension
 entry: plugin.py
 plugin_api: "2.0"
@@ -165,6 +165,59 @@ retry-only refusal. Existing completed delivery receipts remain unchanged.
 The existing inbox Host-reference envelope retains the original receipt and
 observed references; late mail keeps the original RFC 5322 reply threading.
 Upgrade through the normal payload review/enable lifecycle.
+
+## Timely intake (Presence continuation version 2)
+
+When `/identity` lists 2 in `presence_continuation_versions`, each new turn
+request adds `continuation_version: 2`. The request is otherwise unchanged. A
+Host that does not list it keeps the plain turn: the request waits for the
+turn's end, and that blocks the companion's one inbox worker meanwhile. This
+transport never used version 1. The status route shows the negotiated version
+as `delivery_support.presence_continuation_version`.
+
+- `status: "continuing"` (with `outcome: "deferred"`, empty text and a
+  `continuation_ref`) is custody, not a reply. It arrives once the author's
+  intake is open. The reference is stored, which releases the thread, and the
+  claim ends without polling.
+- The companion's existing inbox lifecycle runs two loops in the same process.
+  The input loop only claims mail without a Host reference; once a reference is
+  durable it queues any speech the envelope already carries and releases the
+  mail. The observation loop only claims mail with a stored reference and polls
+  it once per claim, about every 5 seconds while pending. A slow or blocked
+  poll therefore never holds new mail, of its thread or any other, and a
+  continuous inflow of new mail never holds observation. No daemon, scheduler
+  or queue is added.
+- `status: "completed"` with `outcome: "silent"` means the mail was heard or
+  delivered as context to the thread's live author. It is finished, and any
+  reply arrives through that author's poll.
+- HTTP 429 `presence_capacity_full` (`disposition: "retry"`, field
+  `conversation` or `capacity`) means nothing ran. The same mail stays first in
+  its thread and is resubmitted unchanged after max(hint, backoff). The hint is
+  the Host's numeric `retry_after` and is never shortened. The backoff is this
+  transport's own: 1 second, doubling per refusal, capped at 30 seconds. It is
+  used alone when the hint is missing or malformed. There is no attempt cap.
+  Mail in other threads continues meanwhile. Nothing is dropped, merged or
+  debounced.
+- An author's initial answer, released output or terminal may carry
+  `reply_anchor: {source_event_id, message}`, which names the last mail the
+  author covered. The reply then
+  answers that stored message in the same thread: its Reply-To (or From) is the
+  recipient, and its Message-ID and References thread the reply. Without an
+  anchor (promoted children, retained views, older Hosts), or when the anchor
+  is not bound, the reply answers the polled mail as before. Bound means the
+  message's folder, UIDVALIDITY and IMAP UID select a captured mail whose
+  `source_event_id` and Message-ID are the anchor's, in the polled mail's
+  thread.
+- Each `output_ref` is queued once under the polled mail's request id, across
+  polls, the terminal, children and restarts. If a repeated output would change
+  its headers, the first queued copy stays authoritative.
+- A stopped author's terminal is `cancelled` with `outcome: "silent"`. Nothing
+  new is sent, the mail ends `failed`, and it is never resubmitted.
+
+A promoted child named by a later poll is stored with the receipt before it is
+polled. An unreadable poll, including HTTP 403/404, keeps custody and backs off.
+References stored as version 2 cannot be read by an older transport that is
+rolled back. They keep their custody until this version runs again.
 
 ## Delivery history
 

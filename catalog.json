@@ -1,7 +1,7 @@
 {
   "description": "Official Ouroboros skills catalog.",
   "name": "OuroborosHub",
-  "raw_base_url": "https://raw.githubusercontent.com/razzant/OuroborosHub/1f15e79b499d342b7388ddc0b858e313eb3f0f38",
+  "raw_base_url": "https://raw.githubusercontent.com/razzant/OuroborosHub/main",
   "schema_version": 1,
   "skills": [
     {
@@ -136,13 +136,13 @@
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "b8cc26767a7d3a34eb25268e2be5323d14e6f8ffd52b0f808c1f2461cd6d52b7",
-          "size": 4730
+          "sha256": "54a42b3404c8a79343e2370fa3f5131c82ca71cc5dad12719a44a5e5d3cffdaf",
+          "size": 6229
         },
         {
           "path": "listener.py",
-          "sha256": "1880c043b35fc13b60ec585bfa633efea1be554134376977f8cff675bb53d6c9",
-          "size": 11470
+          "sha256": "c983c501ff16406d3d65e0df746e5e3a714c5f53fea63abec62962ac196aaa35",
+          "size": 12723
         },
         {
           "path": "plugin.py",
@@ -151,13 +151,18 @@
         },
         {
           "path": "presence.py",
-          "sha256": "da3f819c79778493e97d84cfaace090f5023bb4b8204b5e5f14182d119ac924a",
-          "size": 7240
+          "sha256": "f5d588f25904b4d84dcca104a2f66055f45c73c159ddd408f643e63e7b910e6b",
+          "size": 23049
         },
         {
           "path": "tests/test_presence.py",
-          "sha256": "8e7be00257ea98e68814dcaeea25b0df57b428a60276807daf49c8371e545e67",
-          "size": 4360
+          "sha256": "7e51453a4a3ddbcc3c0b1f7223db98cae1ed93dba6ee206fd62f706a930011df",
+          "size": 4880
+        },
+        {
+          "path": "tests/test_presence_v2.py",
+          "sha256": "9d5caf2f06d0de161d1fff32cdd37a11d292c64c2b29a57f4394642375f7905e",
+          "size": 31450
         },
         {
           "path": "ui/icon.svg",
@@ -169,7 +174,7 @@
       "name": "agentrq-bridge",
       "slug": "agentrq-bridge",
       "type": "extension",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "when_to_use": "User wants to interact with an AgentRQ workspace: pull tasks, create tasks for human review, reply to task threads, update task status, or request human permission for sensitive actions."
     },
     {
@@ -1080,18 +1085,18 @@
       "files": [
         {
           "path": "CHANGELOG.md",
-          "sha256": "91eb4b4ef30aa83fd56b142363772713e70e2bb9d1a69c9e1cb12d052e286277",
-          "size": 682
+          "sha256": "43c4ecc1677a53d861249a7244230b317ec098b07b8b08b38e2ca01157b27eb7",
+          "size": 1899
         },
         {
           "path": "README.md",
-          "sha256": "3e43a48c46cabd9fc563b7c9c88b6b629cb62da8af22f370ec4843fa10d66f37",
-          "size": 514
+          "sha256": "284e485e754a311e220c170c21dbd2130998693f3c9692682b9d870ef030926a",
+          "size": 803
         },
         {
           "path": "SKILL.md",
-          "sha256": "137ba56972d67490b9cb56c4e1dc626d1f30563b8ee42fe70824717c03f76ffd",
-          "size": 15727
+          "sha256": "6cd9382d161effe6e0f1562d51db9c8f1b1b7b56e6ca095a5ab0a9b10dd81031",
+          "size": 19098
         },
         {
           "path": "lib/client.py",
@@ -1110,8 +1115,8 @@
         },
         {
           "path": "lib/host_adapter.py",
-          "sha256": "bef0cd4cc42c803e55eb0b285cf7dfbd808de2ea39ff8a69e1c56b453d04f73a",
-          "size": 19800
+          "sha256": "86f6606cfd8cac81ba7199d7f0f38f923dc20108b21c9c9da1ce7dcac8d4e24b",
+          "size": 32821
         },
         {
           "path": "lib/mime.py",
@@ -1120,8 +1125,8 @@
         },
         {
           "path": "lib/runtime.py",
-          "sha256": "93596ddf910feb4cb61303f0bbde78dcdf8d8df69d375c35586b90ed0237e0d9",
-          "size": 15219
+          "sha256": "79916b554a34ed96c62651740aad1a537986a05f64e3508d988edc9fde418145",
+          "size": 19969
         },
         {
           "path": "lib/settings.py",
@@ -1130,8 +1135,8 @@
         },
         {
           "path": "lib/store.py",
-          "sha256": "bf6270622618d0c936904f4dd4c09b274e17a1e82468cd431e0c65d7f2d18b07",
-          "size": 33289
+          "sha256": "46e9294c2d6b8a352bcccc7335cc1e83ea70869f2cb4bc88cc5cd7614e12914d",
+          "size": 34540
         },
         {
           "path": "plugin.py",
@@ -1175,7 +1180,7 @@
         },
         {
           "path": "tests/test_foundation.py",
-          "sha256": "42bc0292411dd9188c3abfa270f774e784e60736ae6cccc6a846e312499ae4f0",
+          "sha256": "aff6a32d4e660eaeb04a830027f40bce5bb56521658428c623306c581c6963a6",
           "size": 12560
         },
         {
@@ -1197,6 +1202,11 @@
           "path": "tests/test_plugin.py",
           "sha256": "d16d13d48cc95ddf5317c3f253e101448bc4a4df1f40ea5e4aa20686aff8bbbd",
           "size": 7533
+        },
+        {
+          "path": "tests/test_presence_v2_intake.py",
+          "sha256": "48f82c00db5b32f1dee52b2b5fcf347a89078028c3cb279d010db57914fd9d05",
+          "size": 51440
         },
         {
           "path": "tests/test_retained_custody.py",
@@ -1232,7 +1242,7 @@
       "name": "email-presence",
       "slug": "email-presence",
       "type": "extension",
-      "version": "0.7.0"
+      "version": "0.8.0"
     },
     {
       "description": "GDELT Cloud geopolitical intelligence: conflict events, news stories, entity graph, energy infrastructure, macro-finance, prediction markets, and web research via MCP Progressive Discovery.",
@@ -2221,8 +2231,8 @@
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "7cce150b075681487cd3771c909923069a0e1e266d39ed818f8dbee27edf5004",
-          "size": 40094
+          "sha256": "d4c30587dffb2fd94c4c3a417ff17ad105cffb8c5362b14c5d172bbc7814d9ad",
+          "size": 43389
         },
         {
           "path": "lib/__init__.py",
@@ -2241,8 +2251,8 @@
         },
         {
           "path": "lib/host_adapter.py",
-          "sha256": "27a1813d2f0ec0233b6750fc674a3f877a615ec87532467433d87229b1cc8449",
-          "size": 46131
+          "sha256": "4f0d0f3dd1b31d8b697a4a95201f1f6c129fbacb250628d4e9798f6d29c61617",
+          "size": 50869
         },
         {
           "path": "lib/local_settings.py",
@@ -2266,8 +2276,8 @@
         },
         {
           "path": "lib/runtime.py",
-          "sha256": "ba7bcdc0d4a85b1002d0a530633956747e9b9ec962b7ba394f8bf9aeccdfb0f1",
-          "size": 31413
+          "sha256": "95588247d9e3a69fa8c0e1ce08b167493f9becaec5211695405904c0c613fd3b",
+          "size": 34889
         },
         {
           "path": "lib/slack_api.py",
@@ -2281,8 +2291,8 @@
         },
         {
           "path": "lib/store.py",
-          "sha256": "412cae0479aaba1d8aa61e11e8465ac3d3dbc391e573b25ded15cbf2d301ddb7",
-          "size": 51391
+          "sha256": "e163d764f186d5e4768f0f9c9dcb8d81987c871c5c2c90d2d845a1fce16b6e97",
+          "size": 52268
         },
         {
           "path": "lib/tool_results.py",
@@ -2306,8 +2316,8 @@
         },
         {
           "path": "tests/INBOUND_LEASE.md",
-          "sha256": "63a8533393d61708de84f40aa6b5c30b18e81577463e3dd08e89dec61f1dbf09",
-          "size": 3222
+          "sha256": "6f6dab7fef712a11b7c4b984a880067234a90b4c0dcf7157b7555e39cb912762",
+          "size": 4020
         },
         {
           "path": "tests/PRESENCE_PROCESS_CONSUMER.md",
@@ -2316,8 +2326,8 @@
         },
         {
           "path": "tests/README.md",
-          "sha256": "4a50a7e4fbdbd2bedb0b1b2fe97595274954677c43a9a0abbbd364c65d028d8d",
-          "size": 3664
+          "sha256": "cbae1e87f42a82da544372c54eb57effc6a35d92d3c765451eb3a430bd94ce5f",
+          "size": 5166
         },
         {
           "path": "tests/conftest.py",
@@ -2376,8 +2386,8 @@
         },
         {
           "path": "tests/test_inbound_lease_runtime.py",
-          "sha256": "b3571607f2deaa38893ef9f6ad6214ecac5d4cd32c4a494dd314823d7f113a75",
-          "size": 13111
+          "sha256": "ef63ab9ea30b6f72e61bffc31cec8aa6a2def54ceb524f9cd63b941c75ee9752",
+          "size": 15043
         },
         {
           "path": "tests/test_message_deletion.py",
@@ -2413,6 +2423,11 @@
           "path": "tests/test_presence_process_consumer.py",
           "sha256": "7d7ff7ae8e604e3cecdddc58f76c62130950f54aff3dbf716708bcf9296ed116",
           "size": 44853
+        },
+        {
+          "path": "tests/test_presence_v2_intake.py",
+          "sha256": "becf9b5c3233cbec9580938f43c8593b851ad432332abe1ae7ee69d98a0ca05a",
+          "size": 47140
         },
         {
           "path": "tests/test_provider_context.py",
@@ -2478,7 +2493,7 @@
       "name": "slack-bridge",
       "slug": "slack-bridge",
       "type": "extension",
-      "version": "1.7.2"
+      "version": "1.8.0"
     },
     {
       "description": "Personal lists in one skill-local store: a free group tree, verbatim entries captured from clear owner intent in chat, completion, moves and an undoable trash, a read-only subtree selection, checksummed export/restore with typed refusals for a missing store, and a Today checklist widget with local-day rollover. No network, purchases or reminders.",
@@ -2573,8 +2588,8 @@
       "files": [
         {
           "path": "CHANGELOG.md",
-          "sha256": "6a1a7566c23c88462148fe56228e416a1c5b125e8948ee7cbb8e02c494289890",
-          "size": 1409
+          "sha256": "b79dfe5eff85a018f46efbd2f5f1560d183dd4d091c269c76116ff572b9ede2e",
+          "size": 2515
         },
         {
           "path": "FORMATTER_PROVENANCE.md",
@@ -2588,18 +2603,18 @@
         },
         {
           "path": "README.md",
-          "sha256": "eee7b046892a6645d1755c7c20dc2c31952e46a0537d7b368d480fab6bcdb11e",
-          "size": 1089
+          "sha256": "0f56510ae5c45a0fb610c6df98c55e1c44144447266c0f9eac74fe6a591cd3e7",
+          "size": 1417
         },
         {
           "path": "SKILL.md",
-          "sha256": "35da78d440119e7033a041cfaca26d1300933dbb3654684cff09247692ca90b3",
-          "size": 21336
+          "sha256": "e1995d31cb5ded70e7a2fc24ac98830a9e1aeb60f9708556b4968c1266bf4acb",
+          "size": 25081
         },
         {
           "path": "plugin.py",
-          "sha256": "b75ec0161132152451bd5534d2c7dc28f29503be5ac3de9ea185e3a4d9ebf03f",
-          "size": 17531
+          "sha256": "2249cde0ee793b23082137b350f7830b82cb01f591a7b3400f40aca2822bb14f",
+          "size": 17621
         },
         {
           "path": "telegram_bot/__init__.py",
@@ -2613,8 +2628,8 @@
         },
         {
           "path": "telegram_bot/custody.py",
-          "sha256": "b2c7706cd173c854bc19b6bf6eccc312023de94be2cc3cf61aa774318cc99853",
-          "size": 38688
+          "sha256": "d6f7029979e72d262d4de7e3fec66a5fd1ff3c1b2a7972832cc567d8af42e3a7",
+          "size": 43055
         },
         {
           "path": "telegram_bot/delivery.py",
@@ -2633,13 +2648,13 @@
         },
         {
           "path": "telegram_bot/host.py",
-          "sha256": "7dedff623636cf78257b476018366fd5c7905ca686c24f3257a47fb0511ebbe2",
-          "size": 15603
+          "sha256": "3df81cf400c08a03432aa3471dfdbc5d50638d044d6fc75d6a62b8ec9abe96f5",
+          "size": 19318
         },
         {
           "path": "telegram_bot/runtime.py",
-          "sha256": "6fd35ca0a7e2420aeabe7bda1e78bee3539115e3a8d6aae27c7745ede62df8f9",
-          "size": 24876
+          "sha256": "5b9a6a3cdef036d5c8766358c8e7f9fead08ac6fae3a9620c26b9610fecc4cf2",
+          "size": 25806
         },
         {
           "path": "telegram_bot/settings.py",
@@ -2717,6 +2732,11 @@
           "size": 10173
         },
         {
+          "path": "tests/test_presence_continuation.py",
+          "sha256": "baf92a6a165ef64022b21ca27edec6c316f64630f89a8cdc23d1ef2b453c0efd",
+          "size": 53545
+        },
+        {
           "path": "tests/test_retained_custody.py",
           "sha256": "3348c56325dc3518b99f095deeaf2cc1b93f3bf0897afd2d8a1d8b2e9d13fda0",
           "size": 24263
@@ -2741,7 +2761,7 @@
       "name": "telegram-bot",
       "slug": "telegram-bot",
       "type": "extension",
-      "version": "0.7.0"
+      "version": "0.8.0"
     },
     {
       "connects": [
@@ -2751,8 +2771,8 @@
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "1d7cd98e7a7ba594c73664c2eb1567a126adcd3d9c60f7f5a4d0d1c8d6bc1aba",
-          "size": 34059
+          "sha256": "9fb5b188e822e2dfe4119ea260a76d4c5e52c1e6d3b9d30d7c6ad7e9a590cf48",
+          "size": 37786
         },
         {
           "path": "plugin.py",
@@ -2761,13 +2781,18 @@
         },
         {
           "path": "scripts/companion.py",
-          "sha256": "b068244c3e7e9e6e58e36d705b2c7e767b1b206e561ba5e709a231f196e242ba",
-          "size": 18183
+          "sha256": "1e899ca162f809c10d41b40095da1e5885f68ced64f289b707c7cc098cff9f12",
+          "size": 20742
         },
         {
           "path": "tests/history_fakes.py",
           "sha256": "63d12fc414d0a2bea313bfc4de798f693fb4d592b5aeb07fa4008e41bc137270",
           "size": 22023
+        },
+        {
+          "path": "tests/presence_v2_host.py",
+          "sha256": "658e59e71f12247a9bcc2bbd7ea550a3b4c17e91c4b130bfb5011224b317bb15",
+          "size": 13400
         },
         {
           "path": "tests/test_history_import.py",
@@ -2776,8 +2801,8 @@
         },
         {
           "path": "tests/test_intake_loop.py",
-          "sha256": "0db13ac1b828c9c276197c9a2b390b91f26f68f405b6ed144e3684406d8ec0da",
-          "size": 6273
+          "sha256": "2293b122b2fae21ba8bfc4e99ea0fe1b2c7ce24d50a9582a696d7efe52760c0a",
+          "size": 7419
         },
         {
           "path": "tests/test_legacy_intake.py",
@@ -2803,6 +2828,16 @@
           "path": "tests/test_participant_routes.py",
           "sha256": "de9fdf92d32c2a12bd1425e54694faafeeb44d61792195e0e4f91f01ddb9c5ca",
           "size": 24858
+        },
+        {
+          "path": "tests/test_presence_v2_legacy.py",
+          "sha256": "0568a27d4969ec0a9ea97ee655e94041ae61af916b969c1abfac3960830544fb",
+          "size": 40145
+        },
+        {
+          "path": "tests/test_presence_v2_participant.py",
+          "sha256": "33f16d017836d3e17d78c3e89ebfb4d21492bc87674ecfe8aa48cfca8e869595",
+          "size": 18304
         },
         {
           "path": "ui/icon.svg",
@@ -2846,8 +2881,8 @@
         },
         {
           "path": "userbot/participant.py",
-          "sha256": "d8d27bbc0e44ebebf1e3c984ce543d557c5174743ba5c0e6a979fcb27259b7c9",
-          "size": 43698
+          "sha256": "e2ddca04f3ac391a08921b087ba1f06fc9d46306e9614ffd6cdbe941a2ba7d9a",
+          "size": 49097
         },
         {
           "path": "userbot/participant_ops.py",
@@ -2861,23 +2896,23 @@
         },
         {
           "path": "userbot/participant_state.py",
-          "sha256": "e4462286249352d71231d1d4caf4f80b2457c6a4cd95ec5ad5e99d995d9bed88",
-          "size": 24165
+          "sha256": "08ad3a3efbb685ad1143f71b2ba901c3b90131b4a54c228646b20275ce80a0c3",
+          "size": 25377
         },
         {
           "path": "userbot/presence.py",
-          "sha256": "6e1424c40a170488a8bbd5791ce94b9961fafd58b315711d1f052f4d2b2477f6",
-          "size": 18412
+          "sha256": "90e8fa93db61a542ae064eccfacb05e97faf97aec12011bfeb895c9a4d119e65",
+          "size": 25467
         },
         {
           "path": "userbot/runtime.py",
-          "sha256": "ef0f03caa9d150da6baf5fb40e0576264d926a7cd9ca7f51849a13aa5ad87046",
-          "size": 56843
+          "sha256": "31c27c15856bd6768b29c160e90386499041f1d9988a92e368603197932c4e82",
+          "size": 74856
         },
         {
           "path": "userbot/store.py",
-          "sha256": "0c422addc1b1ef260dbf8fb0932336c1020d818d485629d04a87fe1148de7141",
-          "size": 34557
+          "sha256": "4341b2359ede66e524e74bfb2fee7c32cbd7741b3ff1e16c049ae9970be050b5",
+          "size": 37415
         },
         {
           "path": "userbot/telegram.py",
@@ -2914,7 +2949,7 @@
       "name": "telegram-user-session",
       "slug": "telegram-user-session",
       "type": "extension",
-      "version": "0.3.0"
+      "version": "0.4.0"
     },
     {
       "description": "Token Observatory — Liquid Glass dashboard for recorded Ouroboros token usage, tasks and models.",

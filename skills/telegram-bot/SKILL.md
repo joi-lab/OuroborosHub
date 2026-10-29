@@ -2,7 +2,7 @@
 name: telegram-bot
 description: Durable Telegram transport for generic Ouroboros presences, with exact actor and conversation
   provenance, media staging, and provider receipts.
-version: 0.7.0
+version: 0.8.0
 type: extension
 plugin_api: '2.0'
 runtime: python3
@@ -248,6 +248,58 @@ The work table migrates transactionally from one row per event to one row per
 work reference, preserving existing work and its outbox identities. The original
 refusal remains in the inbox receipt after any child finishes.
 
+## Timely conversations (0.8.0)
+
+When `/identity` lists `2` in `presence_continuation_versions`, each turn request
+carries `continuation_version: 2`. The scalar `presence_continuation_version`
+never negotiates it. Other Hosts keep the earlier behaviour: no continuation
+version is sent, and each request waits up to 30 minutes for its terminal answer
+while the conversation's later events wait behind it.
+
+With version 2:
+
+- An event that starts an author is answered once that author takes
+  conversation mail: `continuing`, with `continuation_ref` equal to `turn_ref`.
+  This is custody, not speech. The reference is stored in the same commit that
+  marks the event submitted, the conversation's input queue moves on, and the
+  existing work worker polls `/presence/work/{continuation_ref}`. A `continuing`
+  answer without that real reference is not custody: the event stays queued and
+  is retried, and no reference is invented.
+- The conversation's next events reach the Host only after that answer. A burst
+  received at startup and corrections sent while the author reasons therefore
+  join that author as context. They answer `completed`/`silent`: acknowledged,
+  with nothing to send. Any reply comes through the author's poll.
+- A busy admission, `presence_capacity_full` with `field: conversation` or
+  `capacity`, admitted nothing. The same event stays first in its conversation,
+  keeps its staged files and retries after the Host's `retry_after`, honoured
+  as a minimum delay (at least one second). The delay does not grow and the attempt
+  is not counted. The worker serves other conversations meanwhile. A
+  `presence_capacity_full` refusal without that field keeps the ordinary
+  retry backoff.
+- Outputs the author releases are sent as its polls report them, and its
+  terminal output after them. Each `output_ref` is sent at most once for its
+  event, whichever reference names it: the author's continuation, a promoted
+  child, the original turn or a retained reference.
+- `reply_anchor: {source_event_id, message}` on an output or a terminal names
+  the last input the author's model call covered. The reply's first part
+  answers that `message.message_id` (Telegram `reply_parameters`) in the turn's
+  chat and topic, when the anchor names an event this connector captured in that
+  conversation with that message id. Otherwise, and for promoted children,
+  retained references and older Hosts, which carry no anchor, speech answers the
+  work's own event as before.
+- A stopped turn polls as `cancelled` with `outcome: "silent"`: nothing more is
+  sent, an output released before the stop stays delivered once, and the source
+  event is never submitted again. A later event is new work.
+- After a restart or a lost turn or poll answer, the same request is repeated.
+  The Host replays its stored answer, so no second author starts and no output
+  is queued twice. Telegram acceptance without a stored receipt can still repeat
+  a send, and delivery reports keep their own backoff, as described below.
+
+The transport status shows the negotiated `presence_continuation_version`
+(`2`, or `0` for completed-only requests). The transport adds no scheduler,
+debounce, digest, drop or forced reply: which events wake, which author hears
+them and whether to speak remain the Host's decisions.
+
 ## Delivery history
 
 Hosts advertising `presence_delivery_version=1` receive delivery observations
@@ -435,3 +487,12 @@ from the incoming message's actor. Older hosts receive no identity key.
   not changed by the upgrade.
 - Updates already acknowledged before the upgrade are not fetched again, so
   earlier private messages are not replayed.
+
+## Upgrading to 0.8.0
+
+- Early answers need a Host that lists `2` in `presence_continuation_versions`;
+  with any other Host the requests are unchanged.
+- The custody database keeps its layout. Queued events keep their order, events
+  submitted before the upgrade are never submitted again, and outputs already
+  queued keep their delivery identities, so a later poll naming one of them
+  through another reference sends nothing new.

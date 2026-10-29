@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import shlex
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -41,6 +42,7 @@ class SelectionTests(unittest.TestCase):
             'office_reader': {'office-reader'}, 'science_search': {'science-search'},
             'github': {'github'},
             'telegram-user-session': {'telegram-user-session'},
+            'email-presence': {'email-presence'}, 'agentrq-bridge': {'agentrq-bridge'},
         }
         for skill, expected in consumers.items():
             with self.subTest(skill=skill):
@@ -105,8 +107,39 @@ class SelectionTests(unittest.TestCase):
                 self.assertEqual(install.args[0][1:6], ['-B', '-m', 'pip', 'install', 'PyYAML'])
                 self.assertTrue(set(suite.get('dependencies', [])) <= set(install.args[0]))
                 self.assertEqual(test.args[0][1:8], ['-B', '-m', 'pytest', '-p', 'no:cacheprovider', '-q', '-rs'])
-                self.assertEqual(test.args[0][8:], suite['tests'])
+                expected_paths = ([str(ROOT / path) for path in suite['tests']]
+                                  if 'cwd' in suite else suite['tests'])
+                self.assertEqual(test.args[0][8:], expected_paths)
+                self.assertEqual(test.kwargs['cwd'], ROOT / suite['cwd'] if 'cwd' in suite else None)
                 self.assertTrue(install.kwargs['check'])
                 self.assertTrue(test.kwargs['check'])
                 self.assertEqual(test.kwargs['env']['PYTHONDONTWRITEBYTECODE'], '1')
+
+    def test_payload_imports_work_in_the_actual_suite_subprocess(self):
+        real_run = subprocess.run
+        with tempfile.TemporaryDirectory(prefix='hub-suite-import-') as tmp:
+            root = Path(tmp)
+            payload = root / 'skills/email-presence'
+            (payload / 'lib').mkdir(parents=True)
+            (payload / 'tests').mkdir()
+            (payload / 'lib/__init__.py').write_text('VALUE = 791\n', encoding='utf-8')
+            (payload / 'tests/test_import.py').write_text(
+                'from lib import VALUE\ndef test_value():\n    assert VALUE == 791\n', encoding='utf-8')
+            calls = []
+
+            def run(command, **kwargs):
+                calls.append((command, kwargs))
+                if command[2:4] == ['-m', 'pip']:
+                    return subprocess.CompletedProcess(command, 0)
+                return real_run(command, **kwargs, capture_output=True, text=True)
+
+            suite = dict(ci.SUITES['email-presence'])
+            suite['tests'] = ['skills/email-presence/tests/test_import.py']
+            with patch.object(ci, '__file__', str(root / 'scripts/ci_checks.py')), \
+                    patch.dict(ci.SUITES, {'email-presence': suite}), \
+                    patch.dict(os.environ, {'PYTEST_DISABLE_PLUGIN_AUTOLOAD': '1'}), \
+                    patch.object(ci.subprocess, 'run', side_effect=run):
+                ci.run_suite('email-presence')
+            self.assertEqual(calls[1][1]['cwd'], payload.resolve())
+            self.assertIn('starlette', ci.SUITES['agentrq-bridge']['dependencies'])
 

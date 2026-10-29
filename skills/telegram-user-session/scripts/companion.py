@@ -267,8 +267,11 @@ async def _serve_legacy(state_dir: Path) -> None:
 
         presence = for_binding(cfg.binding_id or cfg.bindings[0].binding_id)
         delivery_version, delivery_status = await asyncio.to_thread(presence.delivery_capability)
+        # Version 2 only when this Host lists it; otherwise each turn still waits for its terminal.
+        continuation_version = await asyncio.to_thread(presence.continuation_capability)
         _write_json(state_dir, "presence-capability.json", {
             "delivery_reporting_version": delivery_version, "status": delivery_status,
+            "continuation_version": continuation_version,
         })
         if delivery_status == "identity_unavailable":
             raise RuntimeError("authenticated Host Service unavailable")
@@ -280,49 +283,80 @@ async def _serve_legacy(state_dir: Path) -> None:
                                        presence_factory=for_binding,
                                        action_store=actions_store,
                                        delivery_reporting_version=delivery_version,
-                                       authorization=authorization)
+                                       authorization=authorization,
+                                       continuation_version=continuation_version)
             wake = asyncio.Event()
             ingress_faults = await _register_and_catch_up(adapter, bridge, wake)
-            while True:
-                # Freshness is read-side evidence, never a permanent startup
-                # claim. A killed process stops renewing the row.
-                _health(state_dir, "running")
-                if ingress_faults:
-                    raise RuntimeError("durable ingress capture unavailable")
-                if (state_dir / HANDOFF_NAME).exists() and await adapter.authorization_status():
-                    # Owner staged while this authorized companion was already
-                    # running. Consume only with positive authorization proof.
-                    consume_login_secret(state_dir)
-                queued_code = state_dir / "login-request.json"
-                if queued_code.exists() and await adapter.authorization_status():
-                    # Do not silently leave a successful-session code request
-                    # queued forever, and never contact Telegram for it.
-                    _retire_unused_code_request(state_dir)
-                updated = load_config(state_dir)
-                if updated is None or updated.account_id != account_id or (
-                    updated.api_id, updated.api_hash, updated.phone
-                ) != (cfg.api_id, cfg.api_hash, cfg.phone):
-                    raise SessionMismatch("session configuration changed; refusing")
-                if (updated.binding_id, updated.bindings, updated.allowed_peer_ids) != (
-                    cfg.binding_id, cfg.bindings, cfg.allowed_peer_ids
-                ):
-                    cfg = updated
-                    bridge.config = cfg
-                    if cfg.binding_id or cfg.bindings:
-                        bridge.presence = for_binding(cfg.binding_id or cfg.bindings[0].binding_id)
-                    bridge._catalog.clear()
-                if (cfg.binding_id or cfg.bindings) and cfg.allowed_peer_ids:
-                    await bridge.process_incoming(limit=100)
-                    await bridge.send_one()
-                    await bridge.process_action_once()
-                    # Host Service uses a shared 60/min lane; one receipt per
-                    # tick keeps this companion well below that capacity.
-                    await bridge.report_sent(limit=1)
-                try:
-                    await asyncio.wait_for(wake.wait(), timeout=3)
-                except asyncio.TimeoutError:
-                    pass
-                wake.clear()
+            # Host intake beside outbound dispatch: each idle chat's head starts at once in its own
+            # task (bridge.intake_pump), and events in Host custody are read in a pass of their own
+            # at the three-second cadence, so a slow work read or one chat's held start never holds
+            # another event, and replies, actions and receipts never wait for a Host answer. A
+            # capture, a chat that moved on or an ended custody pass wakes the loop; a busy head
+            # shortens the wait to the Host's hint. Unexpected failures surface here; a stop cancels
+            # and joins every worker.
+            observing: asyncio.Task | None = None
+            observed_at = float("-inf")
+            ended = asyncio.Event()
+            clock = asyncio.get_running_loop().time
+            try:
+                while True:
+                    # Freshness is read-side evidence, never a permanent startup
+                    # claim. A killed process stops renewing the row.
+                    _health(state_dir, "running")
+                    if ingress_faults:
+                        raise RuntimeError("durable ingress capture unavailable")
+                    if (state_dir / HANDOFF_NAME).exists() and await adapter.authorization_status():
+                        # Owner staged while this authorized companion was already
+                        # running. Consume only with positive authorization proof.
+                        consume_login_secret(state_dir)
+                    queued_code = state_dir / "login-request.json"
+                    if queued_code.exists() and await adapter.authorization_status():
+                        # Do not silently leave a successful-session code request
+                        # queued forever, and never contact Telegram for it.
+                        _retire_unused_code_request(state_dir)
+                    updated = load_config(state_dir)
+                    if updated is None or updated.account_id != account_id or (
+                        updated.api_id, updated.api_hash, updated.phone
+                    ) != (cfg.api_id, cfg.api_hash, cfg.phone):
+                        raise SessionMismatch("session configuration changed; refusing")
+                    if (updated.binding_id, updated.bindings, updated.allowed_peer_ids) != (
+                        cfg.binding_id, cfg.bindings, cfg.allowed_peer_ids
+                    ):
+                        cfg = updated
+                        bridge.config = cfg
+                        if cfg.binding_id or cfg.bindings:
+                            bridge.presence = for_binding(cfg.binding_id or cfg.bindings[0].binding_id)
+                        bridge._catalog.clear()
+                    if observing is not None and observing.done():
+                        finished, observing = observing, None
+                        finished.result()  # An unexpected observation failure stops the companion visibly.
+                    if (cfg.binding_id or cfg.bindings) and cfg.allowed_peer_ids:
+                        bridge.intake_pump(on_progress=wake.set)  # also surfaces a finished chat's failure
+                        if observing is None and clock() - observed_at >= 3:
+                            observed_at = clock()
+                            observing = asyncio.create_task(bridge.observe_custody(limit=100),
+                                                            name="telegram-legacy-host-observe")
+                            observing.add_done_callback(lambda _task: ended.set())
+                        await bridge.send_one()
+                        await bridge.process_action_once()
+                        # Host Service uses a shared 60/min lane; one receipt per
+                        # tick keeps this companion well below that capacity.
+                        await bridge.report_sent(limit=1)
+                    busy = bridge.busy_due_in()
+                    waiters = [asyncio.create_task(wake.wait()), asyncio.create_task(ended.wait())]
+                    try:
+                        await asyncio.wait(waiters, timeout=3 if busy is None else min(3, max(0.05, busy)),
+                                           return_when=asyncio.FIRST_COMPLETED)
+                    finally:
+                        for waiter in waiters:
+                            waiter.cancel()
+                    wake.clear()
+                    ended.clear()
+            finally:
+                if observing is not None:
+                    observing.cancel()
+                    await asyncio.gather(observing, return_exceptions=True)
+                await bridge.stop_intake()
     finally:
         await adapter.disconnect()
 

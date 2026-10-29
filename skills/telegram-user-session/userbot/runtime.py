@@ -22,7 +22,7 @@ from telethon import errors as telegram_errors
 from userbot.action_store import ActionStore
 from userbot.actions import Actions, ActionAmbiguous, ActionFloodWait, ActionRejected
 from userbot.participant_state import policy, receiving_refusal
-from userbot.presence import PresenceClient, build_event
+from userbot.presence import EARLY_CONTINUATION, PresenceClient, anchored_message_id, build_event, busy_delay
 from userbot.store import DurableStore
 from userbot.telegram import AmbiguousSend, FloodWait, LoginRequired, SendRejected, TelegramAdapter
 from userbot.topic import classify_message, reply_target
@@ -103,10 +103,23 @@ class UserSessionBridge:
                  presence_factory: Callable[[str], PresenceClient] | None = None,
                  action_store: ActionStore | None = None,
                  actions: Actions | None = None,
-                 delivery_reporting_version: int = 1, authorization=None) -> None:
+                 delivery_reporting_version: int = 1, authorization=None,
+                 continuation_version: int = 0) -> None:
         if delivery_reporting_version not in (0, 1):
             raise ValueError("invalid Host delivery version")
+        if continuation_version not in (0, EARLY_CONTINUATION):
+            raise ValueError("invalid Host continuation version")
         self.state_dir = Path(state_dir)
+        # 2 only when the Host listed it at startup; 0 keeps the request waiting for a terminal.
+        self.continuation_version = continuation_version
+        # A peer whose head the Host answered busy: the monotonic time that head goes again.
+        self._busy: dict[int, float] = {}
+        # Chats are submitted side by side, each by one task in its own order (intake_pump);
+        # events in Host custody are read in a pass of their own (observe_custody).
+        self.intake_limit = 3
+        self._submitting: dict[int, asyncio.Task] = {}
+        self._chat_locks: dict[int, asyncio.Lock] = {}
+        self._observe_lock = asyncio.Lock()
         self.config = config
         self.adapter = adapter
         self.store = store
@@ -120,6 +133,9 @@ class UserSessionBridge:
         self._lock = asyncio.Lock()
         self._catalog: dict[int, set[int] | None] = {}
         self._inbox_cursor = 0
+        # observe_custody's cycle: the last event in custody it read, and the newest one
+        # in custody when the cycle began (0: begin one at the next pass).
+        self._custody_cursor = self._custody_through = 0
         self._ingress_failures: dict[int, tuple[str, int]] = {}
         self._blocked_until: dict[int, float] = {}
         # The health file is a projection of unresolved peers, not the last
@@ -346,10 +362,14 @@ class UserSessionBridge:
         ref = hashlib.sha256(f"{self.config.account_id}:{intent}".encode()).hexdigest()
         return self.state_dir / "outgoing" / (ref + ".json")
 
+    def _conversation_key(self, raw: dict[str, Any], topic: int | None) -> str:
+        """The Host conversation key of this event's chat and topic (General is 0)."""
+        return f"telegram:{self.config.account_id}:{raw['peer_id']}:{topic if topic is not None else 0}"
+
     def _queue_reply(self, raw: dict[str, Any], topic: int | None, binding_id: str,
                      text: str, version: int, source_event_id: str,
                      turn_ref: str, *, phase: str = "final", output_ref: str = "",
-                     source: Path | None = None) -> None:
+                     source: Path | None = None, anchor: Any = None) -> None:
         if phase not in {"interim", "final"}:
             raise ValueError("invalid reply phase")
         if not text.strip() or len(text.encode("utf-8")) > 4096:
@@ -361,7 +381,9 @@ class UserSessionBridge:
                                                              prefix + "_interim") is None else "1"
         payload = {
             "text": text, "peer_id": raw["peer_id"], "topic_id": topic,
-            "reply_id": raw["message_id"],
+            # A version-2 output answers the last input it covers when that message is in this
+            # chat and topic; otherwise, and without an anchor, the event's own message.
+            "reply_id": anchored_message_id(anchor, self._conversation_key(raw, topic)) or raw["message_id"],
             "binding_id": binding_id,
             "source_event_id": source_event_id, "delivery_reporting_version": version,
             "turn_ref": turn_ref, "part_id": part,
@@ -383,12 +405,17 @@ class UserSessionBridge:
                 payload.update(part_id="0", output_ref=output_ref)
         path = self._reply_path(intent)
         if path.exists():
-            if _read_json(path) != payload:
-                raise ReplyConflict("automatic reply identity changed")
+            stored = _read_json(path)
+            if stored != payload:
+                if not (output_ref and stored == {**payload, "reply_id": stored.get("reply_id")}):
+                    raise ReplyConflict("automatic reply identity changed")
+                # One output identity, read again with another anchor: the target fixed when it
+                # was first queued stands, and it is queued once.
+                payload = stored
         else:
             _atomic_json(path, payload)
         self.store.enqueue(str(self.config.account_id), intent, peer_id=raw["peer_id"],
-                           payload_ref=path.stem, topic_id=topic, reply_id=raw["message_id"])
+                           payload_ref=path.stem, topic_id=topic, reply_id=payload["reply_id"])
 
     def _queue_pending(self, raw: dict[str, Any], path: Path, topic: int | None,
                        binding_id: str, event_id: str) -> None:
@@ -409,7 +436,7 @@ class UserSessionBridge:
         for reply in pending:
             self._queue_reply(raw, topic, binding_id, reply["text"], reply["version"], event_id,
                               reply["turn_ref"], phase=reply["phase"], output_ref=reply["output_ref"],
-                              source=path)
+                              source=path, anchor=reply.get("anchor"))
         raw.pop("pending_interim", None)
         raw.pop("pending_replies", None)
         _atomic_json(path, raw)
@@ -419,204 +446,503 @@ class UserSessionBridge:
         """Speech the Host selected in ended work, in order; released outputs come first.
 
         Text of failed or cancelled work counts only with the Host's output identity:
-        that is an explicit selection, never a recorded failure notice.
+        that is an explicit selection, never a recorded failure notice. So does text of a
+        ``continuing`` answer or a pending view: only released outputs are speech there.
+        A version-2 output keeps the ``reply_anchor`` it carries; an output without one
+        (a promoted child's, a retained turn's) answers the event itself.
         """
         producer = response.task_id or response.turn_ref or response.work_ref or polled
-        rows = [(ref, outcome, text) for ref, outcome, text in response.outputs]
+        anchors = dict(response.anchors)
+        rows = [(ref, outcome, text, anchors.get(ref)) for ref, outcome, text in response.outputs]
         if response.outcome in {"message", "deferred"} and response.text.strip() and (
                 response.output_ref or response.status == "completed"):
-            rows.append((response.output_ref, response.outcome, response.text))
+            rows.append((response.output_ref, response.outcome, response.text, response.reply_anchor))
         return [{"output_ref": ref, "phase": "interim" if outcome == "deferred" else "final",
-                 "text": text, "version": response.delivery_reporting_version, "turn_ref": producer}
-                for ref, outcome, text in rows]
+                 "text": text, "version": response.delivery_reporting_version, "turn_ref": producer,
+                 **({"anchor": anchor} if anchor else {})}
+                for ref, outcome, text, anchor in rows]
+
+    def _event_for(self, raw: dict[str, Any], topic: int | None) -> dict[str, Any]:
+        """The exact Host event of a retained capture; the same bytes on every pass."""
+        return build_event(self.config.account_id, raw["peer_id"], raw["message_id"], raw["actor_id"],
+                           raw["text"], topic_id=topic, event_kind=raw["kind"], revision=raw["revision"],
+                           message={"mentioned": raw["mentioned"], "reply_to_message_id": raw["reply_to_msg_id"]})
+
+    def _custody_refs(self, response: Any) -> list[str]:
+        """The references a version-2 answer hands this event's observation to; [] when none.
+
+        ``continuing`` (its author takes the conversation's later events), a ``retained``
+        turn and a ``pending`` work view all keep the event in Host custody: the input FIFO
+        moves on, and every named reference is read apart until its own end.
+        """
+        if self.continuation_version != EARLY_CONTINUATION:
+            return []
+        if response.kind == "continuing":
+            refs = [response.continuation_ref or response.turn_ref, response.work_ref, response.child_work_ref]
+        elif response.kind == "retained" and response.turn_ref:
+            refs = [response.turn_ref, response.work_ref]
+        elif response.kind == "pending" and response.work_ref:
+            refs = [response.work_ref, response.child_work_ref]
+        else:
+            return []
+        return list(dict.fromkeys(ref for ref in refs if ref))
+
+    def _take_custody(self, raw: dict[str, Any], path: Path, filename: str, refs: list[str],
+                      replies: list[dict[str, Any]], topic: int | None, binding_id: str,
+                      event_id: str) -> None:
+        """Store the references and what was selected, then release the peer's later events.
+
+        The private file names the references before the index marks custody, so a stop in
+        between is completed by the next pass; selected speech is queued from the file.
+        """
+        raw["work_ref"] = refs[0]
+        raw["refs"] = refs
+        if replies:
+            raw["pending_replies"] = replies
+        _atomic_json(path, raw)
+        self.store.mark_custody(str(self.config.account_id), filename)
+        self._queue_pending(raw, path, topic, binding_id, event_id)
+
+    def _busy_wait(self, peer: int, response: Any) -> None:
+        """A busy head keeps its peer's later events behind it and goes again, unchanged, after the Host's wait."""
+        self._busy[peer] = time.monotonic() + busy_delay(response.field, response.retry_after)
+
+    def _hold(self, raw: dict[str, Any], path: Path, filename: str, code: str | None = None) -> None:
+        """Keep the exact source visible for the owner; nothing submits or observes it again."""
+        if code:
+            raw["failure_code"] = code
+            _atomic_json(path, raw)
+        held = path.with_suffix(".held")
+        if not held.exists():
+            os.replace(path, held)
+        self.store.settle_raw(str(self.config.account_id), filename, held=True)
+
+    async def _observe_custody(self, filename: str, original: dict[str, Any]) -> int:
+        """Read each reference of an event in Host custody once; settle it when none is left.
+
+        A released or terminal output is queued once under its output identity before the
+        references that follow it are relied on; a child is read beside its parent until its
+        own end. Failed or cancelled work with nothing further to observe keeps its exact
+        source held, as before; a deferral naming no work is held too.
+        """
+        account = str(self.config.account_id)
+        peer = original.get("peer_id")
+        if self._blocked_until.get(peer, 0) > time.monotonic():
+            return 0
+        path = self.state_dir / "incoming" / filename
+        try:
+            raw = _read_json(path)
+            refs, binding_id = raw.get("refs"), raw.get("selected_binding")
+            ended_refs = raw.get("ended_refs") or []
+            if (raw.get("account_id") != self.config.account_id or type(refs) is not list
+                    or not all(isinstance(ref, str) and ref for ref in refs) or type(ended_refs) is not list
+                    or not isinstance(binding_id, str) or not binding_id):
+                raise ValueError("custody event lacks its references")
+            topic = raw.get("selected_topic")
+            event_id = self._event_for(raw, topic)["source_event_id"]
+            presence = self._presence_for(binding_id)
+            self._queue_pending(raw, path, topic, binding_id, event_id)
+            # An empty list: every reference ended and was stored so; only the settling is left.
+            remaining, live = list(refs), []
+            while remaining:
+                ref = remaining.pop(0)
+                response = await asyncio.to_thread(presence.work, ref)
+                if response.kind not in {"pending", "completed"}:
+                    # A reference read that did not answer changes nothing; read it again later.
+                    self._ingress_health(peer, "HOST_UNAVAILABLE" if response.kind in {"retry", "retained"}
+                                         else "EVENT_UNAVAILABLE")
+                    live.append(ref)
+                    continue
+                ended = response.kind == "completed"
+                replies = self._selected(response, ref)
+                if not ended:
+                    # A live author's released outputs; each output identity is queued once.
+                    replies = [reply for reply in replies if not self._queued(event_id, reply["output_ref"], raw)]
+                if any(len(reply["text"].encode("utf-8")) > 4096 for reply in replies):
+                    self._hold(raw, path, filename, "REPLY_TOO_LONG")
+                    return 0
+                child = response.child_work_ref or (response.work_ref if ended and response.work_ref != ref else "")
+                if not ended:
+                    live.append(ref)
+                # A live parent keeps naming its child; one that already ended is not read again.
+                fresh = bool(child) and child not in refs + live + remaining + ended_refs
+                if fresh:
+                    live.append(child)
+                if ended:
+                    ended_refs = raw["ended_refs"] = list(dict.fromkeys(ended_refs + [ref]))
+                    if not child:
+                        if response.status != "completed":
+                            raw["unfinished"] = "EVENT_UNAVAILABLE"
+                        elif response.outcome == "deferred":
+                            raw["unfinished"] = "DEFERRED_WITHOUT_WORK_REF"
+                if replies or ended or fresh:
+                    # Stored with the replies selected so far, which are queued even if this
+                    # process stops before the next reference is read.
+                    raw["refs"] = list(dict.fromkeys(live + remaining))
+                    if replies:
+                        raw["pending_replies"] = replies
+                    _atomic_json(path, raw)
+                    self._queue_pending(raw, path, topic, binding_id, event_id)
+            if live:
+                if raw["refs"] != live:
+                    raw["refs"] = list(dict.fromkeys(live))
+                    _atomic_json(path, raw)
+                return 0
+            if raw.get("unfinished") == "DEFERRED_WITHOUT_WORK_REF":
+                self._hold(raw, path, filename, "DEFERRED_WITHOUT_WORK_REF")
+                return 0
+            if raw.get("unfinished"):
+                # Failed or cancelled work with nothing left to follow keeps its exact source
+                # visible, after any speech it selected.
+                self._ingress_health(peer, "EVENT_UNAVAILABLE")
+                self._hold(raw, path, filename)
+                return 0
+            self.store.ack_inbox(account, event_id)
+            path.unlink()
+            self.store.settle_raw(account, filename)
+            self._ingress_health(peer, "none")
+            return 1
+        except (ValueError, OSError, RuntimeError, ConnectionError, TimeoutError,
+                telegram_errors.RPCError) as exc:
+            self._ingress_health(peer if type(peer) is int else 0,
+                                 "PRIVATE_STATE_UNAVAILABLE" if isinstance(exc, OSError) else "EVENT_UNAVAILABLE")
+            return 0
+
+    def _queued(self, event_id: str, output_ref: str, raw: dict[str, Any]) -> bool:
+        """Whether this output identity already has its automatic reply for this event."""
+        if output_ref in (raw.get("legacy_reply_outputs") or {}).values():
+            return True
+        prefix = "auto_" + hashlib.sha256(event_id.encode("utf-8")).hexdigest()
+        return self.store.get(str(self.config.account_id),
+                              prefix + "_" + hashlib.sha256(output_ref.encode("utf-8")).hexdigest()[:32]) is not None
 
     async def process_incoming(self, *, limit: int = 100) -> int:
-        """Replay raw, pending-Host and deferred-work events without minting new ids."""
+        """Replay raw, pending-Host and deferred-work events without minting new ids.
+
+        One sequential pass over the chats' heads, then one pass over events in Host custody;
+        each holds its own lock, so neither waits for the other. The companion runs them apart
+        instead: ``intake_pump`` beside ``observe_custody``.
+        """
+        count = await self.process_heads(limit=limit)
+        return count + await self.observe_custody(limit=limit)
+
+    def _waiting_peers(self) -> set[int]:
+        """Chats whose head waits now: repeated failures back off, a busy head waits for the Host's hint."""
+        now = time.monotonic()
+        return ({peer for peer, until in self._blocked_until.items() if until > now}
+                | {peer for peer, until in self._busy.items() if until > now})
+
+    def busy_due_in(self) -> float | None:
+        """Seconds until the soonest busy head may be offered again, or None."""
+        now = time.monotonic()
+        waits = [until - now for until in self._busy.values() if until > now]
+        return min(waits) if waits else None
+
+    def _chat_lock(self, peer: int) -> asyncio.Lock:
+        return self._chat_locks.setdefault(peer, asyncio.Lock())
+
+    async def process_heads(self, *, limit: int = 100) -> int:
+        """One pass over the chats' heads in capture order; returns the events settled.
+
+        With continuation version 2 an event the Host took custody of (``continuing``, a
+        retained turn, a pending view, or an end naming a child) no longer holds its peer:
+        the peer's next event is offered as its head, while the held event's references are
+        read by ``observe_custody``. A busy answer keeps its event the head and offers it
+        again after the Host's hint, unchanged; other peers go on meanwhile.
+        """
         count = 0
         attempted = 0
+        account = str(self.config.account_id)
         async with self._lock:
             # Capture order is the SQLite ordinal assigned synchronously by
             # spool_update. A rotating offset into a shrinking hash-sorted file
             # list can both reorder and skip messages (A,B,C -> A,C,B).
-            now = time.monotonic()
-            blocked_peers: set[int] = {peer for peer, until in self._blocked_until.items()
-                                       if until > now}
+            blocked_peers = self._waiting_peers() | set(self._submitting)
             while attempted < limit:
-                next_event = self.store.next_raw(str(self.config.account_id), blocked_peers,
-                                                 self._inbox_cursor)
+                next_event = self.store.next_raw(account, blocked_peers, self._inbox_cursor)
                 if next_event is None:
                     break
                 seq, filename, original = next_event
                 self._inbox_cursor = seq
                 attempted += 1
-                path = self.state_dir / "incoming" / filename
-                if not path.exists():
-                    _atomic_json(path, original)  # crash between index and file
-                raw = _read_json(path)
-                if raw.get("account_id") != self.config.account_id:
-                    self.store.settle_raw(str(self.config.account_id), filename, held=True)
-                    continue
-                peer = raw["peer_id"]
-                if peer in blocked_peers:
-                    continue
-                if raw.get("binding_revision") != _binding_revision(self.config):
-                    # A later owner binding cannot inherit a prior binding's
-                    # unread Telegram event, even in the same peer.
-                    self.store.settle_raw(str(self.config.account_id), filename, held=True)
-                    os.replace(path, path.with_suffix(".held"))
-                    continue
-                if raw["peer_id"] not in self.config.allowed_peer_ids:
-                    # A revocation stops admission, including old raw spools.
-                    self.store.settle_raw(str(self.config.account_id), filename, held=True)
-                    os.replace(path, path.with_suffix(".held"))
-                    continue
-                try:
-                    work_ref = raw.get("work_ref") or ""
-                    binding_id = raw.get("selected_binding") or ""
-                    if not work_ref and self._excluded(peer):
-                        # Excluded after capture: its content is never submitted. Work the
-                        # Host already admitted keeps its custody; replies to an excluded
-                        # chat are refused at dispatch.
-                        self.store.settle_raw(str(self.config.account_id), filename, held=True)
-                        os.replace(path, path.with_suffix(".held"))
-                        continue
-                    if work_ref and binding_id:
-                        # Admission already happened. Do not re-fetch a replied
-                        # message that may have since been deleted: its absence
-                        # cannot erase an admitted work handle.
-                        topic = raw.get("selected_topic")
-                        eligible = True
-                    else:
-                        eligible, topic = await self._eligible(raw)
-                        if not eligible:
-                            path.unlink()
-                            self.store.settle_raw(str(self.config.account_id), filename)
-                            count += 1
-                            continue
-                        binding_id = self._binding_for(raw["peer_id"], topic)
-                    if binding_id is None:
-                        # No owner-created exact binding: not an owner message,
-                        # and never deliver this event to another room later.
-                        os.replace(path, path.with_suffix(".held"))
-                        self.store.settle_raw(str(self.config.account_id), filename, held=True)
-                        continue
-                    if binding_id != self._binding_for(raw["peer_id"], topic):
-                        self.store.settle_raw(str(self.config.account_id), filename, held=True)
-                        continue
-                    if raw.get("selected_binding") not in ("", binding_id):
-                        raise ValueError("event selected another binding")
-                    if raw.get("selected_binding") != binding_id:
-                        raw["selected_binding"] = binding_id
-                        raw["selected_topic"] = topic
-                        _atomic_json(path, raw)
-                    event = build_event(self.config.account_id, raw["peer_id"],
-                                        raw["message_id"], raw["actor_id"], raw["text"],
-                                        topic_id=topic, event_kind=raw["kind"],
-                                        revision=raw["revision"], message={
-                                            "mentioned": raw["mentioned"],
-                                            "reply_to_message_id": raw["reply_to_msg_id"],
-                                        })
-                    event_id = event["source_event_id"]
-                    self.store.reserve_inbox(str(self.config.account_id), event_id, event)
-                    # A crash after storing the next reference must still queue what the
-                    # previous response selected, not skip straight to the child.
-                    self._queue_pending(raw, path, topic, binding_id, event_id)
-                    presence = self._presence_for(binding_id)
-                    if not work_ref and self._excluded(peer):
-                        # Excluded while the provider reads above were awaited: the
-                        # first submission is checked again with nothing awaited after.
-                        self.store.settle_raw(str(self.config.account_id), filename, held=True)
-                        os.replace(path, path.with_suffix(".held"))
-                        continue
-                    response = await asyncio.to_thread(presence.work, work_ref) if work_ref else (
-                        await asyncio.to_thread(presence.turn, event,
-                                                delivery_reporting_version=self.delivery_reporting_version))
-                    if response.kind == "retained" and response.turn_ref:
-                        # The Host keeps the admitted turn: observe its original
-                        # reference instead of submitting the same event again.
-                        raw["work_ref"] = response.turn_ref
-                        _atomic_json(path, raw)
-                        blocked_peers.add(peer)
-                        continue
-                    if response.kind != "completed":
-                        if response.work_ref and response.work_ref != work_ref:
-                            raw["work_ref"] = response.work_ref
-                            _atomic_json(path, raw)
-                        if response.kind == "pending":
-                            blocked_peers.add(peer)
-                            continue
-                        self._ingress_health(peer, "HOST_UNAVAILABLE" if response.kind in {"retry", "retained"}
-                                             else "EVENT_UNAVAILABLE")
-                        if response.work_ref or work_ref:
-                            blocked_peers.add(peer)
-                        elif response.kind in {"blocked", "rejected"}:
-                            # Do not pay for the same permanent refusal every
-                            # 3 seconds. Retain exact private bytes as a held
-                            # event until a deliberate owner repair/replay.
-                            held = path.with_suffix(".held")
-                            if not held.exists():
-                                os.replace(path, held)
-                            self.store.settle_raw(str(self.config.account_id), filename, held=True)
-                        else:
-                            blocked_peers.add(peer)
-                        continue
-                    # Ended work: queue what its producer selected, whatever the task's
-                    # status, then follow a separately admitted child. A turn names its
-                    # child in work_ref; a work read names itself there.
-                    replies = self._selected(response, work_ref)
-                    if any(len(reply["text"].encode("utf-8")) > 4096 for reply in replies):
-                        # Do not ACK an answer we cannot deliver. Hold the
-                        # exact source for owner correction instead of
-                        # repeatedly posting an unsendable job.
-                        raw["failure_code"] = "REPLY_TOO_LONG"
-                        _atomic_json(path, raw)
-                        os.replace(path, path.with_suffix(".held"))
-                        self.store.settle_raw(str(self.config.account_id), filename, held=True)
-                        continue
-                    child = response.child_work_ref or (
-                        response.work_ref if response.work_ref != work_ref else "")
-                    if child and child != work_ref:
-                        # Stored with the replies selected so far, which are queued even
-                        # if this process stops before the child is read.
-                        raw["work_ref"], raw["pending_replies"] = child, replies
-                        _atomic_json(path, raw)
-                        self._queue_pending(raw, path, topic, binding_id, event_id)
-                        blocked_peers.add(peer)
-                        continue
-                    for reply in replies:
-                        self._queue_reply(raw, topic, binding_id, reply["text"], reply["version"],
-                                          event_id, reply["turn_ref"], phase=reply["phase"],
-                                          output_ref=reply["output_ref"], source=path)
-                    if response.outcome == "deferred" and response.status == "completed":
-                        raw["failure_code"] = "DEFERRED_WITHOUT_WORK_REF"
-                        _atomic_json(path, raw)
-                        os.replace(path, path.with_suffix(".held"))
-                        self.store.settle_raw(str(self.config.account_id), filename, held=True)
-                        continue
-                    if response.status != "completed":
-                        # Failed or cancelled work with nothing left to follow keeps its
-                        # exact source visible, after any speech it selected.
-                        self._ingress_health(peer, "EVENT_UNAVAILABLE")
-                        self.store.settle_raw(str(self.config.account_id), filename, held=True)
-                        os.replace(path, path.with_suffix(".held"))
-                        continue
-                    self.store.ack_inbox(str(self.config.account_id), event_id)
-                    path.unlink()
-                    self.store.settle_raw(str(self.config.account_id), filename)
-                    self._ingress_health(peer, "none")
-                    count += 1
-                except (ValueError, OSError, RuntimeError, ConnectionError,
-                        TimeoutError, telegram_errors.RPCError) as exc:
-                    # Failed catalog, provider fetch or disk write stays raw/pending;
-                    # retry after bounded pacing in the companion loop. Do not
-                    # catch cancellation, and never include private text in logs.
-                    code = ("TELEGRAM_READ" if isinstance(exc, telegram_errors.RPCError)
-                            else "PRIVATE_STATE_UNAVAILABLE" if isinstance(exc, OSError)
-                            else "EVENT_UNAVAILABLE")
-                    self._ingress_health(peer, code)
+                peer = original["peer_id"]
+                async with self._chat_lock(peer):
+                    head = self.store.next_raw(account, set(), 0, peer=peer)
+                    if head is None or head[0] != seq:
+                        continue  # another worker moved this chat on meanwhile
+                    moved, settled = await self._process_head(filename, original)
+                count += settled
+                if not moved:
                     blocked_peers.add(peer)
-                    continue
         return count
+
+    def intake_pump(self, on_progress: Callable[[], Any] | None = None) -> None:
+        """Start each idle chat's head now, without waiting for another chat's answer.
+
+        One submission task per chat keeps that chat's events in capture order; up to
+        ``intake_limit`` chats go side by side, so a Host still opening one chat's author
+        never holds another chat whose author already hears it. A finished task's
+        unexpected failure surfaces here. ``on_progress`` runs when a task moved its chat
+        past at least one event, so the caller looks again at once; a head that waits is
+        offered again on the caller's next capture wake or cadence tick, as before.
+        """
+        for peer, task in list(self._submitting.items()):
+            if task.done():
+                del self._submitting[peer]
+                task.result()
+        excluded = self._waiting_peers() | set(self._submitting)
+        while len(self._submitting) < self.intake_limit:
+            head = self.store.next_raw(str(self.config.account_id), excluded, 0)
+            if head is None:
+                break
+            peer = head[2]["peer_id"]
+            excluded.add(peer)
+            task = asyncio.create_task(self._submit_chat(peer), name="telegram-legacy-chat-intake")
+            if on_progress is not None:
+                task.add_done_callback(lambda done: on_progress() if not done.cancelled() and (
+                    done.exception() is not None or done.result()) else None)
+            self._submitting[peer] = task
+
+    async def _submit_chat(self, peer: int, *, limit: int = 100) -> int:
+        """This chat's heads in capture order, one at a time, until one waits; heads moved past."""
+        moved = 0
+        async with self._chat_lock(peer):
+            while moved < limit and peer not in self._waiting_peers():
+                head = self.store.next_raw(str(self.config.account_id), set(), 0, peer=peer)
+                if head is None:
+                    break
+                went, _settled = await self._process_head(head[1], head[2])
+                if not went:
+                    break
+                moved += 1
+        return moved
+
+    async def stop_intake(self) -> None:
+        """Cancel and join every chat's submission; its event stays pending for the next start."""
+        tasks = list(self._submitting.values())
+        self._submitting.clear()
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def observe_custody(self, *, limit: int = 100) -> int:
+        """Read each event in Host custody once, apart from submission; returns the events settled.
+
+        Its own lock: a slow work read or many held references never hold a chat's next event.
+        """
+        count = 0
+        account = str(self.config.account_id)
+        async with self._observe_lock:
+            # Bounded passes cycle through custody: a cycle reads, in capture order, the events
+            # up to the newest in custody when it began, ``limit`` per pass from the last one read.
+            # Then the next cycle begins, oldest first, in the same pass. Pending older events
+            # never hide a later one, and events arriving meanwhile never hide the older ones.
+            if not self._custody_through:
+                self._custody_cursor, self._custody_through = 0, self.store.custody_high(account)
+            batch = self.store.custody_raw(account, limit=limit, after_seq=self._custody_cursor,
+                                           through_seq=self._custody_through)
+            if len(batch) < limit:
+                # Only events before the cursor: none of them is in this pass yet.
+                batch += self.store.custody_raw(account, limit=limit - len(batch),
+                                                through_seq=self._custody_cursor)
+                self._custody_through = self.store.custody_high(account)
+            for seq, filename, original in batch:
+                self._custody_cursor = seq
+                count += await self._observe_custody(filename, original)
+        return count
+
+    async def _process_head(self, filename: str, original: dict[str, Any]) -> tuple[bool, int]:
+        """Submit, observe or settle one chat's head: (whether the chat moves on now, events settled).
+
+        False means the head waits where it is (a retry, a busy answer, a version-0
+        observation or a failure); the chat's later events stay behind it.
+        """
+        account = str(self.config.account_id)
+        path = self.state_dir / "incoming" / filename
+        if not path.exists():
+            _atomic_json(path, original)  # crash between index and file
+        raw = _read_json(path)
+        if raw.get("account_id") != self.config.account_id:
+            self.store.settle_raw(account, filename, held=True)
+            return True, 0
+        peer = raw["peer_id"]
+        if raw.get("refs") is not None:
+            # Its references were stored before a stop could mark custody in the index.
+            self.store.mark_custody(account, filename)
+            return True, 0
+        if raw.get("binding_revision") != _binding_revision(self.config):
+            # A later owner binding cannot inherit a prior binding's
+            # unread Telegram event, even in the same peer.
+            self.store.settle_raw(account, filename, held=True)
+            os.replace(path, path.with_suffix(".held"))
+            return True, 0
+        if raw["peer_id"] not in self.config.allowed_peer_ids:
+            # A revocation stops admission, including old raw spools.
+            self.store.settle_raw(account, filename, held=True)
+            os.replace(path, path.with_suffix(".held"))
+            return True, 0
+        try:
+            work_ref = raw.get("work_ref") or ""
+            binding_id = raw.get("selected_binding") or ""
+            if not work_ref and self._excluded(peer):
+                # Excluded after capture: its content is never submitted. Work the
+                # Host already admitted keeps its custody; replies to an excluded
+                # chat are refused at dispatch.
+                self.store.settle_raw(account, filename, held=True)
+                os.replace(path, path.with_suffix(".held"))
+                return True, 0
+            if work_ref and binding_id:
+                # Admission already happened. Do not re-fetch a replied
+                # message that may have since been deleted: its absence
+                # cannot erase an admitted work handle.
+                topic = raw.get("selected_topic")
+            else:
+                eligible, topic = await self._eligible(raw)
+                if not eligible:
+                    path.unlink()
+                    self.store.settle_raw(account, filename)
+                    return True, 1
+                binding_id = self._binding_for(raw["peer_id"], topic)
+            if binding_id is None:
+                # No owner-created exact binding: not an owner message,
+                # and never deliver this event to another room later.
+                os.replace(path, path.with_suffix(".held"))
+                self.store.settle_raw(account, filename, held=True)
+                return True, 0
+            if binding_id != self._binding_for(raw["peer_id"], topic):
+                self.store.settle_raw(account, filename, held=True)
+                return True, 0
+            if raw.get("selected_binding") not in ("", binding_id):
+                raise ValueError("event selected another binding")
+            if raw.get("selected_binding") != binding_id:
+                raw["selected_binding"] = binding_id
+                raw["selected_topic"] = topic
+                _atomic_json(path, raw)
+            event = self._event_for(raw, topic)
+            event_id = event["source_event_id"]
+            self.store.reserve_inbox(account, event_id, event)
+            # A crash after storing the next reference must still queue what the
+            # previous response selected, not skip straight to the child.
+            self._queue_pending(raw, path, topic, binding_id, event_id)
+            presence = self._presence_for(binding_id)
+            if not work_ref and self._excluded(peer):
+                # Excluded while the provider reads above were awaited: the
+                # first submission is checked again with nothing awaited after.
+                self.store.settle_raw(account, filename, held=True)
+                os.replace(path, path.with_suffix(".held"))
+                return True, 0
+            if work_ref and self.continuation_version == EARLY_CONTINUATION:
+                # Admitted work that names no references (stored by version 0, before this
+                # Host listed version 2): the Host already holds it. Under its current
+                # binding it moves to custody once, read apart from here on and never
+                # submitted again; the replies it stored were queued just above.
+                self._take_custody(raw, path, filename, [work_ref], [], topic, binding_id, event_id)
+                return True, 0
+            response = await asyncio.to_thread(presence.work, work_ref) if work_ref else (
+                await asyncio.to_thread(presence.turn, event,
+                                        delivery_reporting_version=self.delivery_reporting_version,
+                                        continuation_version=self.continuation_version))
+            if not work_ref and self.continuation_version == EARLY_CONTINUATION:
+                if response.kind == "retry" and response.code == "presence_capacity_full":
+                    # Its conversation or every active slot is held: nothing ran. The
+                    # same event stays the peer's head and goes again after the Host's hint.
+                    self._busy_wait(peer, response)
+                    return False, 0
+                self._busy.pop(peer, None)
+                custody = self._custody_refs(response)
+                if custody:
+                    replies = self._selected(response, "") if response.kind == "continuing" else []
+                    if any(len(reply["text"].encode("utf-8")) > 4096 for reply in replies):
+                        self._hold(raw, path, filename, "REPLY_TOO_LONG")
+                        return True, 0
+                    self._take_custody(raw, path, filename, custody, replies, topic, binding_id, event_id)
+                    return True, 0
+            if response.kind == "retained" and response.turn_ref:
+                # The Host keeps the admitted turn: observe its original
+                # reference instead of submitting the same event again.
+                raw["work_ref"] = response.turn_ref
+                _atomic_json(path, raw)
+                return False, 0
+            if response.kind != "completed":
+                if response.work_ref and response.work_ref != work_ref:
+                    raw["work_ref"] = response.work_ref
+                    _atomic_json(path, raw)
+                if response.kind == "pending":
+                    return False, 0
+                self._ingress_health(peer, "HOST_UNAVAILABLE" if response.kind in {"retry", "retained"}
+                                     else "EVENT_UNAVAILABLE")
+                if response.work_ref or work_ref:
+                    return False, 0
+                if response.kind in {"blocked", "rejected"}:
+                    # Do not pay for the same permanent refusal every
+                    # 3 seconds. Retain exact private bytes as a held
+                    # event until a deliberate owner repair/replay.
+                    held = path.with_suffix(".held")
+                    if not held.exists():
+                        os.replace(path, held)
+                    self.store.settle_raw(account, filename, held=True)
+                    return True, 0
+                return False, 0
+            # Ended work: queue what its producer selected, whatever the task's
+            # status, then follow a separately admitted child. A turn names its
+            # child in work_ref; a work read names itself there.
+            replies = self._selected(response, work_ref)
+            if any(len(reply["text"].encode("utf-8")) > 4096 for reply in replies):
+                # Do not ACK an answer we cannot deliver. Hold the
+                # exact source for owner correction instead of
+                # repeatedly posting an unsendable job.
+                raw["failure_code"] = "REPLY_TOO_LONG"
+                _atomic_json(path, raw)
+                os.replace(path, path.with_suffix(".held"))
+                self.store.settle_raw(account, filename, held=True)
+                return True, 0
+            child = response.child_work_ref or (
+                response.work_ref if response.work_ref != work_ref else "")
+            if child and child != work_ref:
+                if not work_ref and self.continuation_version == EARLY_CONTINUATION:
+                    # The author ended within the request and promoted a child: the
+                    # child is read apart and this peer's next event is offered.
+                    self._take_custody(raw, path, filename, [child], replies, topic, binding_id, event_id)
+                    return True, 0
+                # Stored with the replies selected so far, which are queued even
+                # if this process stops before the child is read.
+                raw["work_ref"], raw["pending_replies"] = child, replies
+                _atomic_json(path, raw)
+                self._queue_pending(raw, path, topic, binding_id, event_id)
+                return False, 0
+            for reply in replies:
+                self._queue_reply(raw, topic, binding_id, reply["text"], reply["version"],
+                                  event_id, reply["turn_ref"], phase=reply["phase"],
+                                  output_ref=reply["output_ref"], source=path,
+                                  anchor=reply.get("anchor"))
+            if response.outcome == "deferred" and response.status == "completed":
+                raw["failure_code"] = "DEFERRED_WITHOUT_WORK_REF"
+                _atomic_json(path, raw)
+                os.replace(path, path.with_suffix(".held"))
+                self.store.settle_raw(account, filename, held=True)
+                return True, 0
+            if response.status != "completed":
+                # Failed or cancelled work with nothing left to follow keeps its
+                # exact source visible, after any speech it selected.
+                self._ingress_health(peer, "EVENT_UNAVAILABLE")
+                self.store.settle_raw(account, filename, held=True)
+                os.replace(path, path.with_suffix(".held"))
+                return True, 0
+            self.store.ack_inbox(account, event_id)
+            path.unlink()
+            self.store.settle_raw(account, filename)
+            self._ingress_health(peer, "none")
+            return True, 1
+        except (ValueError, OSError, RuntimeError, ConnectionError,
+                TimeoutError, telegram_errors.RPCError) as exc:
+            # Failed catalog, provider fetch or disk write stays raw/pending;
+            # retry after bounded pacing in the companion loop. Do not
+            # catch cancellation, and never include private text in logs.
+            code = ("TELEGRAM_READ" if isinstance(exc, telegram_errors.RPCError)
+                    else "PRIVATE_STATE_UNAVAILABLE" if isinstance(exc, OSError)
+                    else "EVENT_UNAVAILABLE")
+            self._ingress_health(peer, code)
+            return False, 0
 
     async def _authorize_write(self, peer, topic, binding):
         if self.authorization is None:

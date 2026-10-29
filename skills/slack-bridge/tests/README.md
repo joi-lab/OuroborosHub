@@ -26,7 +26,28 @@ limits.
 polls, promoted child plus parent tail, equal-text selection identities,
 replay/disconnect, legacy delivery, interrupted-author projection and observation
 ACK loss. Those Host answers are scripted; they are not additional real-author
-process scenarios.
+process scenarios. These cases use one worker without a role, which submits and
+polls in a single claim.
+
+`test_presence_v2_intake.py` runs the companion's split workers (input and
+observation roles, plus `BridgeRuntime` loops for the flood case) against
+scripted version 2 Host answers. It covers negotiation by
+`presence_continuation_versions`. It covers the startup FIFO until the custody
+ACK, and an input worker that ends at the ACK without polling. A slow or blocked
+author GET must not hold input of its own or other threads, including a flood
+of twelve arrivals in arrival order. A continuous-inflow witness on the
+`BridgeRuntime` loops keeps new events arriving faster than they can be
+submitted. The author's reply must still be posted while input is queued, and
+every arrival must still reach Host once, in order. Typed 429
+`presence_capacity_full` refusals keep the same head byte for byte, with exact
+retry schedules, while other threads proceed. The Host's `retry_after` is a
+floor that is never shortened; only the bridge's own backoff is capped (hint
+45 s stays 45 s). Further cases cover `output_ref` deduplication across
+polls, terminal, child and restart, a lost ACK replayed once, an unknown Slack
+send never repeated, and Stop/retained cancellation without speech or
+resubmission. The rest cover a late child, anchored outputs replying in the
+event's own thread, version 1 fallback and version-echo mismatches. These are
+consumer tests against a synthetic Host, not the Host's own v2 implementation.
 
 Late promotion cases discover `child_work_ref` on pending and interrupted polls,
 then reopen the store and adapter with the parent slow, unavailable or dead. The

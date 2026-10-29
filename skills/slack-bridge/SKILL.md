@@ -1,7 +1,7 @@
 ---
 name: slack-bridge
 description: Slack presence transport with durable delivery, directory discovery, provider updates, file transfer, message actions, and provider context.
-version: 1.7.2
+version: 1.8.0
 type: extension
 entry: plugin.py
 plugin_api: "2.0"
@@ -445,6 +445,12 @@ References: [conversations.list](https://docs.slack.dev/reference/methods/conver
   concurrently. Deferred and continuing work retain their durable reference and
   polling, but allow later messages in the same thread after the initial
   acknowledgement.
+- The companion runs two inbound pools, each of the configured inbound worker
+  count. Input workers only submit events that have no Host reference yet. Once
+  a reference is durable, the input worker queues any speech its envelope
+  already carries and releases the row. Observation workers poll stored
+  references. Output polling therefore never occupies an input worker, with
+  any Host version.
 - Retryable refusals and connection failures before sending have at most five
   attempts. An ambiguous write result ends `uncertain` on its first occurrence;
   failed and uncertain items no longer block later messages in the same thread.
@@ -492,9 +498,10 @@ and permits retry after the stated delay for
 
 The same `/identity` answer may advertise `presence_continuation_version: 1`.
 Only then does each new submission add `continuation_version: 1`, with either
-delivery-reporting mode. Without it no new field is sent and the request waits
-for the turn's end exactly as before; rows queued by an earlier bridge version
-keep their original references.
+delivery-reporting mode, unless version 2 is listed (see
+[Timely intake](#timely-intake-version-2) below). Without either, no new field
+is sent and the request waits for the turn's end exactly as before. Rows queued
+by an earlier bridge version keep their original references.
 
 A Host may then answer while the author's result still waits for review:
 `status: "continuing"` with the author's `continuation_ref`, the initial
@@ -508,12 +515,13 @@ checkpoints each discovered reference beside the initial envelope before polling
 it. After a restart, the child remains independently pollable even if the author
 is unavailable.
 The author and the child are polled concurrently through `/presence/work`.
-The existing inbound worker commits the initial selection before starting
-either poll, then commits each response's outputs as it arrives. A child
-result can be sent while an author poll is still awaiting HTTP, and vice
-versa. A later message can be submitted while these polls are in flight.
-The worker owns and reaps both requests on cancellation; no detached poll
-queue is added.
+The input worker that stored the envelope commits its initial selection and
+releases the row. An observation worker commits that selection again (once,
+by identity) before starting either poll, then commits each response's outputs
+as it arrives. A child result can be sent while an author poll is still
+awaiting HTTP, and vice versa. A later message can be submitted while these
+polls are in flight. The observation worker owns and reaps both requests on
+cancellation; no detached poll queue is added.
 The event is finished when every polled reference is terminal.
 
 Each released or terminal output is queued once under its Host `output_ref` and
@@ -590,6 +598,48 @@ that snapshot, including those racing reentry and delivery, remain unknown
 until a later report or admission. The bridge makes no continuous-freshness
 promise. A failed report is visible in the inbox error and retried; it cannot
 turn unavailable facts into an empty queue.
+
+### Timely intake (version 2)
+
+When `/identity` lists 2 in `presence_continuation_versions`, new submissions
+carry `continuation_version: 2`. Otherwise the scalar
+`presence_continuation_version: 1` still selects version 1, and a Host
+advertising neither gets no continuation field. The request is otherwise
+unchanged, including the transport queue snapshot and its refresh before each
+author poll.
+
+- `status: "continuing"` with `outcome: "deferred"`, empty text and a
+  `continuation_ref` is custody, not a reply. It arrives once the author's intake
+  is open. The bridge stores it, which releases that thread's queue, and an
+  observation worker polls the reference. A replayed envelope keeps the version
+  it was stored under: a version 1 envelope returned for a version 2 request is
+  observed as version 1. Any other echoed version is refused and the event stays
+  queued.
+- `status: "completed"` with `outcome: "silent"` means the event was heard or
+  delivered as context to the conversation's live author. The event is finished
+  and nothing is sent; any reply arrives through that author's poll.
+- HTTP 429 `presence_capacity_full` with `disposition: "retry"` (field
+  `conversation` or `capacity`) means nothing ran. The same event stays first
+  in its thread and is resubmitted unchanged after max(hint, backoff). The hint
+  is the Host's numeric `retry_after` and is never shortened. The backoff is the
+  bridge's own: 1 second, doubling per refusal, capped at 30 seconds. It is used
+  alone when the hint is missing or malformed. There is no attempt cap. Other
+  threads continue meanwhile. Nothing is dropped, merged or debounced.
+- Author outputs and terminals may carry `reply_anchor: {source_event_id,
+  message}`, which names the last input the author covered. A Slack reply still
+  goes to the event's own channel and thread; the anchor does not change the
+  destination. Promoted children and retained views carry no anchor and keep
+  that same destination. Each `output_ref` is queued once across the initial
+  envelope, polls, the terminal, children and restarts.
+- A stopped author's terminal is `cancelled` with `outcome: "silent"`. Nothing
+  new is sent, the event ends `failed`, and it is never resubmitted.
+
+Each arrival is still its own submission in arrival order. While an author is
+live, arrivals in its thread reach it as context without waiting for its answer.
+Older Hosts keep version 1 or plain turns: their thread queue is still held until
+the author parks or ends, but polling stays off the input workers.
+References stored as version 2 cannot be observed by an older bridge that is
+rolled back. They keep their custody until this version runs again.
 
 ## Message formatting
 

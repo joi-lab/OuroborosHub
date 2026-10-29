@@ -14,7 +14,7 @@ from userbot.config import Config, save_config
 
 
 class IntakeLoopTests(unittest.IsolatedAsyncioTestCase):
-    async def check_loop(self, fail=False, hold_media=False, hold_place=False):
+    async def check_loop(self, fail=False, hold_media=False, hold_place=False, hold_observe=False):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             save_config(root, Config(123, 'a' * 32, '+1234567890'))
@@ -60,7 +60,7 @@ class IntakeLoopTests(unittest.IsolatedAsyncioTestCase):
                     place_started.set()
                     try: await release.wait()
                     finally: state['place_finished'] = True
-                async def incoming_once(self):
+                async def intake_forever(self):
                     state['calls'] += 1
                     started.set()
                     try:
@@ -68,6 +68,13 @@ class IntakeLoopTests(unittest.IsolatedAsyncioTestCase):
                         await release.wait()
                     finally:
                         state['finished'] = True
+                async def observe_once(self):
+                    # Reading custody references runs as its own worker beside intake.
+                    state['observations'] = state.get('observations', 0) + 1
+                    if hold_observe:
+                        try: await release.wait()
+                        finally: state['observe_finished'] = True
+                async def stop_intake(self): state['intake_stopped'] = True
                 async def dispatch_one(self):
                     if state['job']: sent.set()
                 async def reports_once(self): state['reports'] += 1
@@ -96,6 +103,10 @@ class IntakeLoopTests(unittest.IsolatedAsyncioTestCase):
                         if hold_place:
                             self.assertEqual(state['place_reads'], 1, 'one display read in flight, never stacked')
                             self.assertNotIn('place_finished', state)
+                        if hold_observe:
+                            self.assertEqual(state['observations'], 1, 'one observation pass in flight, never stacked')
+                        else:
+                            self.assertGreater(state['observations'], 1, 'observation keeps its cadence while intake is held')
                 finally:
                     task.cancel()
                     with contextlib.suppress(asyncio.CancelledError, RuntimeError):
@@ -109,8 +120,11 @@ class IntakeLoopTests(unittest.IsolatedAsyncioTestCase):
                 if hold_place:
                     self.assertTrue(state['place_finished'], 'display read cancelled/joined before shutdown')
                 self.assertTrue(state.get('hydration_stopped'))
+                self.assertTrue(state.get('intake_stopped'))
+                if hold_observe:
+                    self.assertTrue(state['observe_finished'], 'observation cancelled/joined before shutdown')
                 self.assertFalse([t for t in asyncio.all_tasks()
-                    if t is not asyncio.current_task() and t.get_name().startswith(('telegram-host-intake','telegram-media-hydration','telegram-chat-list','telegram-place-display','telegram-history-import'))])
+                    if t is not asyncio.current_task() and t.get_name().startswith(('telegram-host-intake','telegram-host-observe','telegram-media-hydration','telegram-chat-list','telegram-place-display','telegram-history-import'))])
 
     async def test_tool_and_reports_progress_while_actual_serve_waits_on_host(self):
         await self.check_loop()
@@ -120,6 +134,9 @@ class IntakeLoopTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_outbound_progresses_while_display_place_read_is_held(self):
         await self.check_loop(hold_place=True)
+
+    async def test_outbound_and_intake_progress_while_an_observation_pass_is_held(self):
+        await self.check_loop(hold_observe=True)
 
     async def test_intake_failure_propagates_and_closes_companion(self):
         await self.check_loop(fail=True)
