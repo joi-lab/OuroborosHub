@@ -8,8 +8,9 @@ import sqlite3
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Sequence, Any, Dict, Iterator, Optional
+from typing import Sequence, Any, Dict, Iterator, List, Optional
 
+from . import discovery
 from .events import TelegramEvent
 from .formatting import prepare_text
 
@@ -69,8 +70,9 @@ class CustodyStore:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._initialize()
 
-    def commit_update(self, update_id: int, event: Optional[TelegramEvent]) -> bool:
-        """Atomically deduplicate an event and advance the provider offset."""
+    def commit_update(self, update_id: int, event: Optional[TelegramEvent],
+                      groups: Sequence[discovery.GroupSighting] = ()) -> bool:
+        """Atomically deduplicate an event, note its groups and advance the provider offset."""
         now = time.time()
         inserted = False
         with self._connect() as conn:
@@ -93,6 +95,7 @@ class CustodyStore:
                     ),
                 )
                 inserted = cursor.rowcount == 1
+            discovery.record_sightings(conn, int(update_id), groups)
             current = self._metadata_int(conn, "telegram_offset")
             next_offset = max(current, int(update_id) + 1)
             conn.execute(
@@ -736,6 +739,11 @@ class CustodyStore:
             "history_reports": json.loads(row["reports_json"]),
         }
 
+    def offered_groups(self, account_id: str) -> List[Dict[str, str]]:
+        """Connect choices of one bot; reads its groups, never the message history."""
+        with self._connect() as conn:
+            return discovery.offered_groups(conn, account_id)
+
     def status_snapshot(self) -> Dict[str, Any]:
         with self._connect() as conn:
             inbox = {
@@ -789,6 +797,7 @@ class CustodyStore:
                     work.get(state, 0) for state in ("completed", "failed", "cancelled")
                 ),
                 "delivery_reports_pending": conn.execute("SELECT COUNT(*) FROM outbox WHERE report_due_at>0").fetchone()[0],
+                "group_backfill_unreadable": discovery.backfill_unreadable(conn),
                 "last_event_at": _timestamp(last_event),
                 "last_delivery_at": _timestamp(last_delivery),
             }
@@ -841,6 +850,7 @@ class CustodyStore:
                 CREATE INDEX IF NOT EXISTS outbox_ready_idx
                     ON outbox(state, available_at, lease_until, created_at);
                 """
+                + discovery.GROUPS_TABLE
             )
             conn.execute("BEGIN IMMEDIATE")
             columns = {r[1] for r in conn.execute("PRAGMA table_info(outbox)")}
@@ -854,6 +864,7 @@ class CustodyStore:
                 self._key_work_by_reference(conn)
             conn.commit()
             self._import_legacy_offset(conn)
+        discovery.backfill_legacy(self._connect)
 
     @staticmethod
     def _key_work_by_reference(conn: sqlite3.Connection) -> None:

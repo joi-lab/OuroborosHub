@@ -6,18 +6,20 @@ import asyncio
 import pathlib
 import re
 from dataclasses import replace
-from typing import Any, Callable, Dict, List, Optional, Protocol, Sequence
+from typing import Any, Callable, Dict, List, Optional, Protocol, Sequence, Tuple
 
 from .api import TelegramClient, TelegramApiError, _split_text
 from .delivery import delivery_report
 from .formatting import prepare_text, prepare_caption
 from .custody import CustodyStore, InboxLease, OutboxLease
+from .discovery import group_sightings
 from .events import parse_telegram_update
 from .host import PresenceHostHTTPError, PresenceSubmission, PresenceWorkResult
 from .settings import load_settings
 
 
 _MAX_OUTBOX_ATTEMPTS = 5
+_BOT_ID = re.compile(r"[1-9][0-9]*")
 
 
 class PlaceHeld(RuntimeError):
@@ -105,6 +107,21 @@ class TelegramTransportRuntime:
         if self._run_task is not None and not self._run_task.done():
             self._run_task.cancel()
 
+    def confirmed_bot(self) -> Tuple[str, str]:
+        """The bot id getMe confirmed for the token configured now, else ``""`` and why not.
+
+        Local and without network. A token changed while getUpdates is held is
+        another bot until getMe answers for it, so the earlier identity is not reused.
+        """
+        if self._run_task is None:
+            return "", "Telegram bot not running"
+        token = str(self.token_provider() or "").strip()
+        if not token:
+            return "", "Bot token missing"
+        if token != self._client_token or not _BOT_ID.fullmatch(self._bot_id):
+            return "", "Bot identity is unconfirmed; check the transport status"
+        return self._bot_id, ""
+
     def status_snapshot(self) -> Dict[str, Any]:
         custody = self.store.status_snapshot()
         return {
@@ -129,6 +146,8 @@ class TelegramTransportRuntime:
                 if client is None:
                     await self._pause(5.0)
                     continue
+                # The bot this client answers for, even if another worker confirms a new token meanwhile.
+                account, username = self._bot_id, self._bot_username
                 self._runtime_state = "polling"
                 discover = getattr(self.submitter, "discover_delivery_support", None)
                 if discover:
@@ -143,13 +162,14 @@ class TelegramTransportRuntime:
                     settings = load_settings(self.state_dir)
                     event = parse_telegram_update(
                         update,
-                        bot_account_id=self._bot_id,
+                        bot_account_id=account,
                         management_group_id=str(settings.get("management_group_id") or "").strip(),
                         places=bool(getattr(self.submitter, "places_version", 0)),
-                        bot_username=self._bot_username,
+                        bot_username=username,
                         words=settings.get("words", []),
                     )
-                    self.store.commit_update(update_id, event)
+                    # A membership or service update notes its group and moves the offset only.
+                    self.store.commit_update(update_id, event, group_sightings(update, account))
                 backoff = 2.0
             except asyncio.CancelledError:
                 raise

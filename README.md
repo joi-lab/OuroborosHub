@@ -253,6 +253,12 @@ PYTHONDONTWRITEBYTECODE=1 python -m pytest -p no:cacheprovider -q -rs skills/sla
 PYTHONDONTWRITEBYTECODE=1 python -m pytest -p no:cacheprovider -q -rs skills/telegram-bot/tests
 ```
 
+Telegram's opt-in real-host/browser qualification lives in
+[`tests/telegram_group_discovery`](tests/telegram_group_discovery/README.md).
+Set `TG_DISCOVERY_CORE`, `TG_DISCOVERY_VENV` and `PLAYWRIGHT_BROWSERS_PATH`, then
+run its `run.sh` with an evidence directory. It checks the existing Places picker
+against synthetic Bot API updates and an upgrade from 0.8, without live credentials.
+
 Calendar's offline job installs its runtime dependencies and uses fake providers:
 
 ```bash

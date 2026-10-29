@@ -6,6 +6,7 @@ import json
 import os
 import pathlib
 import re
+import sqlite3
 import uuid
 from typing import Any, Dict, Optional
 
@@ -164,6 +165,15 @@ def _status_payload() -> Dict[str, Any]:
         counts = CustodyStore(_STATE_DIR / "custody.sqlite3").status_snapshot()
     runtime = _RUNTIME.status_snapshot() if _RUNTIME is not None else {}
     binding_id = str(_load_local_settings().get("binding_id") or "").strip()
+    # Connect offers only the groups of the bot getMe confirmed for the current token.
+    # null, never [], while that bot or its groups cannot be read.
+    account, unavailable = _RUNTIME.confirmed_bot() if _RUNTIME is not None else ("", "Telegram bot not running")
+    groups = None
+    if account:
+        try:
+            groups = _RUNTIME.store.offered_groups(account)
+        except (sqlite3.Error, OSError):
+            unavailable = "Observed groups could not be read"
     return {
         "runtime_state": runtime.get("runtime_state", "not_started"),
         "bot_label": runtime.get("bot_label", "not connected"),
@@ -178,6 +188,8 @@ def _status_payload() -> Dict[str, Any]:
             _load_local_settings().get("management_group_id") or ""
         ),
         "binding_state": "configured" if binding_id else "missing",
+        "connect": groups,
+        **({"connect_unavailable": unavailable} if groups is None else {}),
         **counts,
     }
 
@@ -185,8 +197,10 @@ def _status_payload() -> Dict[str, Any]:
 async def _status_route(_request: Any) -> JSONResponse:
     payload = _status_payload()
     held = payload.get("outbox_held", 0)
-    payload.update(text=f"{held} held" if held else payload["runtime_state"],
-                   tone="warn" if held else "muted", title="Telegram transport")
+    text, tone = ((f"{held} held", "warn") if held else
+                  (payload["connect_unavailable"], "warn") if payload["connect"] is None else
+                  (payload["runtime_state"], "muted"))
+    payload.update(text=text, tone=tone, title="Telegram transport")
     return JSONResponse(payload)
 
 
