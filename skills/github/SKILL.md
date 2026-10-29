@@ -1,7 +1,7 @@
 ---
 name: github
 description: Observe connected GitHub issues, pull requests and Discussions, and deliver authorized replies or explained issue closures with durable receipts.
-version: 0.1.3
+version: 0.1.4
 type: extension
 entry: plugin.py
 plugin_api: "2.0"

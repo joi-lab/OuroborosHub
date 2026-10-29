@@ -173,8 +173,4 @@ def register(api):
         {"type": "action", "route": "probe", "method": "POST", "label": "Verify identities and repositories", "target": "probe"},
         {"type": "json", "target": "probe"},
     ]})
-    api.register_ui_tab("status", title="GitHub", render={"kind": "declarative", "schema_version": 1, "components": [
-        {"type": "poll", "route": "status", "interval_ms": 15000, "target": "status"},
-        {"type": "json", "target": "status"},
-    ]})
     api.register_companion_process("github_poller")

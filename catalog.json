@@ -1,7 +1,7 @@
 {
   "description": "Official Ouroboros skills catalog.",
   "name": "OuroborosHub",
-  "raw_base_url": "https://raw.githubusercontent.com/razzant/OuroborosHub/90f0d497b36f5052275c9e38e99a32eb256f6c07",
+  "raw_base_url": "https://raw.githubusercontent.com/razzant/OuroborosHub/ce0afdb2d07e828b587887f1cec10dcbb3a5c3d3",
   "schema_version": 1,
   "skills": [
     {
@@ -1291,12 +1291,12 @@
         },
         {
           "path": "SETUP.md",
-          "sha256": "52c6b52b54ff85dd57d485f77bc21dd501e99703ecaa99738ed95ea46962e5ae",
-          "size": 22133
+          "sha256": "71bceacd266b0afe96d8a9334aa64b50cd19f2baa43ba58021142fc1fab8ff6e",
+          "size": 22338
         },
         {
           "path": "SKILL.md",
-          "sha256": "1296b38b5d0f57797f5379f5dd9f5f7b57b21de170f452e0fa1cc2fbf6154fd2",
+          "sha256": "61780da629e909b4333f331e03f32e69bb561ce2a1214e94cb954d0be972d21e",
           "size": 6397
         },
         {
@@ -1371,8 +1371,8 @@
         },
         {
           "path": "plugin.py",
-          "sha256": "ebee8522c33cf35d3b3c057f1c7322c11fb915b7aacf7ced414377eff62d1c56",
-          "size": 11582
+          "sha256": "d90ba390b4e6048b5afd7c253781493ba91de8eea03ad1631bf1260d1b0a09b4",
+          "size": 11323
         },
         {
           "path": "scripts/companion.py",
@@ -1386,8 +1386,8 @@
         },
         {
           "path": "tests/check_host_contract.py",
-          "sha256": "6d32d336a54897058363496b2c79757fdb53497bf57bfdc543c24a32f891bf2d",
-          "size": 14506
+          "sha256": "818d5f97e81c91da338d3b91df6ac5b30614410bca96cf6665ad71ec647c0a02",
+          "size": 14510
         },
         {
           "path": "tests/run_checks.py",
@@ -1441,8 +1441,8 @@
         },
         {
           "path": "tests/test_status_route.py",
-          "sha256": "220b23e08e3d53f3213861ca3209423212de186757f67e1262b9a85ece17226b",
-          "size": 2668
+          "sha256": "9e6ad14172ab3674fc217cd06a132620b5c4662efde59e2be94f228d6ba408ca",
+          "size": 4028
         },
         {
           "path": "tests/test_transport.py",
@@ -1462,7 +1462,7 @@
       "name": "github",
       "slug": "github",
       "type": "extension",
-      "version": "0.1.3"
+      "version": "0.1.4"
     },
     {
       "description": "Universal Google Workspace integration for Google Sheets, Docs, Drive, Slides and Calendar via explicit OAuth or Service Account authentication.",
@@ -1977,19 +1977,19 @@
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "03c8177e32c0ad0b470b973048501807ecab2cc85aa72ca80ab9b9a2982f1e93",
+          "sha256": "6d1ec3209d93b545fd874f66f8803b563e287700523a35b5d489b22e1a3ae538",
           "size": 2389
         },
         {
           "path": "plugin.py",
-          "sha256": "7764ed98ef8a068bf2ae5305419d6532dd64eed674b7806c49210bafde179ee9",
-          "size": 9213
+          "sha256": "a13124f6ce6f99f8fc40c8175b38d528b3bc38a3a928b4ed3b525e047a4f699f",
+          "size": 9412
         }
       ],
       "name": "perplexity",
       "slug": "perplexity",
       "type": "extension",
-      "version": "0.1.2"
+      "version": "0.1.3"
     },
     {
       "description": "Оркестратор автоматического бронирования ресторанов: нормализует список ресторанов, формирует задачу для агента-исполнителя и валидирует результат.",

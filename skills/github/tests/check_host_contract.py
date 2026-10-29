@@ -32,7 +32,7 @@ def main():
     original_cwd = Path.cwd()
     copied = {}
     with tempfile.TemporaryDirectory(prefix="github-host-check-") as scratch:
-        root = Path(scratch)
+        root = Path(scratch).resolve()
         for folder in ("home", "data", "repo", "state", "tmp"):
             (root / folder).mkdir()
         # A fresh dependency-only runtime; inherited native credentials and host
@@ -100,7 +100,7 @@ def main():
             assert len(registrations.tools) == 3
             assert len(registrations.routes) == 3
             assert len(registrations.settings_sections) == 1
-            assert len(registrations.ui_tabs) == 1
+            assert not registrations.ui_tabs
             assert registrations.companion_names == ["github_poller"]
             assert not registrations.companion_spawns  # catalog only, never enabled
             from starlette.requests import Request
