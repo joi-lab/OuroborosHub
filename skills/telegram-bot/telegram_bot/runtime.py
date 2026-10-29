@@ -115,6 +115,8 @@ class TelegramTransportRuntime:
                and getattr(self.submitter, "connector_identity", {}) else {}),
             "last_error": self._last_error,
             "delivery_reporting": getattr(self.submitter, "delivery_reporting_status", "unsupported"),
+            # 2: early custody answers; 0: each turn waits for its terminal (older Host).
+            "presence_continuation_version": getattr(self.submitter, "continuation_version", 0),
             "last_event_at": custody.get("last_event_at", ""),
             "last_delivery_at": custody.get("last_delivery_at", ""),
         }
@@ -194,8 +196,9 @@ class TelegramTransportRuntime:
                 await self._pause(0.5)
 
     async def process_one_inbox(self) -> bool:
-        # A Host turn can run for up to 30 minutes; keep one local claimant
-        # through that bounded request so another worker cannot resubmit it.
+        # A Host turn can run for up to 30 minutes (version 2 answers once its
+        # author takes mail); keep one local claimant through that bounded
+        # request so another worker cannot resubmit it.
         lease = self.store.claim_inbox(lease_sec=1860.0)
         if lease is None:
             return False
@@ -205,6 +208,13 @@ class TelegramTransportRuntime:
             try:
                 result = await self.submitter.submit(lease.payload, staged)
             except PresenceHostHTTPError as refusal:
+                delay = refusal.busy_retry_after
+                if delay is not None:
+                    # Nothing was admitted: the same event stays first in its
+                    # conversation, with its staged files, and this worker moves on
+                    # to other conversations until the Host's hint has passed.
+                    self.store.defer_inbox(lease.event_id, reason=_error(refusal), retry_after_sec=delay)
+                    return True
                 if not self._settle_refusal(lease, refusal):
                     raise
             else:
@@ -216,6 +226,9 @@ class TelegramTransportRuntime:
                     text=result.text,
                     work_ref=result.work_ref,
                     delivery_reporting_version=result.delivery_reporting_version,
+                    continuation_ref=result.continuation_ref,
+                    output_ref=result.output_ref,
+                    reply_anchor=result.reply_anchor,
                 )
             self._remove_staged_files(staged)
             return True
@@ -310,6 +323,7 @@ class TelegramTransportRuntime:
                     status=result.status,
                     text=result.text if result.outcome in {"message", "deferred"} and not result.output_ref else "",
                     child_ref=result.child_work_ref,
+                    reply_anchor=result.reply_anchor,
                 )
             elif result.status == "unresolved":
                 # An older Host without a canonical answer yet: keep observing at the

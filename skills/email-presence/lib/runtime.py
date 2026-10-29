@@ -5,15 +5,32 @@ import asyncio
 import logging
 import smtplib
 import time
+from collections.abc import Mapping
 from dataclasses import replace
 from datetime import datetime, timezone
 
 from .delivery import email_report
-from .host_adapter import HostBindingTerminalError
+from .host_adapter import HostBindingTerminalError, HostRetryError, HostTurnStatus
 from .mime import extract_body
 from .settings import SENDING_OFF, load_settings
+from .store import RequestIdConflict
 
 log = logging.getLogger("email_presence")
+# A busy conversation or full capacity refusal resubmits the same event after the
+# larger of the Host's retry_after and this transport's own backoff, which starts at
+# one second, doubles per refusal and is capped here. The Host's hint is never cut.
+_CAPACITY_BACKOFF_MAX_SECONDS = 30
+# Which mail each inbox loop claims: new mail (no Host reference yet), admitted work
+# to observe (a stored reference), or either in one claim.
+_ROLE_CLAIMS = {None: {}, "intake": {"submitted": False}, "observe": {"submitted": True}}
+
+
+def _retry(exc, attempts):
+    """The inbox note and delay for a retryable failure of one claim."""
+    if isinstance(exc, HostRetryError) and exc.code == "presence_capacity_full":
+        backoff = min(_CAPACITY_BACKOFF_MAX_SECONDS, 2 ** min(max(attempts - 1, 0), 5))
+        return str(exc), backoff if exc.retry_after is None else max(exc.retry_after, backoff)
+    return type(exc).__name__, min(60, 2 ** min(attempts, 5))
 
 
 def _wire_text(message):
@@ -78,26 +95,65 @@ class EmailRuntime:
             message["attachment_stage_note"] = "Some attachment bytes were not staged; the full RFC822 source artifact is available."
         return staged
 
-    def _reply(self, item, texts, suffix, mode=0, turn_ref=""):
+    def _anchored(self, item, anchor):
+        """The captured mail a version 2 ``reply_anchor`` names, else the polled mail.
+
+        Its message's folder/UIDVALIDITY/UID select one stored row, which must be that
+        exact source event and Message-ID and in the polled mail's thread (this store is
+        one mailbox). Children and older Hosts carry no anchor.
+        """
+        anchor = anchor if isinstance(anchor, Mapping) else {}
+        source = str(anchor.get("source_event_id") or "")
+        if not source or source == item.provider_event_key:
+            return item
+        message = anchor.get("message") if isinstance(anchor.get("message"), Mapping) else {}
+        key = (message.get("folder"), message.get("uidvalidity"), message.get("imap_uid"))
+        target = (self.store.inbox_event(*key)
+                  if isinstance(key[0], str) and type(key[1]) is int and type(key[2]) is int else None)
+        if (target is None or target.provider_event_key != source or target.message_id != message.get("message_id")
+                or target.thread_key != item.thread_key):
+            log.warning("Presence reply anchor %s is not a captured mail of this thread; replying to %s",
+                        source, item.provider_event_key)
+            return item
+        return target
+
+    def _reply(self, item, texts, suffix, mode=0, turn_ref="", anchor=None):
         text = "\n".join(texts).strip()
         if text:
-            subject = item.subject if item.subject.lower().startswith("re:") else f"Re: {item.subject}"
-            self.store.enqueue_outbox(request_id=f"presence:{item.provider_event_key}:{suffix}",
-                                      recipients=item.context.get("reply_to") or [item.sender], subject=subject, body=text,
-                                      in_reply_to=item.message_id, references=item.references,
-                                      reporting={"version": mode, "account_id": self.account,
-                                                 "origin": {"kind": "automatic", "task_id": turn_ref,
-                                                            "source_event_id": item.provider_event_key}})
+            # A version 2 author output answers its last covered input: reply to that
+            # captured message in the same thread. Without an anchor (children, older
+            # Hosts) or an unbound one, reply to the polled event as before. The
+            # request id stays the polled event's, so each output is queued once.
+            target = self._anchored(item, anchor)
+            subject = target.subject if target.subject.lower().startswith("re:") else f"Re: {target.subject}"
+            try:
+                self.store.enqueue_outbox(request_id=f"presence:{item.provider_event_key}:{suffix}",
+                                          recipients=target.context.get("reply_to") or [target.sender], subject=subject,
+                                          body=text, in_reply_to=target.message_id, references=target.references,
+                                          reporting={"version": mode, "account_id": self.account,
+                                                     "origin": {"kind": "automatic", "task_id": turn_ref,
+                                                                "source_event_id": item.provider_event_key}})
+            except RequestIdConflict:
+                # The first queued copy of this output identity stays authoritative.
+                log.warning("Presence output %s was already queued with other headers; keeping the first", suffix)
 
     async def discover_support(self):
         discover = getattr(self.host, "discover_delivery_support", None)
         mode = await discover() if discover else 0
         self.store.put("delivery_support", {"version": mode,
                        "status": getattr(self.host, "delivery_reporting_status", "unsupported"),
-                       "presence_identity": getattr(self.host, "presence_identity", 0)})
+                       "presence_identity": getattr(self.host, "presence_identity", 0),
+                       "presence_continuation_version": getattr(self.host, "continuation_version", 0)})
 
-    async def process_inbox(self):
-        item = self.store.claim_inbox()
+    async def process_inbox(self, role=None):
+        """One inbox claim: submit new mail, observe admitted work, or (no role) either.
+
+        The companion runs an ``intake`` loop, which only submits mail without a Host
+        reference and releases it as soon as that reference is durable, and an
+        ``observe`` loop, which only polls stored references. An output poll therefore
+        never holds new mail.
+        """
+        item = self.store.claim_inbox(**_ROLE_CLAIMS[role])
         if not item:
             return False
         try:
@@ -106,16 +162,29 @@ class EmailRuntime:
                 self.store.retry_inbox(item.row_id, item.lease_token, "Presence binding is not configured", 30)
                 return True
             ref = item.host_reference or await self.host.submit(item)
+            observe = True
             if not item.host_reference:
                 self.store.set_host_reference(item.row_id, item.lease_token, ref)
-            status = await self.host.status(ref)
+                # An input claim never polls, and continuing custody is not a reply:
+                # either way only what the reference already says is committed now.
+                observe = role != "intake" and not ref.startswith("continuing:")
+            if observe:
+                status = await self.host.status(ref)
+            else:
+                initial = getattr(self.host, "initial_status", None)
+                status = initial(ref) if initial is not None else HostTurnStatus("pending")
             if status.host_reference and status.host_reference != ref:
                 # A retained event's newly named child is kept before it is polled.
                 self.store.set_host_reference(item.row_id, item.lease_token, status.host_reference)
             self._reply(item, status.texts, "immediate", status.delivery_reporting_version, status.turn_ref)
             for output in status.outputs:
-                self._reply(item, (output.text,), output.identity, status.delivery_reporting_version, output.turn_ref)
-            if status.state == "pending":
+                self._reply(item, (output.text,), output.identity, status.delivery_reporting_version, output.turn_ref,
+                            getattr(output, "anchor", None))
+            if status.state == "pending" and not observe:
+                # Released at once: the thread's next mail may follow, and the work
+                # named by the reference is observed on a later claim.
+                self.store.retry_inbox(item.row_id, item.lease_token, status.error, 0)
+            elif status.state == "pending":
                 # Plain pending keeps its pace; an unresolved or unreadable observation backs off.
                 self.store.retry_inbox(item.row_id, item.lease_token, status.error or "Host turn pending",
                                        min(60, 2 ** min(item.attempts, 5)) if status.error else 5)
@@ -128,7 +197,10 @@ class EmailRuntime:
         except HostBindingTerminalError as exc:
             self.store.fail_inbox(item.row_id, item.lease_token, str(exc))
         except Exception as exc:
-            self.store.retry_inbox(item.row_id, item.lease_token, type(exc).__name__, min(60, 2 ** min(item.attempts, 5)))
+            # A capacity refusal keeps the same event first in its thread; other
+            # threads' mail is claimed meanwhile.
+            note, delay = _retry(exc, item.attempts)
+            self.store.retry_inbox(item.row_id, item.lease_token, note, delay)
         return True
 
     def process_outbox(self):
@@ -248,9 +320,11 @@ class EmailRuntime:
                     interval = self.poll_interval
                 await wait(interval)
 
-        async def inbox():
+        async def inbox(role):
+            # Two loops under this same lifecycle: new mail is submitted while an
+            # admitted turn's poll may still be waiting on HTTP, and vice versa.
             while not stop.is_set():
-                if not await self.process_inbox():
+                if not await self.process_inbox(role):
                     await wait(1)
 
         async def outbox():
@@ -269,4 +343,4 @@ class EmailRuntime:
                     reporting.cancel()
                     await asyncio.gather(reporting, return_exceptions=True)
 
-        await asyncio.gather(poller(), inbox(), outbox())
+        await asyncio.gather(poller(), inbox("intake"), inbox("observe"), outbox())

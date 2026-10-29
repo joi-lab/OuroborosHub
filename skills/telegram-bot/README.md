@@ -1,8 +1,14 @@
-# Telegram Bot 0.7.0
+# Telegram Bot 0.8.0
 
 A public Telegram bot connector for private-chat, group and channel places,
 separate from the built-in owner-control Telegram bridge. It keeps incoming
 events and outgoing delivery receipts in its durable inbox/outbox.
+
+On Hosts that offer Presence continuation version 2, messages sent while
+Ouroboros is working on an answer reach that answer as context, a busy
+conversation waits without holding up other chats, and the reply answers the
+last message the answer took into account. See
+[Timely conversations](SKILL.md#timely-conversations-080).
 
 In the place's connector settings, add **Words to notice**, one word or phrase
 per line. Matching is literal, case-insensitive, and requires non-word

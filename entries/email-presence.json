@@ -6,7 +6,7 @@
     "Email"
   ],
   "description": "Email connector for IMAP/SMTP places, with threaded conversations, durable receipts and attachments, and live place-state delivery holds.",
-  "digest": "235516227301dd19b500a4191c0bdf8b92a3ee05a4f9c42f629402ab037e13ce",
+  "digest": "e93f6654857f621452874167506d9e6b8da6ffbb553c80ec38d660af11bdff1f",
   "icon": "ui/icon.svg",
   "install_specs": [
     "httpx",
@@ -20,6 +20,6 @@
     "path": "skills/email-presence"
   },
   "type": "extension",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "withdrawn": null
 }

@@ -34,6 +34,10 @@ SUITES = {
     'slack-bridge': {'skills': ['slack-bridge'],
                      'tests': ['skills/slack-bridge/tests', 'tests/test_slack_presence_core_consumer.py'],
                      'dependencies': ['httpx', 'starlette', 'websockets']},
+    'email-presence': {'skills': ['email-presence'], 'tests': ['skills/email-presence/tests'],
+                       'dependencies': ['httpx', 'starlette'], 'cwd': 'skills/email-presence'},
+    'agentrq-bridge': {'skills': ['agentrq-bridge'], 'tests': ['skills/agentrq-bridge/tests'],
+                      'dependencies': ['starlette']},
     'github': {'skills': ['github'], 'tests': ['skills/github/tests'],
                'dependencies': ['PyJWT[crypto]>=2.13,<3', 'httpx', 'starlette']},
     'telegram-bot': {'skills': ['telegram-bot'], 'tests': ['skills/telegram-bot/tests'],
@@ -83,9 +87,14 @@ def run_suite(name):
     suite = SUITES[name]
     subprocess.run([sys.executable, '-B', '-m', 'pip', 'install', 'PyYAML', 'pytest',
                     *suite.get('dependencies', [])], check=True)
+    # Selection paths stay repository-relative; some suites import from their own payload.
+    root = Path(__file__).resolve().parents[1]
+    cwd = root / suite['cwd'] if 'cwd' in suite else None
+    tests = [str(root / path) for path in suite['tests']] if cwd else suite['tests']
     # Each skill gets its own interpreter; sibling test imports cannot collide.
     subprocess.run([sys.executable, '-B', '-m', 'pytest', '-p', 'no:cacheprovider', '-q', '-rs',
-                    *suite['tests']], check=True, env={**os.environ, 'PYTHONDONTWRITEBYTECODE': '1'})
+                    *tests], check=True, cwd=cwd,
+                   env={**os.environ, 'PYTHONDONTWRITEBYTECODE': '1'})
 
 
 def main():

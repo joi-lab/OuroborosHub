@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.8.0
+
+- Negotiate Presence continuation version 2 only when `/identity` lists it in
+  `presence_continuation_versions`. Hosts that do not list it keep plain turns.
+- Treat the early `continuing` answer as custody: store it, release the thread
+  and observe the author with one poll per later claim.
+- Run the inbox as two loops under the companion's existing lifecycle: one only
+  submits new mail, the other only polls stored references. A slow poll never
+  holds new mail, and a continuous inflow never holds observation.
+- Keep a `presence_capacity_full` refusal as its thread's head. It is resubmitted
+  unchanged after max(hint, backoff): the hint is the Host's `retry_after`, never
+  shortened; the backoff is this transport's own, 1 second doubling to a 30-second
+  cap. Other threads continue meanwhile.
+- Reply to the captured mail a version 2 output's `reply_anchor` names; an
+  initial answer's receipt keeps its anchor too. Its message's
+  folder/UIDVALIDITY/UID select the mail, which must match the anchor's
+  `source_event_id` and Message-ID and be in the polled mail's thread.
+  Children, retained views and unbound anchors reply to the polled mail as
+  before. Each `output_ref` is queued once.
+
 ## 0.7.0
 
 - Keep the core mail fact plain in the manifest for older hosts; publish

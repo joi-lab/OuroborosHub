@@ -12,7 +12,8 @@ from urllib.parse import urlencode, quote
 from .config import load_config, _private_dir, _write_json
 from .participant_state import Journal, policy, digest, receiving_refusal, legacy_text_matches
 from .participant_ops import Operations, SPECS, validate
-from .presence import _urllib_transport, PresenceToken, build_event
+from .presence import (_urllib_transport, EARLY_CONTINUATION, PresenceToken, anchored_message_id, build_event,
+                       busy_delay, lists_early_continuation, retry_seconds)
 from .normalize import actor_facts, canonical_text, chat_facts, content_revision, iso, media_descriptor
 
 @contextmanager
@@ -66,6 +67,10 @@ class Host:
         if status != 200 or body.get('state') not in {'active','silent','paused'}:
             raise RuntimeError('place not connected or unreadable')
         return body
+
+def continuation_version(identity):
+    """2 when this Host lists early custody answers, else 1: the scalar it keeps at 1 either way."""
+    return EARLY_CONTINUATION if lists_early_continuation(identity) else 1
 
 class CurrentAuthorization:
     """One current local/Host authorization owner for both transport modes."""
@@ -143,6 +148,13 @@ class Participant:
         self.hydration_limit = 3
         self._hydrating = {}
         self._place_observed = 0.0
+        # The continuation version negotiated at startup (serve): 2 when the Host lists it.
+        self.continuation_version = 1
+        # Conversations are offered to the Host side by side, each in its own order.
+        self.intake_limit = 3
+        self._submitting = {}
+        # References of an event already read to their end; a live parent may keep naming one.
+        self._ended = {}
     def current(self, peer='', write=False):
         return self.authorization.current(peer, write)
     async def authorize(self, peer='', topic='', write=False, *, person=False):
@@ -499,11 +511,15 @@ class Participant:
         candidates = list(body.get('outputs') or [])
         if body.get('output_ref'):
             candidates.append(body)
+        # A version-2 output names the last input it covers; the reply stays in this event's
+        # chat and topic, and an output without an anchor answers the event itself.
+        conversation = 'telegram:%s:%s:%s' % (event['account_id'], event['conversation_id'], event.get('thread_id') or '0')
         for out in candidates:
             if out.get('outcome') not in {'message','deferred'} or not out.get('output_ref') or not out.get('text','').strip():
                 continue
             # Output identity, not text or producer work id, deduplicates speech.
             text = out['text']
+            reply = anchored_message_id(out.get('reply_anchor'), conversation) or int(event['message']['message_id'])
             # Split UTF-8 safely into independently recorded physical parts.
             chunks, current = [], ''
             for char in text:
@@ -512,66 +528,141 @@ class Participant:
                 current += char
             if current: chunks.append(current)
             for n, chunk in enumerate(chunks):
-                args = {'peer':event['conversation_id'], 'text':chunk, 'reply_id':int(event['message']['message_id'])}
+                key = 'auto:'+digest(out['output_ref'])+':'+str(n)
+                queued = self.journal.get(self.account, key)
+                if queued is not None and json.loads(queued['args']).get('text') == chunk:
+                    continue  # Queued once under this output identity; the target it was given stands.
+                args = {'peer':event['conversation_id'], 'text':chunk, 'reply_id':reply}
                 if event['thread_id']: args['topic_id']=int(event['thread_id'])
-                self.journal.enqueue(self.account, 'auto:'+digest(out['output_ref'])+':'+str(n), 'send_text', args,
+                self.journal.enqueue(self.account, key, 'send_text', args,
                     origin={'kind':'automatic','source_event_id':event['source_event_id'], 'task_id':str(body.get('task_id') or body.get('turn_ref') or '')})
-    async def incoming_once(self):
-        blocked = set()
-        for row in self.journal.heads(self.account):
-            e = json.loads(row['event']); room=e['conversation_key']
-            if str(e.get('account_id','')) != self.account:
-                self.journal.inbox_update(row['seq'],'held',json.loads(row['refs']))
-                continue
-            if room in blocked: continue
+    def retry_delay(self, seq, body):
+        """Seconds until the same event is offered again; it stays its conversation's head."""
+        after = retry_seconds(body.get('retry_after'))
+        if self.continuation_version == EARLY_CONTINUATION and body.get('code') == 'presence_capacity_full':
+            # Busy: nothing ran. Again after the Host's own wait, never the long backoff of a failure.
+            return busy_delay(str(body.get('field') or ''), after)
+        return after or 30
+    async def submit(self, row):
+        """Offer one conversation's oldest event the Host has not taken yet.
+
+        A reference in the answer is custody: the event's observation moves to observe_once
+        and its conversation's next event may be offered. Version 2 answers ``continuing``
+        as soon as the author takes the conversation's later events, so that next event meets
+        an author that hears it. A retry, including a busy conversation or capacity, keeps
+        the event the head; the same bytes go again after the delay.
+        """
+        e = json.loads(row['event'])
+        refs = json.loads(row['refs'])
+        if str(e.get('account_id','')) != self.account:
+            self.journal.inbox_update(row['seq'],'held',refs)
+            return
+        try:
+            self.current(e['conversation_id'])
+            code, body = await asyncio.to_thread(self.host.call,'POST','/presence/turn',{'event':e, 'staged_files':json.loads(row['files']), 'delivery_reporting_version':1, 'continuation_version':self.continuation_version})
+            self.journal.observe_inbox(row['seq'],code,body)
+            if body.get('disposition') == 'retry':
+                self.journal.inbox_update(row['seq'],'pending',[],self.retry_delay(row['seq'], body))
+                return  # Same immutable POST after the Host's certified reset.
+            if body.get('disposition') == 'retained' and body.get('turn_ref'):
+                refs.append(body['turn_ref'])
+            elif body.get('ok') is not True:
+                if body.get('disposition') in {'blocked','rejected'}:
+                    self.journal.inbox_update(row['seq'],'held',refs); return
+                raise RuntimeError('host intake retry')
+            self.consume_outputs(body,e)
+            for key in ('continuation_ref','work_ref','child_work_ref'):
+                if body.get(key) and body[key] not in refs: refs.append(body[key])
+            if body.get('status') not in {'completed','failed','cancelled'} and body.get('turn_ref') and body['turn_ref'] not in refs:
+                refs.append(body['turn_ref'])
+            self.journal.inbox_update(row['seq'],'pending' if refs else 'done',refs,3)
+        except (RuntimeError, OSError, TimeoutError):
+            self.journal.inbox_update(row['seq'],'pending',refs,30)
+        except ValueError as exc:
+            if type(exc) is ValueError and str(exc) in EXECUTOR_CHANGED:
+                return  # Untouched: no post here; a matching companion rechecks it.
+            # Exclusion, selection, a Host refusal or an output identity conflict.
+            self.journal.inbox_update(row['seq'],'held',refs)
+    def intake_pump(self):
+        """Start each due conversation head without waiting for another conversation's answer.
+
+        One submission per conversation at a time keeps its order; finished submissions'
+        unexpected failures surface here.
+        """
+        for key, task in list(self._submitting.items()):
+            if task.done():
+                del self._submitting[key]
+                task.result()
+        for row in self.journal.submissions(self.account):
+            if len(self._submitting) >= self.intake_limit:
+                break
+            key = json.loads(row['event']).get('conversation_key') or row['id']
+            if key not in self._submitting:
+                self._submitting[key] = asyncio.create_task(self.submit(row), name='telegram-host-submission')
+    async def stop_intake(self):
+        tasks = list(self._submitting.values())
+        self._submitting.clear()
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+    async def intake_forever(self, tick=0.5):
+        """Host intake supervisor, separate from reference observation and outbound dispatch."""
+        try:
+            while True:
+                self.intake_pump()
+                await asyncio.sleep(tick)
+        finally:
+            await self.stop_intake()
+    async def submit_once(self):
+        """One intake pass: every due conversation head, side by side."""
+        gate = asyncio.Semaphore(self.intake_limit)
+        async def one(row):
+            async with gate:
+                await self.submit(row)
+        for outcome in await asyncio.gather(*(one(row) for row in self.journal.submissions(self.account)), return_exceptions=True):
+            if isinstance(outcome, BaseException):
+                raise outcome
+    async def observe_once(self):
+        """Read the references of events in Host custody; settle each event once none is live.
+
+        Every output the Host selected is queued once by its output identity; a child is
+        read beside its parent until its own end. Nothing here submits an event again.
+        """
+        for row in self.journal.observations(self.account):
+            e = json.loads(row['event'])
             refs = json.loads(row['refs'])
+            ended = self._ended.setdefault(row['seq'], set())
             try:
                 self.current(e['conversation_id'])
-                if not refs:
-                    code, body = await asyncio.to_thread(self.host.call,'POST','/presence/turn',{'event':e, 'staged_files':json.loads(row['files']), 'delivery_reporting_version':1, 'continuation_version':1})
+                live = []
+                for ref in list(refs):
+                    code, body = await asyncio.to_thread(self.host.call,'GET','/presence/work/'+quote(ref,safe=''))
                     self.journal.observe_inbox(row['seq'],code,body)
-                    if body.get('disposition') == 'retry':
-                        after=body.get('retry_after',30)
-                        if isinstance(after,str):
-                            try: after=max(1,datetime.fromisoformat(after.replace('Z','+00:00')).timestamp()-time.time())
-                            except ValueError: after=30
-                        delay=after if type(after) in (int,float) and after>0 else 30
-                        self.journal.inbox_update(row['seq'],'pending',[],delay)
-                        blocked.add(room)
-                        continue  # Same immutable POST after the Host's certified reset.
-                    if body.get('disposition') == 'retained' and body.get('turn_ref'):
-                        refs.append(body['turn_ref'])
-                    elif body.get('ok') is not True:
+                    if body.get('ok') is not True:
                         if body.get('disposition') in {'blocked','rejected'}:
-                            self.journal.inbox_update(row['seq'],'held',refs); continue
-                        raise RuntimeError('host intake retry')
+                            raise ValueError('host work reference refused; exact response retained')
+                        raise RuntimeError('host work unavailable')
                     self.consume_outputs(body,e)
-                    for key in ('continuation_ref','work_ref','child_work_ref'):
-                        if body.get(key) and body[key] not in refs: refs.append(body[key])
-                    if body.get('status') not in {'completed','failed','cancelled'} and body.get('turn_ref') and body['turn_ref'] not in refs:
-                        refs.append(body['turn_ref'])
-                else:
-                    live = []
-                    for ref in list(refs):
-                        code, body = await asyncio.to_thread(self.host.call,'GET','/presence/work/'+quote(ref,safe=''))
-                        self.journal.observe_inbox(row['seq'],code,body)
-                        if body.get('ok') is not True:
-                            if body.get('disposition') in {'blocked','rejected'}:
-                                raise ValueError('host work reference refused; exact response retained')
-                            raise RuntimeError('host work unavailable')
-                        self.consume_outputs(body,e)
-                        if body.get('child_work_ref') and body['child_work_ref'] not in refs+live: live.append(body['child_work_ref'])
-                        if body.get('status') not in {'completed','failed','cancelled','interrupted'}: live.append(ref)
-                    refs = list(dict.fromkeys(live))
+                    if body.get('status') not in {'completed','failed','cancelled','interrupted'}: live.append(ref)
+                    else: ended.add(ref)
+                    child = body.get('child_work_ref')
+                    if child and child not in refs+live and child not in ended: live.append(child)
+                refs = list(dict.fromkeys(live))
                 self.journal.inbox_update(row['seq'],'pending' if refs else 'done',refs,3)
+                if not refs:
+                    self._ended.pop(row['seq'], None)
             except (RuntimeError, OSError, TimeoutError):
                 self.journal.inbox_update(row['seq'],'pending',refs,30)
             except ValueError as exc:
                 if type(exc) is ValueError and str(exc) in EXECUTOR_CHANGED:
-                    return  # Untouched: no post or poll here; a matching companion rechecks it.
-                # Exclusion, selection, a Host refusal or an output identity conflict.
+                    return  # Untouched: no poll here; a matching companion rechecks it.
+                # A Host refusal or an output identity conflict.
                 self.journal.inbox_update(row['seq'],'held',refs)
-            blocked.add(room)
+                self._ended.pop(row['seq'], None)
+    async def incoming_once(self):
+        """One intake pass, then one observation pass; the companion runs them as separate workers."""
+        await self.submit_once()
+        await self.observe_once()
     async def reports_once(self):
         for row in self.journal.pending_reports():
             try:
@@ -667,6 +758,8 @@ async def serve(root, host_url, token, adapter_factory, login, verify, health):
                 # A restart interrupts a running import; the owner resumes it explicitly.
                 interrupt_running(journal)
                 engine=Participant(root,adapter,host,journal,account)
+                # Version 2 only when the Host read at startup lists it; a v1 turn waits for a park or its end.
+                engine.continuation_version=continuation_version(identity)
                 importer=HistoryImporter(engine,journal,account)
                 engine.current()
                 faults=[]
@@ -714,8 +807,11 @@ async def serve(root, host_url, token, adapter_factory, login, verify, health):
                         # Hydration has its own supervisor; one peer's media read holds no other peer.
                         keep('telegram-media-hydration', engine.hydrate_forever)
                         # A Host turn can await a model that needs our outbound tools.
-                        # Keep one owned intake worker, never block those tools on it.
-                        keep('telegram-host-intake', engine.incoming_once)
+                        # Owned intake and observation workers never block those tools,
+                        # and reading a running author's references never holds the next
+                        # event of its conversation, nor one conversation another.
+                        keep('telegram-host-intake', engine.intake_forever)
+                        keep('telegram-host-observe', engine.observe_once)
                         keep('telegram-chat-list', engine.refresh_chats)
                         # The place chip is display only; a slow Host read must not hold tools.
                         keep('telegram-place-display', engine.observe_place)
@@ -730,5 +826,6 @@ async def serve(root, host_url, token, adapter_factory, login, verify, health):
                     for task in running: task.cancel()
                     await asyncio.gather(*running, return_exceptions=True)
                     await engine.stop_hydration()
+                    await engine.stop_intake()
         finally:
             await adapter.disconnect()

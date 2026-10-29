@@ -166,6 +166,10 @@ class DurableStore:
                 self.db.execute("ALTER TABLE raw_ingress ADD COLUMN initial_digest TEXT NOT NULL DEFAULT ''")
             if "provider_digest" not in raw_columns:
                 self.db.execute("ALTER TABLE raw_ingress ADD COLUMN provider_digest TEXT NOT NULL DEFAULT ''")
+            if "custody" not in raw_columns:
+                # 1 once the Host took custody of the event (continuation version 2): its
+                # references are observed apart and its peer's later events are offered.
+                self.db.execute("ALTER TABLE raw_ingress ADD COLUMN custody INTEGER NOT NULL DEFAULT 0")
             for row in self.db.execute("""SELECT seq,initial_json,status FROM raw_ingress
                     WHERE initial_digest='' OR peer_id=0""").fetchall():
                 original = json.loads(row["initial_json"])
@@ -297,29 +301,68 @@ class DurableStore:
         return "pending"
 
     def next_raw(self, account_id: str, blocked_peers: set[int],
-                 after_seq: int = 0) -> tuple[int, str, dict] | None:
+                 after_seq: int = 0, *, peer: int | None = None) -> tuple[int, str, dict] | None:
         """One bounded peer-head read; an unsettled earlier event holds its peer.
 
         The query returns one JSON object, regardless of backlog size. A blocked
         peer in this pass does not stop unrelated peers; the next pass tries it
-        again. seq, not filename, is the durable callback-capture order.
+        again. seq, not filename, is the durable callback-capture order. An event
+        in Host custody is neither a head nor holds its peer (see custody_raw).
+        ``peer`` reads only that peer's head.
         """
         self._account(account_id)
         blocked = sorted(blocked_peers)
         placeholders = ",".join("?" for _ in blocked)
         exclusion = f"AND r.peer_id NOT IN ({placeholders})" if blocked else ""
+        only = "AND r.peer_id=?" if peer is not None else ""
         for lower in (after_seq, 0):
             row = self.db.execute(f"""SELECT r.seq,r.filename,r.initial_json FROM raw_ingress r
-                WHERE r.account_id=? AND r.status='pending' AND r.seq>? {exclusion}
+                WHERE r.account_id=? AND r.status='pending' AND r.custody=0 AND r.seq>? {exclusion} {only}
                 AND NOT EXISTS (SELECT 1 FROM raw_ingress prior WHERE
                     prior.account_id=r.account_id AND prior.peer_id=r.peer_id
-                    AND prior.status='pending' AND prior.seq<r.seq)
-                ORDER BY r.seq LIMIT 1""", (account_id, lower, *blocked)).fetchone()
+                    AND prior.status='pending' AND prior.custody=0 AND prior.seq<r.seq)
+                ORDER BY r.seq LIMIT 1""", (account_id, lower, *blocked, *([peer] if peer is not None else []))).fetchone()
             if row:
                 return row["seq"], row["filename"], json.loads(row["initial_json"])
             if after_seq == 0:
                 break
         return None
+
+    def mark_custody(self, account_id: str, filename: str) -> None:
+        """The Host holds this pending event: observe it apart, release its peer's later events.
+
+        Call only after the event's private file durably names the references to observe.
+        """
+        self._account(account_id)
+        with self.db:
+            self.db.execute("BEGIN IMMEDIATE")
+            self.db.execute("""UPDATE raw_ingress SET custody=1 WHERE account_id=?
+                AND filename=? AND status='pending'""", (account_id, filename))
+
+    def custody_raw(self, account_id: str, *, limit: int = 100, after_seq: int = 0,
+                    through_seq: int | None = None) -> list[tuple[int, str, dict]]:
+        """Pending events in Host custody, for observation of their references.
+
+        At most ``limit`` events in capture order with ``after_seq < seq <= through_seq``
+        (no upper bound when None): a caller reads custody in bounded cycles (custody_high).
+        """
+        self._account(account_id)
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 0 < limit <= 10000:
+            raise ValueError("limit must be in [1, 10000]")
+        for bound in (after_seq, 0 if through_seq is None else through_seq):
+            if isinstance(bound, bool) or not isinstance(bound, int) or bound < 0:
+                raise ValueError("seq bounds must be non-negative integers")
+        upper = "" if through_seq is None else "AND seq<=?"
+        rows = self.db.execute(f"""SELECT seq,filename,initial_json FROM raw_ingress
+            WHERE account_id=? AND status='pending' AND custody=1 AND seq>? {upper} ORDER BY seq LIMIT ?""",
+            (account_id, after_seq, *([] if through_seq is None else [through_seq]), limit)).fetchall()
+        return [(row["seq"], row["filename"], json.loads(row["initial_json"])) for row in rows]
+
+    def custody_high(self, account_id: str) -> int:
+        """The newest seq now in Host custody, 0 when none: the end of an observation cycle."""
+        self._account(account_id)
+        return int(self.db.execute("""SELECT coalesce(max(seq),0) FROM raw_ingress
+            WHERE account_id=? AND status='pending' AND custody=1""", (account_id,)).fetchone()[0])
 
     def pending_raw_count(self, account_id: str) -> int:
         self._account(account_id)

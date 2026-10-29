@@ -393,7 +393,7 @@ class BridgeStore:
         return row_id, inserted
 
     @staticmethod
-    def _claimable_sql(table: str) -> str:
+    def _claimable_sql(table: str, scope: str = "", order: str = "q.id") -> str:
         # A deferred, continuing, refused-with-work or retained turn only polls.
         # Once its durable reference exists, later conversation events may be
         # admitted, including while this row's independent polls are in flight.
@@ -410,6 +410,7 @@ class BridgeStore:
             FROM {table} AS q
             WHERE q.available_at <= :now
               AND (q.state = 'pending' OR (q.state = 'leased' AND q.lease_until <= :now))
+              {scope}
               AND NOT EXISTS (
                   SELECT 1 FROM {table} AS earlier
                   WHERE earlier.ordering_key = q.ordering_key
@@ -417,16 +418,29 @@ class BridgeStore:
                     AND earlier.state IN ('pending', 'leased')
                     {deferred}
               )
-            ORDER BY q.id
+            ORDER BY {order}
             LIMIT 1
         """
 
-    def claim_inbox(self, *, lease_seconds: float = 60.0) -> InboxItem | None:
+    def claim_inbox(self, *, lease_seconds: float = 60.0, submitted: bool | None = None) -> InboxItem | None:
+        """Lease a claimable row, keeping each conversation's FIFO.
+
+        ``submitted=False`` claims only rows without a stored Host reference (new
+        input), oldest first; ``True`` only rows that have one (observation of
+        admitted work), earliest due first, so a reference released after its poll
+        never overtakes one already waiting. ``None`` claims either, the
+        single-worker behavior: new input by capture time, admitted work by due time.
+        """
         now = time.time()
         token = uuid.uuid4().hex
+        scope, order = {
+            None: ("", "CASE WHEN q.host_reference = '' THEN q.created_at ELSE q.available_at END, q.id"),
+            False: ("AND q.host_reference = ''", "q.id"),
+            True: ("AND q.host_reference <> ''", "q.available_at, q.id"),
+        }[submitted]
         with self._connect() as db:
             db.execute("BEGIN IMMEDIATE")
-            row = db.execute(self._claimable_sql("inbox"), {"now": now}).fetchone()
+            row = db.execute(self._claimable_sql("inbox", scope, order), {"now": now}).fetchone()
             if row is None:
                 db.commit()
                 return None

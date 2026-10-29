@@ -97,7 +97,16 @@ class HostBindingTerminalError(HostContractError):
 
 
 class HostRetryError(HostContractError):
-    """Host explicitly permits retry of a turn that has no admitted work ref."""
+    """Host explicitly permits retry of a turn that has no admitted work ref.
+
+    ``code``, ``field`` and ``retry_after`` (seconds, when the Host supplied a
+    number) keep the typed hint, such as ``presence_capacity_full``.
+    """
+
+    def __init__(self, message: str, *, code: str = "", field: str = "",
+                 retry_after: float | None = None) -> None:
+        super().__init__(message)
+        self.code, self.field, self.retry_after = code, field, retry_after
 
 
 def normalize_binding_id(value: Any) -> str:
@@ -217,6 +226,27 @@ def _decode_receipt(reference: str, status: str, label: str) -> dict[str, Any]:
     return value
 
 
+def _continuation_version(identity: Mapping[str, Any]) -> int:
+    """Version 2 only when listed; the scalar stays the v1 fact older bridges compare."""
+    listed = identity.get("presence_continuation_versions")
+    versions = {value for value in listed if type(value) is int} if isinstance(listed, list) else set()
+    if 2 in versions:
+        return 2
+    return 1 if identity.get("presence_continuation_version") == 1 or 1 in versions else 0
+
+
+def _echoed_continuation(payload: Mapping[str, Any]) -> int:
+    value = payload.get("continuation_version")
+    return value if type(value) is int and value in (1, 2) else 0
+
+
+def _retry_after(payload: Mapping[str, Any]) -> float | None:
+    value = payload.get("retry_after")
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 <= value < float("inf"):
+        return None
+    return float(value)
+
+
 def _completed_reference(payload: Mapping[str, Any]) -> str:
     return _encode_receipt("completed", {
         "status": "completed",
@@ -225,7 +255,7 @@ def _completed_reference(payload: Mapping[str, Any]) -> str:
         "turn_ref": str(payload.get("turn_ref") or ""),
         "work_ref": str(payload.get("work_ref") or ""),
         "delivery_reporting_version": _reporting_version(payload),
-        "continuation_version": 1 if payload.get("continuation_version") == 1 else 0,
+        "continuation_version": _echoed_continuation(payload),
         "output_ref": str(payload.get("output_ref") or ""),
     })
 
@@ -241,7 +271,7 @@ def _deferred_reference(payload: Mapping[str, Any]) -> str:
         "turn_ref": str(payload.get("turn_ref") or ""),
         "work_ref": str(payload.get("work_ref") or ""),
         "delivery_reporting_version": _reporting_version(payload),
-        "continuation_version": 1 if payload.get("continuation_version") == 1 else 0,
+        "continuation_version": _echoed_continuation(payload),
         "output_ref": str(payload.get("output_ref") or ""),
     })
 
@@ -254,7 +284,11 @@ def _decode_deferred_reference(reference: str) -> dict[str, Any]:
 
 
 def _continuing_reference(payload: Mapping[str, Any]) -> str:
-    """The write-once initial envelope of a live author, and its promoted child's ref."""
+    """The write-once initial envelope of a live author, and its promoted child's ref.
+
+    A version 2 envelope records its version; a version 1 receipt keeps its
+    original fields, so its polls are still checked against version 1.
+    """
     return _encode_receipt("continuing", {
         "status": "continuing",
         "continuation_ref": str(payload.get("continuation_ref") or "").strip(),
@@ -264,7 +298,13 @@ def _continuing_reference(payload: Mapping[str, Any]) -> str:
         "output_ref": str(payload.get("output_ref") or ""),
         "work_ref": str(payload.get("work_ref") or "").strip(),
         "delivery_reporting_version": _reporting_version(payload),
+        **({"continuation_version": 2} if _echoed_continuation(payload) == 2 else {}),
     })
+
+
+def _receipt_continuation(receipt: Mapping[str, Any]) -> int:
+    """The version an existing continuing receipt is observed under (1 when unrecorded)."""
+    return 2 if receipt.get("continuation_version") == 2 else 1
 
 
 def _decode_continuing_reference(reference: str) -> dict[str, Any]:
@@ -352,6 +392,15 @@ def _released_outputs(payload: Mapping[str, Any]) -> list[dict[str, str]]:
     return outputs
 
 
+def _initial_outputs(receipt: Mapping[str, Any]) -> tuple[HostOutput, ...]:
+    """A continuing receipt's own selection, known before any poll."""
+    ref, text = str(receipt.get("continuation_ref") or ""), str(receipt.get("text") or "")
+    if str(receipt.get("outcome") or "") not in _SPEECH or not text.strip():
+        return ()
+    output_ref = str(receipt.get("output_ref") or "")
+    return (HostOutput(_output_identity(output_ref, f"initial:{ref}"), text, ref, output_ref),)
+
+
 class LoopbackPresenceHostAdapter:
     def __init__(
         self,
@@ -379,7 +428,8 @@ class LoopbackPresenceHostAdapter:
         self._terminal_work: dict[str, dict[str, Any]] = {}
         self.delivery_reporting_version = 0
         self.delivery_reporting_status = "unknown"
-        # Discovered with delivery reporting from the same /identity answer.
+        # Discovered with delivery reporting from the same /identity answer:
+        # 2 when ``presence_continuation_versions`` lists it, else the scalar 1, else 0.
         self.continuation_version = 0
         self.places_version = 0
         self.presence_identity = 0
@@ -409,7 +459,7 @@ class LoopbackPresenceHostAdapter:
             self.presence_identity = int(payload.get("presence_identity") == 1)
             self.available = bool(self._skill_token and (self.binding_id or self.places_version))
             self.delivery_reporting_version = 1 if payload.get("presence_delivery_version") == 1 else 0
-            self.continuation_version = 1 if payload.get("presence_continuation_version") == 1 else 0
+            self.continuation_version = _continuation_version(payload)
             self.delivery_reporting_status = "supported" if self.delivery_reporting_version else "unsupported"
         except (HostContractError, httpx.HTTPError):
             # Failed discovery can retry. The outbox holds until policy is known.
@@ -494,7 +544,8 @@ class LoopbackPresenceHostAdapter:
             raise HostAdapterUnavailable("binding_id is not configured")
         if self._skill_token is None:
             raise HostContractError("HOST_SERVICE_TOKEN is missing")
-        continuing = self.continuation_version == 1
+        version = self.continuation_version
+        continuing = version in (1, 2)
         response = await self._http.post(
             f"{self.host_service_url}/presence/turn",
             headers={
@@ -509,7 +560,7 @@ class LoopbackPresenceHostAdapter:
                     _staged_path(file) for file in event.staged_files if _staged_path(file)
                 ],
                 **({"delivery_reporting_version": 1} if mode else {}),
-                **({"continuation_version": 1} if continuing else {}),
+                **({"continuation_version": version} if continuing else {}),
             },
             timeout=1800.0,
         )
@@ -522,15 +573,23 @@ class LoopbackPresenceHostAdapter:
                     raise HostContractError("Retained presence refusal omitted its original turn_ref")
                 return _retained_reference(payload, response.status_code, mode)
             # Blocked needs repair and retry needs time; both keep the event queued.
+            # A busy conversation or full capacity (v2 429) is such a retry: no
+            # task row was written, so the same event stays this thread's head.
             if disposition in {"retry", "blocked"} and not str(payload.get("work_ref") or "").strip():
-                raise HostRetryError(_refusal_error(payload, response.status_code))
+                raise HostRetryError(_refusal_error(payload, response.status_code),
+                                     code=str(payload.get("code") or ""), field=str(payload.get("field") or ""),
+                                     retry_after=_retry_after(payload))
             return _refused_reference(payload, response.status_code, mode)
         if continuing and (status == "continuing" or (
                 status == "completed" and str(payload.get("continuation_ref") or "").strip())):
             # The author answered early and lives on (or ended after releasing outputs):
             # its released outputs, terminal and child are all read from its poll.
-            if payload.get("continuation_version") != 1 or not str(payload.get("continuation_ref") or "").strip():
-                raise HostContractError("Continuing presence turn omitted its continuation reference")
+            # Version 2 is custody once intake is open; a replayed envelope keeps
+            # the version it was stored under, which can be 1 after an upgrade.
+            if (_echoed_continuation(payload) not in ((1, 2) if version == 2 else (1,))
+                    or not str(payload.get("continuation_ref") or "").strip()):
+                raise HostContractError(
+                    "Continuing presence turn omitted its continuation reference or a negotiated version")
             self._outcome(payload)
             return _continuing_reference(payload)
         if status != "completed":
@@ -558,12 +617,16 @@ class LoopbackPresenceHostAdapter:
         )
         return await self._json_response(response)
 
-    async def _poll_continuation(self, continuation_ref: str) -> dict[str, Any]:
-        """One continuing author's poll; a legacy-shaped answer is refused, never guessed."""
+    async def _poll_continuation(self, continuation_ref: str, version: int = 1) -> dict[str, Any]:
+        """One continuing author's poll; a legacy-shaped answer is refused, never guessed.
+
+        The view must echo the version its receipt was stored under.
+        """
         payload = await self._get_work(continuation_ref)
         status = str(payload.get("status") or "").strip().lower()
-        if payload.get("continuation_version") != 1:
-            raise HostContractError("Presence Host answered a continuation poll without continuation_version 1")
+        if payload.get("continuation_version") != version:
+            raise HostContractError(
+                f"Presence Host answered a continuation poll without continuation_version {version}")
         returned_ref = str(payload.get("continuation_ref") or payload.get("work_ref") or "").strip()
         if returned_ref and returned_ref != continuation_ref:
             raise HostContractError("Presence Host returned a different continuation_ref")
@@ -603,7 +666,8 @@ class LoopbackPresenceHostAdapter:
         """
         ref = str(receipt["continuation_ref"])
         mode = _reporting_version(receipt)
-        outputs: dict[str, HostOutput] = {}
+        version = _receipt_continuation(receipt)
+        outputs: dict[str, HostOutput] = {output.identity: output for output in _initial_outputs(receipt)}
         transient: list[str] = []
         unresolved: list[str] = []
         rejected: list[str] = []
@@ -638,7 +702,7 @@ class LoopbackPresenceHostAdapter:
             if author and transport_queue is not None:
                 await self.refresh_transport_queue(source, transport_queue)
                 queue_recorded = True
-            return await (self._poll_continuation(source) if author else self._poll_work(source))
+            return await (self._poll_continuation(source, version) if author else self._poll_work(source))
 
         def start(source: str, *, author: bool = False) -> None:
             source = source.strip()
@@ -646,9 +710,6 @@ class LoopbackPresenceHostAdapter:
                 seen.add(source)
                 tasks[asyncio.create_task(poll(source, author))] = (source, author)
 
-        if str(receipt.get("outcome") or "") in _SPEECH:
-            output_ref = str(receipt.get("output_ref") or "")
-            add(_output_identity(output_ref, f"initial:{ref}"), str(receipt.get("text") or ""), ref, output_ref)
         # This yield precedes even starting an HTTP poll. Runtime commits these
         # outputs before it requests the next update.
         yield snapshot()
@@ -860,11 +921,40 @@ class LoopbackPresenceHostAdapter:
                 yield self._initial_status(receipt, "pending")
             yield await self.status(reference)
 
+    def initial_status(self, reference: str) -> HostTurnStatus:
+        """What a stored reference already says, without any Host request.
+
+        ``completed:`` is final. A refusal without admitted work is terminal.
+        Every other reference names work still to be observed: its state stays
+        ``pending`` with only the speech its envelope already carries (a
+        continuing author's initial selection or a deferred acknowledgement).
+        """
+        if reference.startswith("completed:"):
+            return self._initial_status(_decode_completed_reference(reference), "ready")
+        if reference.startswith("deferred:"):
+            return self._initial_status(_decode_deferred_reference(reference), "pending")
+        if reference.startswith("continuing:"):
+            receipt = _decode_continuing_reference(reference)
+            return HostTurnStatus("pending", "", (), _reporting_version(receipt), str(receipt["continuation_ref"]),
+                                  _initial_outputs(receipt), False, reference)
+        if reference.startswith("refused:"):
+            receipt = _decode_refused_reference(reference)
+            response = receipt["response"]
+            admitted = bool(str(response.get("work_ref") or "").strip())
+            return HostTurnStatus("pending" if admitted else "failed",
+                                  _refusal_error(response, receipt["http_status"]))
+        if reference.startswith("retained:"):
+            receipt = _decode_retained_reference(reference)
+            response = receipt["response"]
+            return HostTurnStatus("pending", _refusal_error(response, int(receipt.get("http_status") or 0)), (),
+                                  _reporting_version(receipt), str(response["turn_ref"]))
+        raise HostContractError("Unknown presence reference type")
+
     @staticmethod
     def _initial_status(receipt: Mapping[str, Any], state: str, error: str = "") -> HostTurnStatus:
         text, ref = str(receipt.get("text") or ""), str(receipt.get("turn_ref") or "")
         mode = _reporting_version(receipt)
-        if receipt.get("continuation_version") == 1:
+        if receipt.get("continuation_version") in (1, 2):
             output_ref = str(receipt.get("output_ref") or "")
             speech = receipt.get("status") == "deferred" or receipt.get("outcome") in _SPEECH
             outputs = (HostOutput(_output_identity(output_ref, f"initial:{ref}"), text, ref, output_ref),) if speech and text.strip() else ()
@@ -904,7 +994,7 @@ class LoopbackPresenceHostAdapter:
         if reference.startswith("completed:"):
             payload = _decode_completed_reference(reference)
             receipt = payload
-            if receipt.get("continuation_version") == 1:
+            if receipt.get("continuation_version") in (1, 2):
                 # Its selected identity was already emitted by status_updates.
                 return HostDelivery((), _reporting_version(receipt), str(receipt.get("turn_ref") or ""))
         elif reference.startswith("deferred:"):
@@ -923,7 +1013,7 @@ class LoopbackPresenceHostAdapter:
             else ""
         )
         turn_ref = str(payload.get("turn_ref") or receipt.get("work_ref") or receipt.get("turn_ref") or "")
-        if receipt.get("continuation_version") == 1:
+        if receipt.get("continuation_version") in (1, 2):
             output_ref = str(payload.get("output_ref") or "")
             output = HostOutput(_output_identity(output_ref, f"work:{receipt.get('work_ref')}"), text, turn_ref, output_ref)
             return HostDelivery((), _reporting_version(receipt), turn_ref, (output,) if text.strip() else ())

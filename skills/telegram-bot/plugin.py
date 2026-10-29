@@ -172,6 +172,7 @@ def _status_payload() -> Dict[str, Any]:
         "last_delivery_at": runtime.get("last_delivery_at", ""),
         "last_error": runtime.get("last_error", ""),
         "delivery_reporting": runtime.get("delivery_reporting", "unknown"),
+        "presence_continuation_version": runtime.get("presence_continuation_version", 0),
         "has_presence_binding": bool(binding_id),
         "management_group_id": str(
             _load_local_settings().get("management_group_id") or ""

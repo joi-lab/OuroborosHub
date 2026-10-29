@@ -333,6 +333,16 @@ class Journal:
         scope = " AND CAST(json_extract(event,'$.account_id') AS TEXT)=?" if account is not None else ''
         params = (str(account),time.time()) if account is not None else (time.time(),)
         return self.db.execute("SELECT * FROM inbox WHERE state='pending'"+scope+" AND due<=? AND NOT EXISTS (SELECT 1 FROM inbox AS earlier WHERE earlier.state='pending' AND earlier.seq<inbox.seq AND earlier.refs='[]' AND json_extract(earlier.event,'$.conversation_key')=json_extract(inbox.event,'$.conversation_key') AND json_extract(earlier.event,'$.account_id')=json_extract(inbox.event,'$.account_id')) ORDER BY seq LIMIT 30", params).fetchall()
+    def submissions(self, account):
+        """Each conversation's oldest event the Host has not taken yet, when it is due.
+
+        An event the Host holds (it has references) no longer keeps its conversation's later
+        events waiting; one it has not taken, including one it answered busy, still does.
+        """
+        return self.db.execute("SELECT * FROM inbox WHERE state='pending' AND refs='[]' AND CAST(json_extract(event,'$.account_id') AS TEXT)=? AND due<=? AND NOT EXISTS (SELECT 1 FROM inbox AS earlier WHERE earlier.state='pending' AND earlier.refs='[]' AND earlier.seq<inbox.seq AND json_extract(earlier.event,'$.conversation_key')=json_extract(inbox.event,'$.conversation_key') AND json_extract(earlier.event,'$.account_id')=json_extract(inbox.event,'$.account_id')) ORDER BY seq LIMIT 30", (str(account), time.time())).fetchall()
+    def observations(self, account):
+        """Events the Host holds whose references are due to be read, least recently read first."""
+        return self.db.execute("SELECT * FROM inbox WHERE state='pending' AND refs!='[]' AND CAST(json_extract(event,'$.account_id') AS TEXT)=? AND due<=? ORDER BY due,seq LIMIT 30", (str(account), time.time())).fetchall()
     def observe_inbox(self, seq, status, body):
         with self.db:
             self.db.execute('UPDATE inbox SET response=? WHERE seq=?',(json.dumps({'http_status':status,'body':body},ensure_ascii=True),seq))

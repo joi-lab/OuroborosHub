@@ -167,6 +167,25 @@ class CustodyStore:
                 (time.time() + max(0.0, retry_after_sec), str(reason)[:500], event_id),
             )
 
+    def defer_inbox(
+        self, event_id: str, *, reason: str, retry_after_sec: float
+    ) -> None:
+        """Keep a busy-refused event first in its conversation; the attempt is not counted.
+
+        The Host admitted nothing, so this is neither custody nor a failure: the same
+        event retries after the Host's hint, while other conversations proceed.
+        """
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE inbox
+                SET state='pending', available_at=?, lease_until=0, last_error=?,
+                    attempts=MAX(0, attempts-1)
+                WHERE event_id=? AND state='leased'
+                """,
+                (time.time() + max(0.0, retry_after_sec), str(reason)[:500], event_id),
+            )
+
     def release_own_leases(self) -> Dict[str, int]:
         """Return leases left by a stopped runtime to their queues at once.
 
@@ -293,8 +312,16 @@ class CustodyStore:
         text: str,
         work_ref: str,
         delivery_reporting_version: int = 0,
+        continuation_ref: str = "",
+        output_ref: str = "",
+        reply_anchor: Optional[Dict[str, Any]] = None,
     ) -> None:
-        """Atomically retain Host custody, immediate text, and deferred work."""
+        """Atomically retain Host custody, immediate text, and deferred work.
+
+        A version-2 ``continuation_ref`` names this event's running author: it is
+        observed like deferred work, beside any promoted child ``work_ref``, and the
+        conversation's next event may go to the Host at once.
+        """
         now = time.time()
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
@@ -313,16 +340,21 @@ class CustodyStore:
                            "source_event_id": event.get("source_event_id", "")},
             }
             if text and outcome in {"message", "deferred"}:
-                self._enqueue_outbox(
-                    conn,
-                    f"presence:{event_id}:turn",
-                    _reply_payload(event, text),
-                    now,
-                )
-            if outcome == "deferred":
-                if not work_ref:
-                    conn.rollback()
-                    raise ValueError("deferred submission requires work_ref")
+                if output_ref:
+                    self._enqueue_output(conn, event_id, turn_ref, event, {
+                        "output_ref": output_ref, "text": text, "reply_anchor": reply_anchor}, now)
+                else:
+                    self._enqueue_outbox(
+                        conn,
+                        f"presence:{event_id}:turn",
+                        _reply_payload(event, text, _anchor_message_id(conn, event, reply_anchor)),
+                        now,
+                    )
+            observed = continuation_ref or (work_ref if outcome == "deferred" else "")
+            if outcome == "deferred" and not observed:
+                conn.rollback()
+                raise ValueError("deferred submission requires work_ref")
+            if observed:
                 conn.execute(
                     """
                     INSERT OR IGNORE INTO presence_work(
@@ -330,8 +362,11 @@ class CustodyStore:
                         attempts, available_at, created_at
                     ) VALUES (?, ?, ?, ?, 'pending', 0, ?, ?)
                     """,
-                    (event_id, binding_id, work_ref, _json(event), now, now),
+                    (event_id, binding_id, observed, _json(event), now, now),
                 )
+            if continuation_ref and work_ref and work_ref != continuation_ref:
+                self._add_work(conn, event_id, binding_id, work_ref, "child", event,
+                               delivery_reporting_version, now)
             updated = conn.execute(
                 """
                 UPDATE inbox
@@ -371,13 +406,15 @@ class CustodyStore:
         now = time.time()
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
+            # Due order: a reference released after its read is due again later
+            # than every one already waiting, so older work never takes every turn.
             row = conn.execute(
                 """
                 SELECT event_id, binding_id, work_ref, role, event_json, attempts
                 FROM presence_work
                 WHERE (state='pending' AND available_at<=?)
                    OR (state='leased' AND lease_until<=?)
-                ORDER BY created_at ASC
+                ORDER BY available_at ASC, created_at ASC
                 LIMIT 1
                 """,
                 (now, now),
@@ -445,11 +482,38 @@ class CustodyStore:
                 raise ValueError("presence work reference is missing")
             event = json.loads(row["event_json"])
             for output in outputs:
-                identity = f"presence:{row['event_id']}:output:{work_ref}:{output['output_ref']}"
-                self._enqueue_outbox(conn, identity, _reply_payload(event, str(output["text"])), time.time())
+                self._enqueue_output(conn, str(row["event_id"]), work_ref, event, output, time.time())
             conn.commit()
 
-    def complete_work(self, work_ref: str, *, status: str, text: str, child_ref: str = "") -> None:
+    def _enqueue_output(
+        self,
+        conn: sqlite3.Connection,
+        event_id: str,
+        work_ref: str,
+        event: Dict[str, Any],
+        output: Dict[str, Any],
+        now: float,
+    ) -> None:
+        """Queue a Host-minted output once for its event, whichever reference names it.
+
+        The original turn, its continuation, a promoted child or a retained reference
+        can each repeat it: identity is the exact ``output_ref``, never text or the
+        polled reference. Its ``reply_anchor`` answers the covered message it names.
+        """
+        output_ref = str(output["output_ref"])
+        prefix = f"presence:{event_id}:output:"
+        queued = conn.execute(
+            "SELECT delivery_id FROM outbox WHERE delivery_id >= ? AND delivery_id < ?",
+            (prefix, prefix[:-1] + ";"),
+        ).fetchall()
+        if any(str(item[0]).endswith(":" + output_ref) for item in queued):
+            return
+        reply_to = _anchor_message_id(conn, event, output.get("reply_anchor"))
+        self._enqueue_outbox(conn, f"{prefix}{work_ref}:{output_ref}",
+                             _reply_payload(event, str(output["text"]), reply_to), now)
+
+    def complete_work(self, work_ref: str, *, status: str, text: str, child_ref: str = "",
+                      reply_anchor: Optional[Dict[str, Any]] = None) -> None:
         """Settle a reference; retain a child its terminal view names in the same commit."""
         if status not in {"completed", "failed", "cancelled"}:
             raise ValueError("work status is not terminal")
@@ -486,7 +550,8 @@ class CustodyStore:
                 delivery_id = (f"presence:{event_id}:work" if role == "deferred"
                                else f"presence:{event_id}:{role}:{work_ref}")
                 event = json.loads(row["event_json"])
-                self._enqueue_outbox(conn, delivery_id, _reply_payload(event, text), now)
+                self._enqueue_outbox(conn, delivery_id, _reply_payload(
+                    event, text, _anchor_message_id(conn, event, reply_anchor)), now)
             conn.commit()
 
     def claim_outbox(self, *, lease_sec: float = 90.0) -> Optional[OutboxLease]:
@@ -864,7 +929,31 @@ def _timestamp(value: Any) -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(float(value)))
 
 
-def _reply_payload(event: Dict[str, Any], text: str) -> Dict[str, Any]:
+def _anchor_message_id(
+    conn: sqlite3.Connection, event: Dict[str, Any], anchor: Optional[Dict[str, Any]]
+) -> Any:
+    """The message a version-2 output answers when its anchor is one this chat captured.
+
+    The Host names the last covered input by ``source_event_id`` and its exact captured
+    ``message``. An anchor from another conversation, or unlike that capture, is not
+    used: the reply then answers the work's own event, as without an anchor.
+    """
+    if not isinstance(anchor, dict) or not isinstance(anchor.get("message"), dict):
+        return None
+    message_id = anchor["message"].get("message_id")
+    if isinstance(message_id, bool) or message_id in (None, ""):
+        return None
+    row = conn.execute(
+        "SELECT conversation_key, payload_json FROM inbox WHERE event_id=?",
+        (str(anchor.get("source_event_id") or ""),),
+    ).fetchone()
+    if row is None or row["conversation_key"] != event.get("conversation_key"):
+        return None
+    captured = (json.loads(row["payload_json"]).get("message") or {}).get("message_id")
+    return captured if str(captured) == str(message_id) else None
+
+
+def _reply_payload(event: Dict[str, Any], text: str, reply_to: Any = None) -> Dict[str, Any]:
     payload: Dict[str, Any] = {
         "kind": "message",
         "chat_id": str(event.get("conversation_id") or ""),
@@ -877,7 +966,7 @@ def _reply_payload(event: Dict[str, Any], text: str) -> Dict[str, Any]:
     if thread_id:
         payload["topic_id"] = thread_id
     message = event.get("message") if isinstance(event.get("message"), dict) else {}
-    reply_id = message.get("message_id")
+    reply_id = message.get("message_id") if reply_to in (None, "") else reply_to
     if reply_id not in (None, ""):
         payload["reply_to_message_id"] = reply_id
     return payload
