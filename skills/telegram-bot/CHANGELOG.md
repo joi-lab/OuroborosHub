@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.9.0 — 2026-10-29
+
+- Offer each group and supergroup the bot has been seen in by name when a
+  Telegram place is connected: the status route returns
+  `connect: [{account_id, conversation_id, label}]`, labelled with title and
+  numeric ID, one row per group across its topics, ordered by title, without a
+  limit. Private chats and channels are not offered.
+- Keep each group's ID, type and title and the bot's newest membership evidence
+  in custody, committed with the update's event and offset. Request
+  `my_chat_member`. The bot's own addition, removal and re-addition, renames
+  and supergroup migrations update the list only; they never become events,
+  turns or places. Telegram's update order decides, so an older message never
+  undoes a later removal, rename or migration.
+- On upgrade, add the groups of events already in the inbox once, in batches,
+  without changing custody rows; count unreadable events as
+  `group_backfill_unreadable`.
+- Offer only the bot `getMe` confirmed for the token configured now; otherwise
+  `connect` is `null` with an unavailable-identity explanation, while transport
+  status retains provider errors. Updates fetched for the
+  earlier bot keep its account when another worker confirms a new token
+  meanwhile.
+
 ## 0.8.0 — 2026-10-29
 
 - Request Presence continuation version 2 when `/identity` lists it in
