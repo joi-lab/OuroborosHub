@@ -260,6 +260,24 @@ python -m pip install icalendar python-dateutil cryptography pytest
 PYTHONDONTWRITEBYTECODE=1 python -m pytest -p no:cacheprovider -q skills/calendar/tests
 ```
 
+Memory Atlas keeps its tests outside the payload, in `tests/memory_atlas`. Most of them start one
+isolated Ouroboros from the core checkout named by `ATLAS_CORE`, which must provide PluginAPI 2.1
+`read_memory` (`ouroboros/memory_reader.py`): they copy it into a new directory under `/tmp`, write
+synthetic memory there through Ouroboros's own producers, install the payload into that data root
+only and drive the card in Chromium and WebKit. The test runner's Python needs the core's runtime
+requirements, which include Playwright, and Playwright's Chromium and WebKit. Nothing in this suite
+is skipped: without `ATLAS_CORE`, a compatible core, Playwright or starlette, a run that selects
+these tests stops before the first one and says what is missing. CI runs the whole suite on macOS
+against the `razzant/ouroboros` commit pinned in `.github/workflows/catalog-check.yml`. Locally:
+
+```bash
+ATLAS_CORE=/path/to/ouroboros PYTHONDONTWRITEBYTECODE=1 python -m pytest -p no:cacheprovider -q -rs tests/memory_atlas
+```
+
+`python tests/memory_atlas/dev/realhost.py --core /path/to/ouroboros --root /tmp/<new directory>`
+starts the same host to look at and prints `READY <url>`; open `<url>/#widgets` and press Start on
+Memory Atlas.
+
 The hub tests include mocked GitHub APIs for owner authorization, signals and
 catalog-to-mirror sequencing. The release-identity test compares all hosted skills
 with the core checkout selected by `OUROBOROS_IDENTITY_CORE_ROOT`, using the test

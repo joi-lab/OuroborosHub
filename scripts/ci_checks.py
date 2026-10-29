@@ -24,6 +24,9 @@ SUITES = {
                            'token-usage', 'smart_lists', 'calendar'],
                 'tests': ['tests/test_widget_theme_contracts.py', 'tests/test_dashboard_theme_browser.py'],
                 'shared': ['tests/fixtures/dashboard_theme_responses.json']},
+    # The whole suite, real host and browsers included: catalog-check.yml gives this suite the pinned core (ATLAS_CORE),
+    # its runtime and Playwright's browsers. Without them the suite stops with an error; it never skips.
+    'memory-atlas': {'skills': ['memory-atlas'], 'tests': ['tests/memory_atlas'], 'dependencies': ['starlette']},
     'calendar-skill': {'skills': ['calendar'],
                        'tests': ['skills/calendar/tests', 'tests/test_calendar_skill.py',
                                  'tests/test_calendar_host_browser.py'],
