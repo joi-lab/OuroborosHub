@@ -1,7 +1,7 @@
 {
   "description": "Official Ouroboros skills catalog.",
   "name": "OuroborosHub",
-  "raw_base_url": "https://raw.githubusercontent.com/razzant/OuroborosHub/ce0afdb2d07e828b587887f1cec10dcbb3a5c3d3",
+  "raw_base_url": "https://raw.githubusercontent.com/razzant/OuroborosHub/b2cde8c467d85b5388d3a81c5d3849c950eb3fc0",
   "schema_version": 1,
   "skills": [
     {
@@ -1775,83 +1775,74 @@
       "version": "0.1.3"
     },
     {
-      "description": "Read-only atlas, document reader, authentic history browser, literal search, and evidence graph for allowlisted Ouroboros core memory, consolidated dialogue chronicles, and project knowledge. Opens on global memory; every link it draws is proven from stored bytes, with no model calls at runtime. Use to inspect memory provenance without modifying serving-process data.",
+      "description": "Read Ouroboros's memory room by room, beside the record you open, with corrections, drafts and decisions, knowledge notes, marks and identity, and copy an exact address to paste into a chat. Long lists and texts continue where they stopped; Refresh shows what changed. Read-only, no model calls.",
       "files": [
         {
           "path": "SKILL.md",
-          "sha256": "81da444d9b8ab77ff3543c17aa1338a7c4d8da38291b9170f9b4812427e781d4",
-          "size": 6481
+          "sha256": "5a8694471ad47c016ca394c8836a73a9f8b5135b6dcebf1009d74116bd31636d",
+          "size": 3708
         },
         {
-          "path": "docs/api-contract.md",
-          "sha256": "a524caaaa3d47643677ec449232b451eac408cea2511c212a1e002aae7673c8b",
-          "size": 26940
+          "path": "app/atlas.css",
+          "sha256": "aea85784480d930855ef134541a4a980ff1971f6434719a335e05b85489d61fa",
+          "size": 17867
         },
         {
-          "path": "docs/architecture.md",
-          "sha256": "3217c05b8f8cec4841c742ae37902511270bf2db86ef63c9ae758227b18e516b",
-          "size": 1569
+          "path": "app/atlas.js",
+          "sha256": "7b32e0c9937ead034a51155ff4d4856255c725d98611cd1d0a8f9da23b225165",
+          "size": 91283
         },
         {
-          "path": "docs/coordination.md",
-          "sha256": "91a2e144c83818d2b8d8455d99a0ca3bdcac27b98f90c5abf3f7b79dfe2a5e57",
-          "size": 5312
+          "path": "app/client.js",
+          "sha256": "64d41d6029819a6b055d18aaca81b73651416d815adbaf2d587b6843fc383dd7",
+          "size": 3611
         },
         {
-          "path": "docs/skill-api-reference.md",
-          "sha256": "01f441a7f7a6c68d015facaf824fdd20acd032187dccf7fe9dcde3b505f0b36e",
-          "size": 3417
+          "path": "app/main.js",
+          "sha256": "86d89ab26725157ddf34a8d58c6c2dcf3a8ca6f3599afc0605a7ac0a9fca94bc",
+          "size": 2517
         },
         {
-          "path": "docs/source-policy.md",
-          "sha256": "acabee0949b6f7b950eec732b8077b9922a5a57e7e2b19ba2caf7843671cda1a",
-          "size": 11843
+          "path": "app/markdown.js",
+          "sha256": "81ea19346ffa08bf3eb84d60105ea3dbe70889929857b19b6e72b732ebdcadca",
+          "size": 5133
         },
         {
-          "path": "docs/visual-plan.md",
-          "sha256": "25129087579c16feee7f30896eaba3635bfddbd5b799252010bf4b01d965943b",
-          "size": 3769
+          "path": "app/parts.js",
+          "sha256": "bf9a53ffd8562b9bdc55edab627e4302b11ad7bb227b6b51fb95ef30224ad756",
+          "size": 10272
         },
         {
-          "path": "memory_reader.py",
-          "sha256": "e2d2ee1108916aaf21090d80e2a2663c9e7460cf532f93ded6f41c160d3308d6",
-          "size": 94501
+          "path": "app/words.js",
+          "sha256": "1d488d4277356c9cf4e14810f7aedbbcfec980ba487e4750459fb81f86c22fa7",
+          "size": 8004
+        },
+        {
+          "path": "atlas_reader.py",
+          "sha256": "db77c5e4cd046ab9c4be24a09934aa77b8a012eaa331d30ec3e99fd5c54cfa32",
+          "size": 8523
+        },
+        {
+          "path": "atlas_routes.py",
+          "sha256": "0d997311cebf680482d2134a6362e37444a2792f88809f5dd51c9cb55f54e738",
+          "size": 13186
+        },
+        {
+          "path": "atlas_search.py",
+          "sha256": "d4a650331d82d227a0b8be9f0addd731d544d842c373f7fa3466046e5afc4c5d",
+          "size": 14606
         },
         {
           "path": "plugin.py",
-          "sha256": "2c8e17f4b35e67a15819ab829ded195a06dcc7a5e13a200000a3e036acfa48b1",
-          "size": 4584
-        },
-        {
-          "path": "tests/test_reader.py",
-          "sha256": "36ec1e8a65253bd246b6883cf3ac41c4328eff86752785c962e367d3fa041077",
-          "size": 101472
-        },
-        {
-          "path": "tests/test_widget_ui.py",
-          "sha256": "0073a0fbaa98980a94e83c599b039f3f7866d94912910e34e5e7c4e789a6a65e",
-          "size": 66238
-        },
-        {
-          "path": "tests/ui_fixtures.py",
-          "sha256": "18c2f64df9858d885abf179f8c98f05b88a43e44e8d0939d45fcfe94ce78754b",
-          "size": 33292
-        },
-        {
-          "path": "tests/ui_harness.html",
-          "sha256": "8dcc64ac1a0a3c80685f646dc767607cd79989e2924b8a6019e1abe14a35f849",
-          "size": 4107
-        },
-        {
-          "path": "widget.js",
-          "sha256": "4076456b2b7aa9e79a6b1c719536bf0526931491dd9bf361bd5195721a3c7a4a",
-          "size": 135440
+          "sha256": "07313cf79589470d78e1d8dd5dfe5d562b08c83491ade2465d63ac5d4cea6c9a",
+          "size": 3491
         }
       ],
       "name": "memory-atlas",
       "slug": "memory-atlas",
+      "title": "Memory Atlas",
       "type": "extension",
-      "version": "0.2.12"
+      "version": "0.3.0"
     },
     {
       "description": "Generate a music clip from a text prompt via OpenRouter's Google Lyria model and play it directly inside the widget. Files are persisted to the skill's private state directory and streamed through an extension route for both inline playback and download.",

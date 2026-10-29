@@ -37,7 +37,7 @@ class SelectionTests(unittest.TestCase):
             'cache_efficiency_snapshot': {'cache-efficiency', 'widgets'}, 'calendar': {'calendar-skill', 'widgets'},
             'slack-bridge': {'slack-bridge'}, 'telegram-bot': {'telegram-bot'}, 'keenable': {'keenable'},
             'perplexity': {'perplexity'}, '2gis': {'2gis'}, 'whoop-health': {'whoop-health'}, 'claudexor_quotas': {'widgets'},
-            'context-lens': {'widgets'}, 'memory-atlas': {'widgets'}, 'token-usage': {'widgets'},
+            'context-lens': {'widgets'}, 'memory-atlas': {'memory-atlas', 'widgets'}, 'token-usage': {'widgets'},
             'office_reader': {'office-reader'}, 'science_search': {'science-search'},
             'github': {'github'},
             'telegram-user-session': {'telegram-user-session'},
