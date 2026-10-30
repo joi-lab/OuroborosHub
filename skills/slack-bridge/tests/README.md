@@ -82,3 +82,12 @@ FIFO release, restart and late-output deduplication with real adapter/store/work
 It also checks typed blocked/retry/rejected and untyped HTTP failures. The Host
 responses in this module are scripted; cross-repository Host composition is a
 separate verification, not implied by these fixtures.
+
+`test_reactions.py` runs reaction facts and writes through the actual parser, store,
+workers, Slack client and adapter against scripted Slack and Host HTTP. It covers
+exact target lookup, the one narrow read on a miss, capability gating, withheld
+observations that are never replayed, applied, no-op, refused, uncertain and held
+writes, frozen reports at the moment they would be sent, and the read-only
+`slack_reactions` and `slack_thread` consumers. When the importable `ouroboros` carries the reaction validators, each fact and
+receipt also passes them; otherwise those checks are skipped. The repository's
+`tests/test_reaction_core_consumer.py` is the opt-in run through a real core's routes.
