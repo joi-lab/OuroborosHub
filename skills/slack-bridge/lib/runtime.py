@@ -356,7 +356,10 @@ class OutboundWorker:
             return False
         # A member ID still needs conversations.open before it names a room.
         conversation = "" if target == "mutation" or target.startswith(("U", "W")) else target
-        reason = await check(item.provider_account_id, conversation)
+        # A reaction is checked in the thread its receipt names; an unretained target stays the room's.
+        retained = self._reaction_target(item) if conversation else None
+        thread = str(retained["thread_ts"]) if retained else ""
+        reason = await check(item.provider_account_id, conversation, **({"thread_id": thread} if thread else {}))
         if reason:
             self.store.hold_outbox(item, reason)
             return True
@@ -413,9 +416,14 @@ class OutboundWorker:
         """A Host that keeps a final answer past an action hears of it; others keep the local receipt."""
         if item.operation not in {"reaction_add", "reaction_remove"} or getattr(self.host, "explicit_completion", 0) != 1:
             return None
-        retained = self.store.retained_message(item.provider_account_id, str(item.payload.get("channel") or ""),
-                                               str(item.payload.get("ts") or ""))
-        return item.reaction_report(state, retained=retained, effect=effect, error=error)
+        return item.reaction_report(state, retained=self._reaction_target(item), effect=effect, error=error)
+
+    def _reaction_target(self, item: OutboxItem) -> dict[str, Any] | None:
+        """A reaction row's retained target, the only source of its thread; ``None`` for any other row."""
+        if item.operation not in {"reaction_add", "reaction_remove"}:
+            return None
+        return self.store.retained_message(item.provider_account_id, str(item.payload.get("channel") or ""),
+                                           str(item.payload.get("ts") or ""))
 
     def _cancel_started_send(self, item: OutboxItem) -> None:
         try:

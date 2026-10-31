@@ -480,7 +480,21 @@ the same way. `slack_receipt` then shows each outcome:
 | Lost response, 408/5xx, `internal_error` | `uncertain`, once | Never sent again. |
 | Rate limit | retried, bounded | No effect is claimed meanwhile. |
 
-Silent and Paused hold the write as for any other mutation. A Host advertising
+Silent and Paused hold the write as for any other mutation. Just before the write
+the bridge re-reads the place in the thread that the target's retained record names,
+the same thread its receipt names. So a reaction queued while active is held once
+that thread's own place is Paused, even under an Active channel. A target with no
+record is checked as the channel's, as before. The tool declares only the channel,
+so the call-time guard sees the channel's place, and such a thread's hold comes at
+this re-read. Reaction writes queue per reacted message, the same `channel` and `ts`.
+A held reaction keeps its place only ahead of later reaction writes to that message,
+which keep their queue order whatever name they carry. That holds even when the
+message's record arrived after the first write was queued, and for rows an earlier
+version queued. Top-level sends, edits, pins, uploads and reactions to other messages
+in that Active channel go on meanwhile. In exchange, a reaction is no longer ordered
+against those other writes in its channel. `slack_api` calls of `reactions.add` and
+`reactions.remove` that name a `channel` and `timestamp` share that message's queue.
+Their bytes and handling are unchanged. A Host advertising
 `presence_explicit_completion: 1` also receives `/presence/delivery` with empty
 text, `message.kind: "operation"` and a typed `message.reaction`
 (`operation`, `new` or `old`, `target`, and `effect` when it took effect); other
@@ -555,6 +569,13 @@ References: [conversations.list](https://docs.slack.dev/reference/methods/conver
 - Retryable refusals and connection failures before sending have at most five
   attempts. An ambiguous write result ends `uncertain` on its first occurrence;
   failed and uncertain items no longer block later messages in the same thread.
+- Outgoing writes keep queue order within one lane. For sends and most mutations,
+  a lane is one thread, or a conversation's top level. For reaction writes, it is
+  the reacted message. A held or in-flight item holds back only its own lane.
+  Opening the store moves live reaction rows, including such `slack_api` calls,
+  that an earlier version queued per channel into their message's lane. Each claim
+  does the same, so a row an older process queues later is ordered too. Their
+  lease, send marker and bytes stay the same.
 - Long outbound text is split into Slack-safe chunks before it enters the
   durable outbox.
 - The Widgets tab reports connection state, queue depth, failures, and recent

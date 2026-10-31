@@ -58,6 +58,7 @@ class World:
         self.replies, self.slack_error = replies, slack_error
         self.slack_requests, self.turns, self.reports = [], [], []
         self.reaction_answers = []
+        self.place_queries, self.thread_states = [], {}
 
     def slack(self, request):
         path = request.url.path.rsplit("/", 1)[-1]
@@ -78,6 +79,9 @@ class World:
             if isinstance(answer, httpx.Response):
                 return answer
             return httpx.Response(200, json=answer)
+        if path == "chat.postMessage":
+            body = json.loads(request.content)
+            return httpx.Response(200, json={"ok": True, "channel": body["channel"], "ts": f"{len(self.slack_requests)}.5"})
         raise AssertionError(f"unexpected Slack method {path}")
 
     def host(self, request):
@@ -93,7 +97,9 @@ class World:
             self.reports.append(json.loads(request.content))
             return httpx.Response(200, json={"ok": True, "recorded": True})
         if request.url.path == "/presence/place":
-            return httpx.Response(200, json={"state": getattr(self, "place_state", "active"), "label": "Slack"})
+            self.place_queries.append(dict(request.url.params))
+            state = self.thread_states.get(request.url.params.get("thread_id", ""), getattr(self, "place_state", "active"))
+            return httpx.Response(200, json={"state": state, "label": "Slack"})
         raise AssertionError(f"unexpected Host path {request.url.path}")
 
     def clients(self):
@@ -737,6 +743,35 @@ def test_silent_or_paused_place_holds_the_reaction_before_any_provider_write(tmp
     asyncio.run(run())
 
 
+def test_a_thread_paused_after_queueing_holds_its_reaction_and_an_unretained_target_stays_the_channels(tmp_path):
+    async def run():
+        store = BridgeStore(tmp_path)
+        ingest(store, message(ts="100.000001", thread_ts="99.0"), message("Ev-top", ts="200.000001"))
+        queue(store, request_id="in-thread")
+        world = World(store, tmp_path)
+        world.thread_states["99.0"] = "paused"  # that thread's own place, after queueing; the channel stays Active
+        await outbound_pass(world, passes=1)
+        assert provider_writes(world) == [] and part(store, "in-thread")["state"] == "held"
+        assert part(store, "in-thread")["error"] == "Held: Slack is paused"
+        assert world.place_queries == [{"provider": "slack", "account_id": "T1", "conversation_id": "C1", "thread_id": "99.0"}]
+        del world.thread_states["99.0"]
+        with sqlite3.connect(store.path) as db:
+            db.execute("UPDATE outbox SET available_at=0")
+        # Retained at top level, its own timestamp is its thread; unretained, nothing is inferred and the channel decides.
+        queue(store, request_id="unretained", ts="300.000001")
+        queue(store, request_id="top", ts="200.000001")
+        world.thread_states.update({"200.000001": "paused", "300.000001": "paused"})
+        await outbound_pass(world, passes=4)
+        assert part(store, "in-thread")["state"] == "delivered" and part(store, "unretained")["state"] == "delivered"
+        assert part(store, "top")["state"] == "held"
+        assert [json.loads(row[2])["timestamp"] for row in provider_writes(world)] == ["100.000001", "300.000001"]
+        assert world.place_queries[1:] == [
+            {"provider": "slack", "account_id": "T1", "conversation_id": "C1", "thread_id": "99.0"},
+            {"provider": "slack", "account_id": "T1", "conversation_id": "C1"},
+            {"provider": "slack", "account_id": "T1", "conversation_id": "C1", "thread_id": "200.000001"}]
+    asyncio.run(run())
+
+
 @pytest.mark.parametrize("later,reported", [(OLD_HOST, False), (None, False), (CAPABLE, True)])
 def test_report_frozen_on_a_capable_host_goes_only_to_a_capable_one(tmp_path, later, reported):
     async def run():
@@ -799,6 +834,389 @@ def test_generic_api_reaction_stays_an_undeclared_operation(tmp_path):
         await outbound_pass(world)
         assert part(store, "generic")["state"] == "failed" and world.reports == []
     asyncio.run(run())
+
+
+# -- One lane per reacted message -------------------------------------------------------------
+
+def send(store, request_id, *, thread_ts=""):
+    """A slack_send to C1 as the tool queues it, top-level unless a thread is named; its words are its id."""
+    store.enqueue_outbox(request_id=request_id, target="C1", thread_ts=thread_ts, chunks=[request_id],
+                         origin={"kind": "tool"}, delivery_reporting_version=1)
+
+
+def generic(store, request_id, path, *, method="POST", **arguments):
+    """A slack_api write as the tool queues it, its arguments untouched."""
+    store.enqueue_mutation(request_id=request_id, operation="generic_api", payload={
+        "method": method, "path": path, "effect": "write", "result_kind": "auto",
+        "params": arguments if method == "GET" else {}, "body": arguments if method == "POST" else {}},
+        origin={"kind": "tool"}, delivery_reporting_version=1)
+
+
+def earlier_row(store, request_id, operation="reaction_add", *, channel="C1", ts="100.000001", lane="C1:",
+                payload=None, **columns):
+    """A mutation row exactly as an earlier version left it: its channel lane, payload bytes and any state."""
+    body = payload if isinstance(payload, str) else json.dumps(payload or {"channel": channel, "ts": ts, "name": "eyes"})
+    with sqlite3.connect(store.path) as db:
+        db.execute(
+            """INSERT INTO outbox(request_id,chunk_index,chunk_count,target,thread_ts,text,ordering_key,kind,operation,
+                                  payload_json,origin_json,delivery_reporting_version,created_at,updated_at)
+               VALUES(?,0,1,?,'','',?,'mutation',?,?,'{"kind":"tool"}',1,1,1)""",
+            (request_id, channel, lane, operation, body))
+        for name, value in columns.items():
+            db.execute(f"UPDATE outbox SET {name}=? WHERE request_id=?", (value, request_id))
+
+
+def lanes(store):
+    with sqlite3.connect(store.path) as db:
+        return dict(db.execute("SELECT request_id,ordering_key FROM outbox"))
+
+
+def states(store, *request_ids):
+    return {request_id: part(store, request_id)["state"] for request_id in request_ids}
+
+
+def due(store):
+    with sqlite3.connect(store.path) as db:
+        db.execute("UPDATE outbox SET available_at=0 WHERE state='pending'")
+
+
+def sent(world):
+    """Every provider write in order: a reaction by method and message, a post by its words (GET: its query)."""
+    writes = []
+    for path, params, body in world.slack_requests:
+        if path in {"reactions.add", "reactions.remove", "chat.postMessage"}:
+            fields = json.loads(body) if body else params
+            writes.append((path, fields.get("timestamp") or fields.get("markdown_text")))
+    return writes
+
+
+def test_a_reaction_held_for_its_thread_holds_back_only_later_writes_to_its_own_message(tmp_path):
+    async def run():
+        store = BridgeStore(tmp_path)
+        ingest(store, message(ts="100.000001", thread_ts="99.0"), message("Ev-top", ts="200.000001"))
+        queue(store, request_id="held")
+        send(store, "top-level")
+        queue(store, request_id="other-message", ts="200.000001")
+        queue(store, "reaction_remove", request_id="same-message", channel=" C1 ", ts=" 100.000001 ")
+        generic(store, "same-message-api", "reactions.add", channel="C1", timestamp="100.000001", name="wave")
+        world = World(store, tmp_path)
+        world.thread_states["99.0"] = "paused"
+        await outbound_pass(world, passes=6)
+        assert states(store, "held", "top-level", "other-message", "same-message", "same-message-api") == {
+            "held": "held", "top-level": "delivered", "other-message": "delivered",
+            "same-message": "pending", "same-message-api": "pending"}
+        assert part(store, "same-message")["attempts"] == 0 == part(store, "same-message-api")["attempts"]
+        assert part(store, "top-level")["provider_message_ts"]
+        assert sent(world) == [("chat.postMessage", "top-level"), ("reactions.add", "200.000001")]
+        del world.thread_states["99.0"]
+        due(store)
+        await outbound_pass(world, passes=4)
+        assert set(states(store, "held", "same-message", "same-message-api").values()) == {"delivered"}
+        assert sent(world)[2:] == [("reactions.add", "100.000001"), ("reactions.remove", "100.000001"),
+                                   ("reactions.add", "100.000001")]
+    asyncio.run(run())
+
+
+def test_each_reaction_write_is_laned_by_its_one_message_and_every_other_write_keeps_its_lane(tmp_path):
+    store = BridgeStore(tmp_path)
+    queue(store, request_id="add", channel=" C1 ", ts=" 100.000001 ")
+    queue(store, "reaction_remove", request_id="remove")
+    queue(store, request_id="names-no-message", channel=" ", ts="100.000001")
+    generic(store, "api-post", "reactions.add", channel="C1", timestamp=" 100.000001 ", name="eyes")
+    generic(store, "api-get", "reactions.remove", method="GET", channel="C1", timestamp="100.000001", name="eyes")
+    generic(store, "api-file", "reactions.remove", file="F1", name="eyes")
+    generic(store, "api-speech", "chat.postMessage", channel="C1", text="hi")
+    store.enqueue_mutation(request_id="pin", operation="pin_add", payload={"channel": "C1", "ts": "100.000001"})
+    send(store, "top-level")
+    send(store, "reply", thread_ts="100.000001")
+    assert lanes(store) == {
+        "add": "reaction:C1:100.000001", "remove": "reaction:C1:100.000001", "names-no-message": "mutation:",
+        "api-post": "reaction:C1:100.000001", "api-get": "reaction:C1:100.000001", "api-file": "mutation:",
+        "api-speech": "C1:", "pin": "C1:", "top-level": "C1:", "reply": "C1:100.000001"}
+    with sqlite3.connect(store.path) as db:
+        bodies = dict(db.execute("SELECT request_id,payload_json FROM outbox WHERE request_id LIKE 'api-%'"))
+    assert json.loads(bodies["api-post"])["body"]["timestamp"] == " 100.000001 "  # slack_api bytes stay as given
+
+
+def test_live_rows_an_earlier_version_laned_by_channel_move_to_their_message_when_the_store_opens(tmp_path):
+    store = BridgeStore(tmp_path)
+    later = time.time() + 600
+    earlier_row(store, "held", channel=" C1 ", ts=" 100.000001 ", lane=" C1 :", last_error="Held: Slack is paused",
+                available_at=later)
+    earlier_row(store, "leased", "reaction_remove", ts="200.000001", state="leased", lease_token="old-worker",
+                lease_until=later, attempts=1)
+    earlier_row(store, "started", ts="300.000001", state="leased", lease_token="old-sender", lease_until=later,
+                send_started=1, attempts=1)
+    earlier_row(store, "api", "generic_api", payload={"method": "POST", "path": "reactions.add", "params": {},
+                                                      "body": {"channel": "C1", "timestamp": "400.000001", "name": "eyes"}})
+    for state in ("delivered", "failed", "uncertain"):
+        earlier_row(store, state, state=state)
+    earlier_row(store, "unreadable", payload="{not json")
+    earlier_row(store, "names-no-message", channel=" ", ts="")
+    earlier_row(store, "api-speech", "generic_api", payload={"method": "POST", "path": "chat.postMessage", "params": {},
+                                                             "body": {"channel": "C1", "text": "hi"}})
+    send(store, "top-level")
+
+    def everything_but_lanes():
+        with sqlite3.connect(store.path) as db:
+            db.row_factory = sqlite3.Row
+            return [{key: row[key] for key in row.keys() if key != "ordering_key"}
+                    for row in db.execute("SELECT * FROM outbox ORDER BY id")]
+    before = everything_but_lanes()
+    BridgeStore(tmp_path)  # the next process to open it
+    assert lanes(store) == {
+        "held": "reaction:C1:100.000001", "leased": "reaction:C1:200.000001", "started": "reaction:C1:300.000001",
+        "api": "reaction:C1:400.000001", "delivered": "C1:", "failed": "C1:", "uncertain": "C1:",
+        "unreadable": "C1:", "names-no-message": "C1:", "api-speech": "C1:", "top-level": "C1:"}
+    assert everything_but_lanes() == before  # leases, send markers, attempts, holds and payload bytes as they were
+
+
+def test_a_lease_an_older_worker_took_in_the_channel_lane_still_owns_its_row_and_holds_back_only_its_message(tmp_path):
+    store = BridgeStore(tmp_path)
+    earlier_row(store, "in-flight")
+    earlier_row(store, "same-message", "reaction_remove")
+    send(store, "top-level")
+    with sqlite3.connect(store.path) as db:
+        db.row_factory = sqlite3.Row
+        db.execute("UPDATE outbox SET state='leased',lease_token='stale',lease_until=?,attempts=1 "
+                   "WHERE request_id='in-flight'", (time.time() + 600,))
+        stale = BridgeStore._outbox_item(db.execute("SELECT * FROM outbox WHERE request_id='in-flight'").fetchone())
+    assert stale.ordering_key == "C1:" and stale.lease_token == "stale"  # that worker's own copy, taken before the move
+    reopened = BridgeStore(tmp_path)
+    assert lanes(reopened)["in-flight"] == lanes(reopened)["same-message"] == "reaction:C1:100.000001"
+    independent = reopened.claim_outbox(lease_seconds=60)
+    assert independent.request_id == "top-level" and reopened.claim_outbox(lease_seconds=60) is None
+    reopened.hold_outbox(stale, "Held: Slack is paused")  # its token still owns the row
+    assert part(reopened, "in-flight")["state"] == "held" and reopened.claim_outbox(lease_seconds=60) is None
+    due(reopened)
+    again = reopened.claim_outbox(lease_seconds=60)
+    assert again.request_id == "in-flight" and reopened.claim_outbox(lease_seconds=60) is None
+    reopened.complete_outbox(again.row_id, again.lease_token)
+    assert reopened.claim_outbox(lease_seconds=60).request_id == "same-message"
+
+
+def test_a_channel_laned_row_an_older_process_queues_after_the_store_opened_keeps_its_message_order(tmp_path):
+    async def run():
+        store = BridgeStore(tmp_path)
+        ingest(store, message(ts="100.000001", thread_ts="99.0"))
+        queue(store, request_id="held")
+        legacy_row(store, request_id="older-writer", operation="reaction_remove")  # " C1 :", after this store opened
+        send(store, "top-level")
+        world = World(store, tmp_path)
+        world.thread_states["99.0"] = "paused"
+        await outbound_pass(world, passes=5)
+        assert states(store, "held", "older-writer", "top-level") == {
+            "held": "held", "older-writer": "pending", "top-level": "delivered"}
+        assert lanes(store)["older-writer"] == "reaction:C1:100.000001"
+        assert sent(world) == [("chat.postMessage", "top-level")]
+        del world.thread_states["99.0"]
+        due(store)
+        await outbound_pass(world, passes=3)
+        assert sent(world)[1:] == [("reactions.add", "100.000001"), ("reactions.remove", "100.000001")]
+    asyncio.run(run())
+
+
+def test_an_add_queued_before_its_target_was_known_still_precedes_a_remove_queued_after(tmp_path):
+    async def run():
+        store = BridgeStore(tmp_path)
+        queue(store, request_id="add-unknown-target")
+        ingest(store, message(ts="100.000001", thread_ts="99.0"))  # the target's record arrives after the add
+        queue(store, "reaction_remove", request_id="remove-known-target")
+        send(store, "top-level")
+        world = World(store, tmp_path)
+        world.thread_states["99.0"] = "paused"
+        await outbound_pass(world, passes=4)
+        assert lanes(store)["add-unknown-target"] == lanes(store)["remove-known-target"]
+        assert states(store, "add-unknown-target", "remove-known-target", "top-level") == {
+            "add-unknown-target": "held", "remove-known-target": "pending", "top-level": "delivered"}
+        assert world.place_queries[0]["thread_id"] == "99.0"  # checked in the thread it now knows
+        del world.thread_states["99.0"]
+        due(store)
+        await outbound_pass(world, passes=3)
+        assert sent(world) == [("chat.postMessage", "top-level"), ("reactions.add", "100.000001"),
+                               ("reactions.remove", "100.000001")]
+    asyncio.run(run())
+
+
+def test_an_expired_attempt_in_the_channel_lane_settles_unknown_unsent_and_its_message_moves_on(tmp_path):
+    async def run():
+        store = BridgeStore(tmp_path)
+        gone = time.time() - 1
+        earlier_row(store, "crashed", state="leased", lease_token="gone", lease_until=gone, send_started=1, attempts=1)
+        earlier_row(store, "never-started", ts="200.000001", state="leased", lease_token="gone-too", lease_until=gone,
+                    attempts=1)
+        earlier_row(store, "after-crash", "reaction_remove")
+        earlier_row(store, "after-reclaim", "reaction_remove", ts="200.000001")
+        send(store, "top-level")
+        world = World(BridgeStore(tmp_path), tmp_path)
+        await outbound_pass(world, passes=6)
+        assert states(store, "crashed", "never-started", "after-crash", "after-reclaim", "top-level") == {
+            "crashed": "uncertain", "never-started": "delivered", "after-crash": "delivered",
+            "after-reclaim": "delivered", "top-level": "delivered"}
+        assert part(store, "crashed")["error"] == "send_result_unrecorded"
+        assert sent(world) == [("reactions.add", "200.000001"), ("reactions.remove", "100.000001"),
+                               ("reactions.remove", "200.000001"), ("chat.postMessage", "top-level")]
+    asyncio.run(run())
+
+
+def test_a_cancelled_reaction_write_stays_unknown_and_its_message_moves_on_as_before(tmp_path):
+    async def run():
+        store = BridgeStore(tmp_path)
+        queue(store, request_id="cancelled")
+        queue(store, "reaction_remove", request_id="same-message")
+        world = World(store, tmp_path)
+        world.reaction_answers = [asyncio.CancelledError()]
+        worker = world.outbound()
+        await _discover_reporting(worker.host, store)
+        with pytest.raises(asyncio.CancelledError):
+            await worker.process_once()
+        await worker.aclose()
+        await outbound_pass(world, passes=3)
+        assert states(store, "cancelled", "same-message") == {"cancelled": "uncertain", "same-message": "delivered"}
+        assert part(store, "cancelled")["error"] == "send_cancelled_after_dispatch"
+        assert sent(world) == [("reactions.add", "100.000001"), ("reactions.remove", "100.000001")]
+    asyncio.run(run())
+
+
+def api_payload(method, path, **arguments):
+    """A slack_api write's payload as the tool stores it, arguments under params (GET) or body (POST)."""
+    return {"method": method, "path": path, "effect": "write", "result_kind": "auto",
+            "params": arguments if method == "GET" else {}, "body": arguments if method == "POST" else {}}
+
+
+@pytest.mark.parametrize("method", ["POST", "GET"])
+def test_a_slack_api_reaction_an_older_process_queues_after_the_store_opened_waits_behind_its_held_message(tmp_path,
+                                                                                                          method):
+    async def run():
+        store = BridgeStore(tmp_path)
+        ingest(store, message(ts="100.000001", thread_ts="99.0"))
+        queue(store, request_id="held")
+        earlier_row(store, "older-api-remove", "generic_api",  # in its channel's lane, after this store opened
+                    payload=api_payload(method, "reactions.remove", channel="C1", timestamp="100.000001", name="eyes"))
+        send(store, "top-level")
+        world = World(store, tmp_path)
+        world.thread_states["99.0"] = "paused"
+        await outbound_pass(world, passes=5)
+        assert states(store, "held", "older-api-remove", "top-level") == {
+            "held": "held", "older-api-remove": "pending", "top-level": "delivered"}
+        assert part(store, "older-api-remove")["attempts"] == 0
+        assert lanes(store)["older-api-remove"] == "reaction:C1:100.000001"
+        assert sent(world) == [("chat.postMessage", "top-level")]
+        del world.thread_states["99.0"]
+        due(store)
+        await outbound_pass(world, passes=3)
+        assert sent(world)[1:] == [("reactions.add", "100.000001"), ("reactions.remove", "100.000001")]
+    asyncio.run(run())
+
+
+def test_a_live_slack_api_lease_an_older_worker_holds_keeps_back_only_its_message(tmp_path):
+    store = BridgeStore(tmp_path)
+    earlier_row(store, "older-api-add", "generic_api",  # mid-send in an older worker, queued after this store opened
+                payload=api_payload("POST", "reactions.add", channel="C1", timestamp="100.000001", name="eyes"),
+                state="leased", lease_token="older-worker", lease_until=time.time() + 600, send_started=1, attempts=1)
+    queue(store, "reaction_remove", request_id="same-message")
+    send(store, "top-level")
+    assert store.claim_outbox(lease_seconds=60).request_id == "top-level"
+    assert store.claim_outbox(lease_seconds=60) is None
+    with sqlite3.connect(store.path) as db:
+        row = db.execute("SELECT id,ordering_key,lease_token,send_started,state FROM outbox "
+                         "WHERE request_id='older-api-add'").fetchone()
+    assert row[1:] == ("reaction:C1:100.000001", "older-worker", 1, "leased")
+    store.complete_outbox(row[0], "older-worker", result={"ok": True})  # its own token still ends it
+    assert store.claim_outbox(lease_seconds=60).request_id == "same-message"
+
+
+def test_registered_slack_api_reactions_share_each_message_lane_with_the_dedicated_tools(tmp_path, tool_json):
+    async def run():
+        store = BridgeStore(tmp_path)
+        store.set_runtime(workspace_id="T1")
+        ingest(store, message(ts="100.000001", thread_ts="99.0"), message("Ev-top", ts="200.000001"))
+        api = _Api(tmp_path)
+        _load_plugin().register(api)
+
+        async def call(tool_name, /, **arguments):
+            result = api.tools[tool_name][0](**arguments)
+            answer = tool_json(await result if asyncio.iscoroutine(result) else result)
+            assert answer["state"] == "queued", answer
+        await call("slack_reaction_add", channel="C1", ts="100.000001", name="eyes", request_id="dedicated-add")
+        await call("slack_api", method="POST", path="reactions.remove", request_id="api-remove",
+                   body={"channel": "C1", "timestamp": "100.000001", "name": "eyes"})
+        await call("slack_api", method="GET", path="reactions.add", request_id="api-add",
+                   params={"channel": "C1", "timestamp": "200.000001", "name": "wave"})
+        await call("slack_reaction_remove", channel="C1", ts="200.000001", name="wave", request_id="dedicated-remove")
+        await call("slack_send", channel_or_user="C1", text="independent", request_id="top-level")
+        assert lanes(store) == {"dedicated-add": "reaction:C1:100.000001", "api-remove": "reaction:C1:100.000001",
+                                "api-add": "reaction:C1:200.000001", "dedicated-remove": "reaction:C1:200.000001",
+                                "top-level": "C1:"}
+        world = World(store, tmp_path)
+        world.thread_states["99.0"] = "paused"
+        await outbound_pass(world, passes=6)
+        assert states(store, "dedicated-add", "api-remove", "api-add", "dedicated-remove", "top-level") == {
+            "dedicated-add": "held", "api-remove": "pending", "api-add": "delivered", "dedicated-remove": "delivered",
+            "top-level": "delivered"}
+        assert sent(world) == [("reactions.add", "200.000001"), ("reactions.remove", "200.000001"),
+                               ("chat.postMessage", "independent")]
+        assert [row[1] for row in world.slack_requests if row[0] == "reactions.add"] == [
+            {"channel": "C1", "timestamp": "200.000001", "name": "wave"}]  # the GET carried its query as given
+        del world.thread_states["99.0"]
+        due(store)
+        await outbound_pass(world, passes=3)
+        assert sent(world)[3:] == [("reactions.add", "100.000001"), ("reactions.remove", "100.000001")]
+    asyncio.run(run())
+
+
+def test_concurrent_claims_never_take_two_writes_to_one_message(tmp_path):
+    first, second = BridgeStore(tmp_path), BridgeStore(tmp_path)
+    queue(first, request_id="add")
+    queue(first, "reaction_remove", request_id="remove")
+    legacy_row(first, request_id="older-writer")  # the same message, queued in its channel lane after both opened
+    queue(first, request_id="other", ts="200.000001")
+    send(first, "top-level")
+    taken = [first.claim_outbox(lease_seconds=60), second.claim_outbox(lease_seconds=60),
+             second.claim_outbox(lease_seconds=60)]
+    assert [item.request_id for item in taken] == ["add", "other", "top-level"]
+    assert first.claim_outbox(lease_seconds=60) is None and second.claim_outbox(lease_seconds=60) is None
+    second.complete_outbox(taken[0].row_id, taken[0].lease_token)
+    remove = second.claim_outbox(lease_seconds=60)
+    assert remove.request_id == "remove" and first.claim_outbox(lease_seconds=60) is None
+    first.complete_outbox(remove.row_id, remove.lease_token)
+    assert first.claim_outbox(lease_seconds=60).request_id == "older-writer"
+
+
+def test_racing_claimers_keep_each_message_in_queue_order(tmp_path):
+    import threading
+
+    store = BridgeStore(tmp_path)
+    targets = [f"{100 + index}.000001" for index in range(4)]
+    for round_ in range(3):
+        for ts in targets:
+            queue(store, ("reaction_add", "reaction_remove")[round_ % 2], ts=ts, request_id=f"{ts}/{round_}")
+        send(store, f"send/{round_}")
+    events = []
+
+    def claimer():
+        own, idle = BridgeStore(tmp_path), 0
+        while idle < 100:
+            item = own.claim_outbox(lease_seconds=60)
+            if item is None:
+                idle += 1
+                time.sleep(0.002)
+                continue
+            idle = 0
+            events.append(("start", item.request_id))
+            time.sleep(0.005)
+            events.append(("end", item.request_id))
+            own.complete_outbox(item.row_id, item.lease_token)
+    threads = [threading.Thread(target=claimer) for _ in range(4)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=60)
+    assert store.status()["outbox_delivered"] == 15
+    for ts in targets:
+        mine = [event for event in events if event[1].startswith(ts)]
+        # One at a time, in queue order: each write to a message starts only after the previous one ended.
+        assert mine == [(edge, f"{ts}/{round_}") for round_ in range(3) for edge in ("start", "end")]
 
 
 # -- Tools ------------------------------------------------------------------------------------
@@ -980,7 +1398,7 @@ def test_padded_address_names_one_message_through_dispatch_lookup_hold_and_repor
             with sqlite3.connect(store.path) as db:
                 db.execute("UPDATE outbox SET delivery_reporting_version=1")
                 row = db.execute("SELECT target,ordering_key,payload_json FROM outbox").fetchone()
-            assert row[0] == "C1" and row[1] == "C1:"
+            assert row[0] == "C1" and row[1] == "reaction:C1:100.000001"
             assert json.loads(row[2]) == {"channel": "C1", "ts": "100.000001", "name": "eyes"}
         else:
             legacy_row(store)
@@ -990,15 +1408,15 @@ def test_padded_address_names_one_message_through_dispatch_lookup_hold_and_repor
         await _discover_reporting(worker.host, store)
         real_hold = worker.host.place_hold
 
-        async def recording(account, conversation):
-            holds.append(conversation)
-            return await real_hold(account, conversation)
+        async def recording(account, conversation, **thread):
+            holds.append((conversation, thread))
+            return await real_hold(account, conversation, **thread)
         worker.host.place_hold = recording
         for _ in range(3):
             await worker.process_once()
             await asyncio.sleep(0)
         await worker.aclose()
-        assert holds == ["C1"]
+        assert holds == [("C1", {"thread_id": "99.0"})]  # the thread its receipt names, below
         assert json.loads(provider_writes(world)[0][2]) == {"channel": "C1", "timestamp": "100.000001", "name": "eyes"}
         assert part(store)["state"] == "delivered" and part(store)["target"] == "C1"
         [report] = world.reports

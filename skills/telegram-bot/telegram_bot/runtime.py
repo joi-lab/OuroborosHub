@@ -537,10 +537,11 @@ class TelegramTransportRuntime:
             reporting["explicit_completion"] = getattr(self.submitter, "presence_explicit_completion", 0)
         return reporting
 
-    async def _check_place(self, payload: Dict[str, Any]) -> None:
+    async def _check_place(self, payload: Dict[str, Any], *, thread_id: str = "") -> None:
         check = getattr(self.submitter, "place_hold", None)
         if check:
-            reason = await check(self._bot_id, str(payload.get("chat_id") or ""))
+            reason = await check(self._bot_id, str(payload.get("chat_id") or ""),
+                                 **({"thread_id": thread_id} if thread_id else {}))
             if reason:
                 raise PlaceHeld(reason)
 
@@ -570,7 +571,8 @@ class TelegramTransportRuntime:
             parameters = known.get("parameters")
             if not str(known.get("chat_id") or "").strip() or not isinstance(parameters, dict):
                 raise ValueError("Telegram reaction chat_id and parameters are required")
-            await self._check_place(known)
+            # The topic the tool's guard checked, so a topic paused after queueing holds this row too.
+            await self._check_place(known, thread_id=str(known.get("topic_id") or ""))
             self.store.checkpoint_outbox(lease.delivery_id, {**known, _REACTION_MARKER: True})
             known[_REACTION_MARKER] = True
             result = await client.operation(REACTION_METHOD, dict(parameters))

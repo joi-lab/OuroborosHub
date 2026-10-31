@@ -96,6 +96,7 @@ class Host:
         self.delivery_reporting_version = 0
         self.presence_reaction_context = self.presence_explicit_completion = 0
         self.places_version = 1
+        self.place_checks, self.thread_holds = [], {}
 
     async def discover_delivery_support(self):
         if self.identity is None:
@@ -119,8 +120,9 @@ class Host:
     async def report_delivery(self, payload):
         self.reports.append(json.loads(json.dumps(payload)))
 
-    async def place_hold(self, account_id, conversation_id):
-        return getattr(self, "hold", "")
+    async def place_hold(self, account_id, conversation_id, thread_id=""):
+        self.place_checks.append((account_id, conversation_id, thread_id))
+        return self.thread_holds.get(thread_id, getattr(self, "hold", ""))
 
 
 def world(path, provider=None, identity=CAPABLE):
@@ -613,8 +615,34 @@ def test_explicit_topic_stays_local_through_lane_guard_and_report(tmp_path):
         assert await value.process_one_outbox()
         [call] = provider_reactions(provider)
         assert "topic_id" not in call and "message_thread_id" not in call
+        assert value.submitter.place_checks == [(BOT, "-100", "5")]
         await drain_reports(value)
         assert value.submitter.reports[0]["thread_id"] == "5"
+    asyncio.run(run())
+
+
+def test_a_topic_paused_after_queueing_holds_its_reaction_while_general_goes(tmp_path):
+    async def run():
+        provider = Provider([{"ok": True, "result": True}, {"ok": True, "result": True}])
+        value = world(tmp_path, provider)
+        commit(value.store, said(chat=FORUM, topic=5, message_id=7))
+        commit(value.store, said(21, chat=FORUM, message_id=8))
+        in_topic = queue_reaction(value, request_id="topic", chat_id="-100", topic_id=5)
+        in_general = queue_reaction(value, request_id="general", chat_id="-100", message_id=8)
+        value.submitter.thread_holds["5"] = "Held: Telegram is paused"  # that topic's own place, after queueing
+        assert await value.process_one_outbox() and await value.process_one_outbox()
+        held = value.store.delivery_receipt(in_topic)
+        assert held["state"] == "held" and held["error"] == "Held: Telegram is paused" and held["attempts"] == 0
+        assert "_provider_call_started" not in value.store.outbox_payload(in_topic)
+        assert value.store.delivery_receipt(in_general)["state"] == "delivered"
+        assert [call["message_id"] for call in provider_reactions(provider)] == [8]
+        # A reaction without a topic is checked as the chat's, as before; the paused topic is named only for its own.
+        assert value.submitter.place_checks == [(BOT, "-100", "5"), (BOT, "-100", "")]
+        del value.submitter.thread_holds["5"]
+        ready_again(value.store)
+        assert await value.process_one_outbox()
+        assert value.store.delivery_receipt(in_topic)["state"] == "delivered"
+        assert [call["message_id"] for call in provider_reactions(provider)] == [8, 7]
     asyncio.run(run())
 
 

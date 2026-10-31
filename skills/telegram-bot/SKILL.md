@@ -515,7 +515,11 @@ record names an album, the receipt and report add
 `album: {media_group_id, effective_message_id: "unknown"}`. Without `album`, nothing is
 proved about albums: a target with no record may still be a member.
 
-Silent and Paused hold the write. A Host
+Silent and Paused hold the write. Just before the call the worker re-reads the place
+of the queued `topic_id`, the topic the guard checked. So a reaction queued while
+active is held once that topic's own place is Paused, even while the chat stays
+Active. A reaction queued without a topic is checked as the chat's, as before. Later
+rows for that topic wait behind the held one; General and other topics do not. A Host
 advertising `presence_explicit_completion: 1` also receives `/presence/delivery`
 with empty text, `message.kind: "operation"` and a typed `message.reaction`
 (`operation: set`, `new`, `target`, and `effect` when it took effect, with no `old`

@@ -32,6 +32,9 @@
 - Name a retained album in a reaction's receipt and report, with the member that took
   it left unknown. Keep an explicit `topic_id` for a private target with no record,
   and keep the topics a private chat has shown when a later message is outside one.
+- Recheck a queued reaction in its `topic_id`, so a topic whose own place is Paused
+  after queueing holds it. A reaction without a topic, and every other send and edit,
+  is checked as before.
 
 ## 0.9.0 — 2026-10-29
 

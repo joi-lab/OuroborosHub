@@ -477,8 +477,11 @@ class LoopbackPresenceHostAdapter:
             self.delivery_reporting_status = "unavailable"
         return self.delivery_reporting_version
 
-    async def place_hold(self, account_id: str, conversation_id: str) -> str:
-        """Recheck live policy immediately before a queued physical effect."""
+    async def place_hold(self, account_id: str, conversation_id: str, thread_id: str = "") -> str:
+        """Recheck live policy immediately before a queued physical effect.
+
+        Host excludes a thread's own place from a lookup that names no thread; one without asks as before.
+        """
         await self.discover_delivery_support()
         if not self.places_version:
             return "Held: place policy unavailable" if self.delivery_reporting_status == "unavailable" else ""
@@ -486,7 +489,8 @@ class LoopbackPresenceHostAdapter:
             response = await self._http.get(
                 f"{self.host_service_url}/presence/place",
                 headers={"X-Skill-Token": self._skill_token.use_in_request()},
-                params={"provider": "slack", "account_id": account_id, "conversation_id": conversation_id}, timeout=10,
+                params={"provider": "slack", "account_id": account_id, "conversation_id": conversation_id,
+                        **({"thread_id": thread_id} if thread_id else {})}, timeout=10,
             )
             place = await self._json_response(response)
         except (HostContractError, httpx.HTTPError):

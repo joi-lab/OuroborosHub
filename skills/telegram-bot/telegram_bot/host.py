@@ -243,13 +243,15 @@ class PresenceHostClient:
             self.presence_explicit_completion = 0
         return self.delivery_reporting_version
 
-    async def place_hold(self, account_id: str, conversation_id: str) -> str:
+    async def place_hold(self, account_id: str, conversation_id: str, thread_id: str = "") -> str:
         await self.discover_delivery_support()
         if not self.places_version:
             return "Held: place policy unavailable" if self.delivery_reporting_status == "unavailable" else ""
         try:
+            # Host excludes a thread's own place from a lookup that names no thread; one without asks as before.
             query = urllib.parse.urlencode({"provider": "telegram", "account_id": account_id,
-                                            "conversation_id": conversation_id})
+                                            "conversation_id": conversation_id,
+                                            **({"thread_id": thread_id} if thread_id else {})})
             place = await self.transport.request_json(
                 "GET", f"{self.host_base}/presence/place?{query}", headers=self._headers(),
                 payload=None, timeout_sec=10.0,

@@ -243,6 +243,109 @@ def test_pooled_worker_does_not_trust_a_changed_never_confirmed_or_refused_token
     assert "identity is unconfirmed" not in other["answers"]["plain"]["error"]
 
 
+_BLOCKED = "⚠️ RESOURCE_CONSTRAINT_BLOCKED"
+
+
+def test_telegram_reaction_queued_while_active_is_held_once_its_migrated_topic_is_paused(tmp_path):
+    facts = _run(tmp_path, "paused-thread-telegram")
+    # The owner's topic scope as core's legacy import keeps it, beneath an Active place for the whole chat.
+    assert facts["places"] == {"room": ["-100", "", "active"], "thread": ["-100", "5", "paused"]}
+    # At call time the guard reads the declared topic_id: Active admits it, Paused refuses it, General stays the room's.
+    assert facts["guard"]["topic_active"] == "" and facts["guard"]["general_paused"] == ""
+    assert facts["guard"]["topic_paused"].startswith(_BLOCKED) and "Paused" in facts["guard"]["topic_paused"]
+    # Sent while Active, asking the Host about that exact topic.
+    assert facts["active"]["receipts"] == {"active-thread": "delivered"} and facts["active"]["calls"] == {"7": 1}
+    assert facts["active"]["queries"] == [{"provider": "telegram", "account_id": "9", "conversation_id": "-100", "thread_id": "5"}]
+    # Queued while Active, the topic Paused before the worker: held, and Telegram is not asked for it.
+    paused = facts["paused"]
+    assert paused["receipts"] == {"active-thread": "delivered", "queued-while-active": "held", "room-only": "delivered"}
+    assert paused["calls"] == {"7": 1, "8": 1}
+    assert paused["held_error"].startswith("Held:") and "paused" in paused["held_error"]
+    # A reaction queued without a topic asks about the chat alone, exactly as before.
+    assert sorted(paused["queries"], key=len) == [
+        {"provider": "telegram", "account_id": "9", "conversation_id": "-100"},
+        {"provider": "telegram", "account_id": "9", "conversation_id": "-100", "thread_id": "5"}]
+    # Active again: the held row is sent once, as every hold resumes.
+    assert facts["resumed"]["receipts"]["queued-while-active"] == "delivered" and facts["resumed"]["calls"] == {"7": 2, "8": 1}
+
+
+def test_slack_reaction_queued_while_active_is_held_once_its_migrated_thread_is_paused(tmp_path):
+    facts = _run(tmp_path, "paused-thread-slack")
+    assert facts["places"] == {"room": ["C1", "", "active"], "thread": ["C1", "1.0", "paused"]}
+    # The tool declares only the channel, so the call-time guard admits a Paused thread's reply; the worker's re-read holds it.
+    assert facts["guard"] == {"reply_active": "", "reply_paused": "", "top_paused": ""}
+    assert facts["active"]["receipts"] == {"active-thread": "delivered"} and facts["active"]["writes"] == ["add 1.5"]
+    assert facts["active"]["queries"] == [{"provider": "slack", "account_id": "T1", "conversation_id": "C1", "thread_id": "1.0"}]
+    # Queued while Active, the thread Paused before the worker: held, and Slack is not asked for it.
+    paused = facts["paused"]
+    assert paused["receipts"] == {"active-thread": "delivered", "queued-while-active": "held"}
+    assert paused["writes"] == ["add 1.5"] and paused["held_error"].startswith("Held:") and "paused" in paused["held_error"]
+    assert paused["queries"] == [{"provider": "slack", "account_id": "T1", "conversation_id": "C1", "thread_id": "1.0"}]
+    # The held reaction holds back only its own message: a reaction to another message and a top-level send in that
+    # Active channel go now, with the send's receipt recorded by the Host; the same message's remove waits, never tried.
+    behind = facts["behind_hold"]
+    assert behind["receipts"] == {"queued-while-active": "held", "room-behind-hold": "delivered",
+                                  "top-level-send": "delivered", "same-message-remove": "pending"}
+    assert behind["writes"] == ["add 1.5", "add 3.0", "post independent"]
+    assert behind["remove_attempts"] == 0 and behind["send_report"] == "acked"
+    # Active again: the held add, then the remove queued behind it, once each.
+    assert facts["resumed"]["receipts"] == {"queued-while-active": "delivered", "room-behind-hold": "delivered",
+                                            "same-message-remove": "delivered"}
+    assert facts["resumed"]["writes"] == ["add 1.5", "add 3.0", "post independent", "add 1.5", "remove 1.5"]
+    # Paused again with nothing held ahead: a retained top-level target and an unretained one are the channel's and go;
+    # a reply queued while Paused passes the call-time guard and is held here.
+    again = facts["paused_again"]
+    assert again["receipts"] == {"room-retained": "delivered", "room-unretained": "delivered", "queued-while-paused": "held"}
+    assert again["writes"] == ["add 1.5", "add 3.0", "post independent", "add 1.5", "remove 1.5", "add 3.0", "add 9.0"]
+    assert again["queries"] == [
+        {"provider": "slack", "account_id": "T1", "conversation_id": "C1", "thread_id": "3.0"},
+        {"provider": "slack", "account_id": "T1", "conversation_id": "C1"},
+        {"provider": "slack", "account_id": "T1", "conversation_id": "C1", "thread_id": "1.0"}]
+
+
+def test_slack_rows_from_before_the_update_keep_each_message_in_order_and_hold_back_nothing_else(tmp_path):
+    facts = _run(tmp_path, "slack-lanes-upgrade")
+    # The previous version laned each reaction by its channel; opening the store moves live ones to their message.
+    assert facts["lanes_before"] == {"earlier-held": "C1:", "earlier-in-flight": "C1:", "earlier-crashed": "C1:",
+                                     "earlier-same-message": " C1 :", "earlier-api-in-flight": "C1:", "earlier-text": "C1:"}
+    assert facts["lanes_opened"] == {"earlier-held": "reaction:C1:1.5", "earlier-in-flight": "reaction:C1:3.0",
+                                     "earlier-crashed": "reaction:C1:9.0", "earlier-same-message": "reaction:C1:1.5",
+                                     "earlier-api-in-flight": "reaction:C1:5.0", "earlier-text": "C1:"}
+    paused = facts["paused"]
+    assert paused["receipts"] == {
+        "earlier-held": "held", "earlier-in-flight": "leased", "earlier-crashed": "uncertain",
+        "earlier-same-message": "pending", "earlier-api-in-flight": "leased", "earlier-text": "delivered",
+        "after-upgrade": "delivered", "same-as-in-flight": "pending", "target-unknown": "held", "target-known": "pending",
+        "api-same-as-in-flight": "pending", "api-get-independent": "delivered", "older-writer": "pending",
+        "older-api-writer": "pending"}
+    # Both top-level sends and a slack_api GET add to another message go at once; nothing that may have reached Slack
+    # is sent again.
+    assert paused["writes"] == ["post earlier words", "post after upgrade", "add 9.5"]
+    assert paused["reports"]["earlier-text"] == paused["reports"]["after-upgrade"] == "acked"
+    assert paused["errors"]["earlier-crashed"] == "send_result_unrecorded"
+    assert paused["errors"]["earlier-held"].startswith("Held:") and paused["errors"]["target-unknown"].startswith("Held:")
+    # Same-message writes, dedicated or slack_api, are never tried while one ahead is held or in an older worker's hands.
+    waiting = ("earlier-same-message", "same-as-in-flight", "target-known", "api-same-as-in-flight", "older-writer",
+               "older-api-writer")
+    assert {key: paused["attempts"][key] for key in waiting} == dict.fromkeys(waiting, 0)
+    # Rows an older process queued after the store opened, dedicated and slack_api, join their message's lane at a claim.
+    assert paused["lanes"]["older-writer"] == paused["lanes"]["older-api-writer"] == "reaction:C1:1.5"
+    done = facts["in_flight_done"]
+    assert {key: done["receipts"][key] for key in ("earlier-in-flight", "same-as-in-flight", "earlier-api-in-flight",
+                                                   "api-same-as-in-flight")} == dict.fromkeys(
+        ("earlier-in-flight", "same-as-in-flight", "earlier-api-in-flight", "api-same-as-in-flight"), "delivered")
+    assert done["writes"] == ["post earlier words", "post after upgrade", "add 9.5", "remove 3.0", "remove 5.0"]
+    assert facts["restarted"]["receipts"] == done["receipts"] and facts["restarted"]["writes"] == done["writes"]
+    resumed = facts["resumed"]
+    assert resumed["receipts"] == {**done["receipts"], "earlier-held": "delivered", "earlier-same-message": "delivered",
+                                   "target-unknown": "delivered", "target-known": "delivered", "older-writer": "delivered",
+                                   "older-api-writer": "delivered"}
+    # Each message in its queue order: 1.5's add, then its three removes (the last the slack_api GET);
+    # 7.0's add, queued before its record, then its remove.
+    assert resumed["writes"][5:] == ["add 1.5", "remove 1.5", "add 7.0", "remove 7.0", "remove 1.5", "remove 1.5"]
+    assert "add 9.0" not in resumed["writes"]
+
+
 # ---- subprocess -----------------------------------------------------------------------------
 
 def _core(root, connector, provider, account, conversation, *, host=CAPABLE_HOST):
@@ -315,6 +418,19 @@ async def _settle_slack(worker, store):
                               "OR report_state IN ('pending','reporting')").fetchone()[0]
         if not busy:
             return
+
+
+async def _reported(worker, store):
+    """Let history reports already due reach the real route, within bounds; a held row is not waited for."""
+    import asyncio
+    import sqlite3
+
+    for _ in range(400):
+        with sqlite3.connect(store.path) as db:
+            if not db.execute("SELECT COUNT(*) FROM outbox WHERE report_state IN ('pending','reporting')").fetchone()[0]:
+                return
+        await worker.process_once()
+        await asyncio.sleep(0.01)
 
 
 def _readback(world):
@@ -907,6 +1023,459 @@ def _worker_phase(root, token):
             "answers": answers, "dispatched": dispatched, "targets": targets, "queued_topics": topics, "requests": requests}
 
 
+def _migrated_thread(data, *, connector, provider, account, conversation, thread):
+    """A thread-scoped legacy binding imported by core's real migration, its only source of thread places."""
+    from dataclasses import asdict
+    from types import SimpleNamespace
+
+    from ouroboros import places as p, presence_bindings as b, skill_loader
+
+    endpoint = b.PresenceEndpoint(provider, account, conversation, thread)
+    binding = b.PresenceBinding(f"{1:032x}", connector, "legacy-profile", endpoint, endpoint, True)
+    source = data / "state" / b.PRESENCE_BINDINGS_FILENAME
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text(json.dumps({"schema_version": b.PRESENCE_BINDINGS_SCHEMA_VERSION,
+                                  "bindings": {binding.binding_id: asdict(binding)}}), encoding="utf-8")
+    # The old behavior skill, as core's own migration test stands it in; the transport adds no wakes here.
+    profile = SimpleNamespace(skill_dir=data, manifest=SimpleNamespace(
+        raw_extra={"presence": {"instructions": "Legacy words"}}, contributes=[]))
+    real = skill_loader.find_skill
+    skill_loader.find_skill = lambda _root, name, **_kwargs: profile if name == "legacy-profile" else None
+    try:
+        [place] = p.load_places(data)
+    finally:
+        skill_loader.find_skill = real
+    assert place.thread_id == thread and place.legacy_binding_ids == (binding.binding_id,), place
+    return place
+
+
+def _guard(data, skill, short, args):
+    """Core's real call-time place guard over this Hub's declared tool targets."""
+    from types import SimpleNamespace
+
+    import yaml
+
+    from ouroboros import extension_registry_state as registry, place_guard
+    from ouroboros.extension_surface_names import extension_surface_name
+
+    manifest = yaml.safe_load((ROOT / "skills" / skill / "SKILL.md").read_text(encoding="utf-8").split("---")[1])
+    registry._extensions[skill] = SimpleNamespace(generation_digest="g", loaded_skill=SimpleNamespace(
+        manifest=SimpleNamespace(raw_extra={"tools": manifest["tools"]})))
+    ctx = SimpleNamespace(drive_root=data, task_id="caller", task_metadata={})
+    return place_guard.dispatch_refusal(ctx, extension_surface_name(skill, short), args,
+                                        ext_tool={"skill": skill, "extension_generation": "g"})
+
+
+def _places_by_scope(data):
+    from ouroboros import places as p
+    return {("thread" if place.thread_id else "room"): [place.conversation_id, place.thread_id, place.state]
+            for place in p.load_places(data)}
+
+
+def _paused_thread_telegram(root):
+    """Queued while its topic is Active, the topic Paused before the worker; General and resume beside it."""
+    import asyncio
+    import sqlite3
+    import urllib.parse
+    from types import SimpleNamespace
+
+    import httpx
+
+    from ouroboros import places as p
+    from telegram_bot.api import TelegramClient
+    from telegram_bot.events import parse_telegram_update
+    from telegram_bot.host import PresenceHostClient, PresenceHostHTTPError
+    from telegram_bot.runtime import TelegramTransportRuntime
+    from telegram_bot.tools import make_operation_tool
+
+    data = root / "data"
+    thread = _migrated_thread(data, connector="telegram-bot", provider="telegram", account="9", conversation="-100", thread="5")
+    world = _core(root, "telegram-bot", "telegram", "9", "-100")
+    calls, queries = [], []
+
+    class Provider:
+        async def post_json(self, url, payload, timeout_sec):
+            calls.append(str(payload["message_id"]))
+            return {"ok": True, "result": True}
+
+    class HostTransport:
+        async def request_json(self, method, url, *, headers, payload, timeout_sec):
+            if "/presence/place?" in url:
+                queries.append(dict(urllib.parse.parse_qsl(url.split("?", 1)[1])))
+            async with httpx.AsyncClient(transport=world.transport, base_url="http://127.0.0.1:18877", timeout=60.0) as client:
+                response = await client.request(method, url.replace("http://127.0.0.1:18877", ""), headers=headers, json=payload)
+            body = response.json()
+            if response.status_code >= 400:
+                raise PresenceHostHTTPError(response.status_code, str(body.get("error")), body)
+            return body
+
+    state = root / "telegram-state"
+    host = PresenceHostClient(state_dir=state, token_provider=lambda: TOKEN, host_base="http://127.0.0.1:18877",
+                              transport=HostTransport())
+    runtime = TelegramTransportRuntime(state_dir=state, token_provider=lambda: "fake", logger=None, submitter=host)
+    runtime._client, runtime._client_token, runtime._bot_id = TelegramClient("fake", transport=Provider()), "fake", "9"
+    forum = {"id": -100, "type": "supergroup", "title": "Forum", "is_forum": True}
+    for update_id, message_id, topic in ((1, 7, 5), (2, 8, None)):
+        update = {"update_id": update_id, "message": {
+            "message_id": message_id, "date": 1, "chat": forum, "from": {"id": 55, "first_name": "Ann"}, "text": "words",
+            **({"message_thread_id": topic, "is_topic_message": True} if topic else {})}}
+        runtime.store.commit_update(update_id, parse_telegram_update(update, bot_account_id="9", places=True))
+    operate = make_operation_tool(SimpleNamespace(get_state_dir=lambda: str(state)), lambda: "9")
+    thumb = [{"type": "emoji", "emoji": "👍"}]
+    in_topic, in_general = {"chat_id": "-100", "message_id": 7, "topic_id": 5}, {"chat_id": "-100", "message_id": 8}
+    requests = {}
+
+    def guard(args):
+        return _guard(data, "telegram-bot", "telegram_operation",
+                      {"method": "setMessageReaction", "reaction": thumb, "request_id": "guard", **args})
+
+    def queue(request_id, args):
+        answer = operate(method="setMessageReaction", reaction=thumb, request_id=request_id, **args)
+        assert answer["state"] == "queued", answer
+        requests[request_id] = f"telegram-operation:{request_id}"
+
+    def phase(mark):
+        counts = {}
+        for message_id in calls:
+            counts[message_id] = counts.get(message_id, 0) + 1
+        return {"receipts": {key: runtime.store.delivery_receipt(value)["state"] for key, value in requests.items()},
+                "calls": counts, "queries": queries[mark:]}
+
+    def everything_due():
+        with sqlite3.connect(runtime.store.path) as db:
+            db.execute("UPDATE outbox SET available_at=0 WHERE state='pending'")
+
+    async def drain():
+        for _ in range(4):
+            await runtime.process_one_outbox()
+
+    facts = {"guard": {}}
+
+    async def work():
+        await host.discover_delivery_support()
+        facts["guard"]["topic_active"] = guard(in_topic)
+        queue("active-thread", in_topic)
+        await drain()
+        facts["active"] = phase(0)
+        mark = len(queries)
+        queue("queued-while-active", in_topic)
+        p.edit_place(data, thread.place_id, "set_state", author="owner", state="paused")
+        facts["places"] = _places_by_scope(data)
+        facts["guard"]["topic_paused"], facts["guard"]["general_paused"] = guard(in_topic), guard(in_general)
+        queue("room-only", in_general)
+        await drain()
+        facts["paused"] = {**phase(mark), "held_error": runtime.store.delivery_receipt(requests["queued-while-active"])["error"]}
+        p.edit_place(data, thread.place_id, "set_state", author="owner", state="active")
+        everything_due()
+        await drain()
+        facts["resumed"] = phase(len(queries))
+    asyncio.run(work())
+    return facts
+
+
+def _slack_tools(state):
+    """This skill's own registered tools, loaded as its package the way its tests load it: ``call(tool_name, **arguments)``."""
+    import importlib.util
+    import types
+
+    skill = ROOT / "skills" / "slack-bridge"
+    package = types.ModuleType("slack_bridge_consumer")
+    package.__path__ = [str(skill)]
+    sys.modules[package.__name__] = package
+    spec = importlib.util.spec_from_file_location("slack_bridge_consumer.plugin", skill / "plugin.py")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    tools = {}
+
+    class Api:
+        def get_state_dir(self):
+            return str(state)
+
+        def get_settings(self, keys):
+            return {key: "" for key in keys}
+
+        def register_tool(self, name, handler, **_metadata):
+            tools[name] = handler
+
+        def __getattr__(self, _name):  # companions, routes, tabs and settings sections are not under test
+            return lambda *_args, **_kwargs: None
+    module.register(Api())
+
+    def call(tool_name, /, **arguments):
+        import asyncio
+
+        result = tools[tool_name](**arguments)  # slack_api is async; it is called here outside any loop
+        return json.loads(asyncio.run(result) if asyncio.iscoroutine(result) else result)
+    return call
+
+
+def _slack_writes(writes):
+    """Slack's scripted answer for a write, recording it as ``add 1.5`` or ``post <words>``."""
+    import httpx
+
+    def provider(request):
+        method = request.url.path.rsplit("/", 1)[-1]
+        body = json.loads(request.content) if request.content else dict(request.url.params)  # GET: its query
+        if method == "chat.postMessage":
+            writes.append(f"post {body['markdown_text']}")
+            return httpx.Response(200, json={"ok": True, "channel": body["channel"], "ts": f"{len(writes)}.9"})
+        writes.append(f"{method.split('.')[1]} {body['timestamp']}")
+        return httpx.Response(200, json={"ok": True})
+    return provider
+
+
+def _paused_thread_slack(root):
+    """The same moments for Slack, plus what a held reaction holds back and a thread Paused before queueing."""
+    import asyncio
+    import sqlite3
+
+    import httpx
+
+    from ouroboros import places as p
+    from lib.events import parse_socket_envelope
+    from lib.host_adapter import LoopbackPresenceHostAdapter
+    from lib.runtime import OutboundWorker, _discover_reporting
+    from lib.slack_api import SlackClient
+    from lib.store import BridgeStore
+
+    data = root / "data"
+    thread = _migrated_thread(data, connector="slack-bridge", provider="slack", account="T1", conversation="C1", thread="1.0")
+    world = _core(root, "slack-bridge", "slack", "T1", "C1")
+    state = root / "slack-state"
+    store = BridgeStore(state)
+    store.set_runtime(workspace_id="T1")
+
+    def message(event_id, ts, **extra):
+        return {"type": "events_api", "envelope_id": event_id, "payload": {"event_id": event_id, "team_id": "T1", "event": {
+            "type": "message", "user": "U1", "channel": "C1", "channel_type": "channel", "ts": ts, "text": "words", **extra}}}
+    # Retained: the thread's root and a reply in it, and a top-level message that started no thread.
+    for envelope in (message("Ev-root", "1.0"), message("Ev-reply", "1.5", thread_ts="1.0"), message("Ev-top", "3.0")):
+        store.ingest_envelope(envelope, parse_socket_envelope(envelope, bot_user_id="U_BOT"))
+    tool = _slack_tools(state)
+    writes, queries, requests = [], [], []
+    provider = _slack_writes(writes)
+
+    class Recording(httpx.AsyncBaseTransport):
+        async def handle_async_request(self, request):
+            if request.url.path == "/presence/place":
+                queries.append(dict(request.url.params))
+            return await world.transport.handle_async_request(request)
+
+    def guard(ts):
+        return _guard(data, "slack-bridge", "slack_reaction_add", {"channel": "C1", "ts": ts, "name": "eyes"})
+
+    def queue(request_id, ts, tool_name="slack_reaction_add"):
+        answer = tool(tool_name, channel="C1", ts=ts, name="eyes", request_id=request_id)
+        assert answer["state"] == "queued", answer
+        requests.append(request_id)
+
+    def phase(mark, keys):
+        return {"receipts": {key: store.delivery_receipt(key)["parts"][0]["state"] for key in keys},
+                "writes": list(writes), "queries": queries[mark:]}
+
+    def everything_due():
+        with sqlite3.connect(store.path) as db:
+            db.execute("UPDATE outbox SET available_at=0 WHERE state='pending'")
+
+    facts = {"guard": {}}
+
+    async def work():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(provider)) as slack_http, \
+                httpx.AsyncClient(transport=Recording(), timeout=60.0) as host_http:
+            adapter = LoopbackPresenceHostAdapter(binding_id="", host_service_url="http://127.0.0.1:18877",
+                                                  skill_token=TOKEN, http_client=host_http)
+            worker = OutboundWorker(store, SlackClient("xoxb-fixture", "xapp-fixture", http_client=slack_http), adapter)
+            await _discover_reporting(adapter, store)
+
+            async def drain():
+                for _ in range(4):
+                    await worker.process_once()
+                    await asyncio.sleep(0.01)
+                await _reported(worker, store)
+            facts["guard"]["reply_active"] = guard("1.5")
+            queue("active-thread", "1.5")
+            await drain()
+            facts["active"] = phase(0, ["active-thread"])
+            mark = len(queries)
+            queue("queued-while-active", "1.5")
+            p.edit_place(data, thread.place_id, "set_state", author="owner", state="paused")
+            facts["places"] = _places_by_scope(data)
+            facts["guard"]["reply_paused"], facts["guard"]["top_paused"] = guard("1.5"), guard("3.0")
+            await drain()
+            facts["paused"] = {**phase(mark, ["active-thread", "queued-while-active"]),
+                               "held_error": store.delivery_receipt("queued-while-active")["parts"][0]["error"]}
+            # Behind the held row: a reaction to another message, a top-level send and the same message's remove.
+            queue("room-behind-hold", "3.0")
+            sent = tool("slack_send", channel_or_user="C1", text="independent", request_id="top-level-send")
+            assert sent["state"] == "queued", sent
+            queue("same-message-remove", "1.5", tool_name="slack_reaction_remove")
+            everything_due()
+            await drain()
+            behind = phase(len(queries), ["queued-while-active", "room-behind-hold", "top-level-send", "same-message-remove"])
+            facts["behind_hold"] = {"receipts": behind["receipts"], "writes": behind["writes"],
+                                    "remove_attempts": store.delivery_receipt("same-message-remove")["parts"][0]["attempts"],
+                                    "send_report": store.delivery_receipt("top-level-send")["parts"][0]["history_report_state"]}
+            p.edit_place(data, thread.place_id, "set_state", author="owner", state="active")
+            everything_due()
+            await drain()
+            resumed = phase(len(queries), ["queued-while-active", "room-behind-hold", "same-message-remove"])
+            facts["resumed"] = {"receipts": resumed["receipts"], "writes": resumed["writes"]}
+            p.edit_place(data, thread.place_id, "set_state", author="owner", state="paused")
+            mark = len(queries)
+            queue("room-retained", "3.0")
+            queue("room-unretained", "9.0")
+            queue("queued-while-paused", "1.5")
+            await drain()
+            facts["paused_again"] = phase(mark, ["room-retained", "room-unretained", "queued-while-paused"])
+            await worker.aclose()
+    asyncio.run(work())
+    return facts
+
+
+def _slack_lanes_upgrade(root):
+    """Rows the previous version queued in its channel's lane, an older writer, a late target and a restart.
+
+    The migrated thread is Paused under an Active channel throughout, until the owner resumes it.
+    """
+    import asyncio
+    import sqlite3
+    import time
+
+    import httpx
+
+    from ouroboros import places as p
+    from lib.events import parse_socket_envelope
+    from lib.host_adapter import LoopbackPresenceHostAdapter
+    from lib.runtime import OutboundWorker, _discover_reporting
+    from lib.slack_api import SlackClient
+    from lib.store import BridgeStore
+
+    data = root / "data"
+    thread = _migrated_thread(data, connector="slack-bridge", provider="slack", account="T1", conversation="C1", thread="1.0")
+    world = _core(root, "slack-bridge", "slack", "T1", "C1")
+    p.edit_place(data, thread.place_id, "set_state", author="owner", state="paused")
+    state = root / "slack-state"
+    earlier = BridgeStore(state)
+    earlier.set_runtime(workspace_id="T1", presence_delivery_version=1)  # what the running bridge had discovered
+
+    def ingest(store, event_id, ts, **extra):
+        envelope = {"type": "events_api", "envelope_id": event_id, "payload": {"event_id": event_id, "team_id": "T1", "event": {
+            "type": "message", "user": "U1", "channel": "C1", "channel_type": "channel", "ts": ts, "text": "words", **extra}}}
+        store.ingest_envelope(envelope, parse_socket_envelope(envelope, bot_user_id="U_BOT"))
+    ingest(earlier, "Ev-root", "1.0")
+    ingest(earlier, "Ev-reply", "1.5", thread_ts="1.0")
+    ingest(earlier, "Ev-top", "3.0")
+
+    def earlier_row(request_id, ts, operation="reaction_add", *, channel="C1", payload=None, **columns):
+        """A reaction row exactly as the previous version queued it: raw arguments, in its channel's lane."""
+        with sqlite3.connect(earlier.path) as db:
+            db.execute(
+                """INSERT INTO outbox(request_id,chunk_index,chunk_count,target,thread_ts,text,ordering_key,kind,operation,
+                                      payload_json,origin_json,delivery_reporting_version,created_at,updated_at)
+                   VALUES(?,0,1,?,'','',?,'mutation',?,?,'{"kind":"tool"}',1,1,1)""",
+                (request_id, channel, f"{channel}:", operation,
+                 json.dumps(payload or {"channel": channel, "ts": ts, "name": "eyes"})))
+            for name, value in columns.items():
+                db.execute(f"UPDATE outbox SET {name}=? WHERE request_id=?", (value, request_id))
+    now = time.time()
+    earlier_row("earlier-held", "1.5", last_error="Held: Slack is paused")
+    earlier_row("earlier-in-flight", "3.0", state="leased", lease_token="older-worker", lease_until=now + 600,
+                send_started=1, attempts=1)
+    earlier_row("earlier-crashed", "9.0", state="leased", lease_token="gone", lease_until=now - 1, send_started=1, attempts=1)
+    earlier_row("earlier-same-message", " 1.5 ", "reaction_remove", channel=" C1 ")
+
+    def api(method, path, ts):
+        """A slack_api reactions write as the previous version's tool stored it."""
+        arguments = {"channel": "C1", "timestamp": ts, "name": "eyes"}
+        return {"method": method, "path": path, "effect": "write", "result_kind": "auto",
+                "params": arguments if method == "GET" else {}, "body": arguments if method == "POST" else {}}
+    earlier_row("earlier-api-in-flight", "", "generic_api", payload=api("POST", "reactions.add", "5.0"), state="leased",
+                lease_token="older-api-worker", lease_until=now + 600, send_started=1, attempts=1)
+    earlier.enqueue_outbox(request_id="earlier-text", target="C1", thread_ts="", chunks=["earlier words"],
+                           origin={"kind": "tool"}, delivery_reporting_version=1)
+
+    def lanes(store):
+        with sqlite3.connect(store.path) as db:
+            return dict(db.execute("SELECT request_id,ordering_key FROM outbox"))
+    facts = {"lanes_before": lanes(earlier)}
+    store = BridgeStore(state)  # the updated bridge opens it
+    facts["lanes_opened"] = lanes(store)
+    tool = _slack_tools(state)
+
+    def queued(answer):
+        assert answer["state"] == "queued", answer
+    queued(tool("slack_send", channel_or_user="C1", text="after upgrade", request_id="after-upgrade"))
+    queued(tool("slack_reaction_remove", channel="C1", ts="3.0", name="eyes", request_id="same-as-in-flight"))
+    queued(tool("slack_reaction_add", channel="C1", ts="7.0", name="eyes", request_id="target-unknown"))
+    ingest(store, "Ev-late", "7.0", thread_ts="1.0")  # the target's record arrives after the add was queued
+    queued(tool("slack_reaction_remove", channel="C1", ts="7.0", name="eyes", request_id="target-known"))
+    queued(tool("slack_api", method="POST", path="reactions.remove", request_id="api-same-as-in-flight",
+                body={"channel": "C1", "timestamp": "5.0", "name": "eyes"}))
+    queued(tool("slack_api", method="GET", path="reactions.add", request_id="api-get-independent",
+                params={"channel": "C1", "timestamp": "9.5", "name": "eyes"}))
+    # Previous-version processes, after every open: a dedicated remove and a slack_api one, both for the held message.
+    earlier_row("older-writer", " 1.5 ", "reaction_remove", channel=" C1 ")
+    earlier_row("older-api-writer", "", "generic_api", payload=api("GET", "reactions.remove", "1.5"))
+    keys = ("earlier-held", "earlier-in-flight", "earlier-crashed", "earlier-same-message", "earlier-api-in-flight",
+            "earlier-text", "after-upgrade", "same-as-in-flight", "target-unknown", "target-known",
+            "api-same-as-in-flight", "api-get-independent", "older-writer", "older-api-writer")
+    writes = []
+    provider = _slack_writes(writes)
+
+    def phase(store):
+        parts = {key: store.delivery_receipt(key)["parts"][0] for key in keys}
+        return {"receipts": {key: part["state"] for key, part in parts.items()}, "writes": list(writes),
+                "attempts": {key: part["attempts"] for key, part in parts.items()},
+                "reports": {key: part["history_report_state"] for key, part in parts.items()},
+                "errors": {key: part["error"] for key, part in parts.items() if part["error"]}}
+
+    def everything_due(store):
+        with sqlite3.connect(store.path) as db:
+            db.execute("UPDATE outbox SET available_at=0 WHERE state='pending'")
+
+    async def work():
+        nonlocal store
+        async with httpx.AsyncClient(transport=httpx.MockTransport(provider)) as slack_http, \
+                httpx.AsyncClient(transport=world.transport, timeout=60.0) as host_http:
+            async def started(store):
+                adapter = LoopbackPresenceHostAdapter(binding_id="", host_service_url="http://127.0.0.1:18877",
+                                                      skill_token=TOKEN, http_client=host_http)
+                worker = OutboundWorker(store, SlackClient("xoxb-fixture", "xapp-fixture", http_client=slack_http), adapter)
+                await _discover_reporting(adapter, store)
+                return worker
+
+            async def drain(worker, store):
+                for _ in range(8):
+                    await worker.process_once()
+                    await asyncio.sleep(0.01)
+                await _reported(worker, store)
+            worker = await started(store)
+            await drain(worker, store)
+            facts["paused"] = {**phase(store), "lanes": lanes(store)}
+            # The older workers' own attempts end under their own tokens; only then does each message's next write go.
+            for request_id, token in (("earlier-in-flight", "older-worker"), ("earlier-api-in-flight", "older-api-worker")):
+                with sqlite3.connect(store.path) as db:
+                    in_flight = db.execute("SELECT id FROM outbox WHERE request_id=?", (request_id,)).fetchone()[0]
+                store.complete_outbox(in_flight, token, result={"ok": True})
+            await drain(worker, store)
+            facts["in_flight_done"] = phase(store)
+            # A restart while rows are held: a new process opens the store, a new worker carries on.
+            await worker.aclose()
+            store = BridgeStore(state)
+            worker = await started(store)
+            everything_due(store)
+            await drain(worker, store)
+            facts["restarted"] = phase(store)
+            p.edit_place(data, thread.place_id, "set_state", author="owner", state="active")
+            everything_due(store)
+            await drain(worker, store)
+            facts["resumed"] = phase(store)
+            await worker.aclose()
+    asyncio.run(work())
+    return facts
+
+
 def _drive(root: Path, mode: str) -> dict:
     if mode.startswith("server:"):
         _phase, token, *revoked = mode.split(":")
@@ -919,6 +1488,12 @@ def _drive(root: Path, mode: str) -> dict:
         return _telegram_known(root)
     if mode == "slack-padded":
         return _slack_padded(root)
+    if mode == "paused-thread-telegram":
+        return _paused_thread_telegram(root)
+    if mode == "paused-thread-slack":
+        return _paused_thread_slack(root)
+    if mode == "slack-lanes-upgrade":
+        return _slack_lanes_upgrade(root)
     if mode == "frozen":
         return _frozen(root)
     if mode == "frozen-held":

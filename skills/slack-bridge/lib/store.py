@@ -24,6 +24,48 @@ def _reaction_address(payload: Mapping[str, Any]) -> dict[str, Any]:
     return {**payload, **{key: str(payload.get(key) or "").strip() for key in ("channel", "ts", "name")}}
 
 
+def _reaction_lane(operation: str, payload: Mapping[str, Any]) -> str:
+    """A reaction write's FIFO lane: its one message, never the channel or a thread found later.
+
+    ``slack_api`` reactions.add/remove naming the same channel and timestamp share it, with
+    their bytes and handling unchanged. A write naming no message gets ``""``: its usual lane.
+    """
+    if operation in _REACTION_OPERATIONS:
+        address = _reaction_address(payload)
+        channel, ts = address["channel"], address["ts"]
+    elif operation == "generic_api" and payload.get("path") in {"reactions.add", "reactions.remove"}:
+        arguments = payload.get("body") if payload.get("method") == "POST" else payload.get("params")
+        arguments = arguments if isinstance(arguments, Mapping) else {}
+        channel, ts = (str(arguments.get(key) or "").strip() for key in ("channel", "timestamp"))
+    else:
+        return ""
+    return f"reaction:{channel}:{ts}" if channel and ts else ""
+
+
+def _lane_reactions_by_message(db: sqlite3.Connection) -> None:
+    """Move live reaction rows an earlier version queued in their channel's lane to their message's.
+
+    Id, lease and send marker stay, so writes to one message keep their order and an
+    attempt that may have reached Slack is still never repeated. Only rows still in an
+    older lane are read, and of ``slack_api`` rows only those naming a reactions method;
+    one naming no message, or unreadable, keeps the lane it has.
+    """
+    rows = db.execute(
+        """SELECT id,operation,payload_json FROM outbox WHERE state IN ('pending','leased')
+           AND operation IN ('reaction_add','reaction_remove','generic_api') AND ordering_key NOT LIKE 'reaction:%'
+           AND (operation<>'generic_api' OR payload_json LIKE '%"reactions.add"%'
+                OR payload_json LIKE '%"reactions.remove"%')"""
+    ).fetchall()
+    for row in rows:
+        try:
+            payload = json.loads(row["payload_json"] or "{}")
+        except json.JSONDecodeError:
+            continue
+        lane = _reaction_lane(str(row["operation"]), payload) if isinstance(payload, dict) else ""
+        if lane:
+            db.execute("UPDATE outbox SET ordering_key=? WHERE id=?", (lane, row["id"]))
+
+
 class InboxLeaseLost(RuntimeError):
     """The inbound attempt no longer owns its row; do not write with its token."""
 
@@ -338,6 +380,7 @@ class BridgeStore:
                 db.execute("UPDATE outbox SET send_started=1 WHERE state='leased'")
             db.execute("CREATE INDEX IF NOT EXISTS outbox_report_work ON outbox(report_state,report_available_at,id)")
             db.execute("CREATE INDEX IF NOT EXISTS outbox_message ON outbox(resolved_channel,provider_message_ts)")
+            _lane_reactions_by_message(db)
             db.commit()
 
     def ingest_envelope(
@@ -774,13 +817,15 @@ class BridgeStore:
         target = str(payload.get("channel") or payload.get("channel_id")
                      or arguments.get("channel") or arguments.get("channel_id") or "mutation")
         thread_ts = str(payload.get("thread_ts") or arguments.get("thread_ts") or "")
+        # A reaction held for its thread's place waits only with writes to that message.
+        lane = _reaction_lane(operation, payload) or f"{target}:{thread_ts}"
         with self._connect() as db:
             db.execute(
                 """INSERT OR IGNORE INTO outbox
                    (request_id,chunk_index,chunk_count,target,thread_ts,text,ordering_key,kind,operation,payload_json,
                     origin_json,delivery_reporting_version,created_at,updated_at)
                    VALUES(?,0,1,?,?, '', ?, 'mutation', ?, ?, ?, ?, ?, ?)""",
-                (request_id, target, thread_ts, f"{target}:{thread_ts}", operation,
+                (request_id, target, thread_ts, lane, operation,
                  json.dumps(dict(payload), ensure_ascii=False),
                  json.dumps(dict(origin or {}), ensure_ascii=False),
                  1 if delivery_reporting_version == 1 else 0, now, now),
@@ -814,6 +859,8 @@ class BridgeStore:
                        WHERE id=? AND state='leased' AND send_started=1 AND lease_until<=?""",
                     (now, report, "pending" if report else "", lost["id"], now),
                 )
+            # Opening the store moved earlier rows; this also moves one an older process queued since.
+            _lane_reactions_by_message(db)
             row = db.execute(self._claimable_sql("outbox"), {"now": now}).fetchone()
             if row is None:
                 db.commit()
@@ -842,7 +889,7 @@ class BridgeStore:
         operation, target = str(claimed["operation"] or ""), str(claimed["target"])
         payload = json.loads(claimed["payload_json"] or "{}")
         if operation in _REACTION_OPERATIONS:
-            # A row queued before enqueue did this keeps its bytes; its lane stays as queued.
+            # A row queued before enqueue did this keeps its bytes; only its lane moved to its message.
             payload = _reaction_address(payload)
             target = payload["channel"] or "mutation"
         return OutboxItem(

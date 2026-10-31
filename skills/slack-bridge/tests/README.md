@@ -88,6 +88,13 @@ workers, Slack client and adapter against scripted Slack and Host HTTP. It cover
 exact target lookup, the one narrow read on a miss, capability gating, withheld
 observations that are never replayed, applied, no-op, refused, uncertain and held
 writes, frozen reports at the moment they would be sent, and the read-only
-`slack_reactions` and `slack_thread` consumers. When the importable `ouroboros` carries the reaction validators, each fact and
+`slack_reactions` and `slack_thread` consumers. The per-message write lane is
+covered too. A held reaction holds back only later writes to its own message.
+The cases include rows an earlier version queued per channel (pending, held, leased,
+started and expired), a lease taken before the move, a row an older process queues
+after the store opened, a target recorded after enqueue, cancellation, and
+concurrent claimers. `slack_api` calls of `reactions.add` and `reactions.remove`
+are covered through the registered tool (POST and GET), and as older rows, live
+or leased, that share the dedicated tools' message lane. When the importable `ouroboros` carries the reaction validators, each fact and
 receipt also passes them; otherwise those checks are skipped. The repository's
 `tests/test_reaction_core_consumer.py` is the opt-in run through a real core's routes.
