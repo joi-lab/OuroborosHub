@@ -369,7 +369,7 @@ def register(api: Any) -> None:
         token_provider=host_token_provider,
         host_base=f"http://127.0.0.1:{host_port}",
     )
-    _RUNTIME = TelegramTransportRuntime(
+    runtime = _RUNTIME = TelegramTransportRuntime(
         state_dir=_STATE_DIR,
         token_provider=token_provider,
         logger=api,
@@ -436,7 +436,7 @@ def register(api: Any) -> None:
     )
     api.register_tool(
         "telegram_operation",
-        make_operation_tool(api, lambda: _RUNTIME.confirmed_bot()[0] if _RUNTIME is not None else ""),
+        make_operation_tool(api, runtime.recorded_bot),
         description=(
             "Queue an edit of this bot's own message, or set or clear this bot's reaction on any message it can "
             "reach, through the existing outbox. A reaction can be the whole social response, and it is not "

@@ -2593,8 +2593,8 @@
       "files": [
         {
           "path": "CHANGELOG.md",
-          "sha256": "dc3320e2e0dc8b215263698b50233c3fab87106b897d5d7d257f211d0b889f42",
-          "size": 5631
+          "sha256": "0d6504c4b9b5e0a9aa02c35af721e3893dc10aa4e7de8cc2744029d60631a97a",
+          "size": 5999
         },
         {
           "path": "FORMATTER_PROVENANCE.md",
@@ -2613,13 +2613,13 @@
         },
         {
           "path": "SKILL.md",
-          "sha256": "5037b5eea8d265ff2b3bbe41e48b365dbd49c4adc9552fcde8e19cd30e8bb0c5",
-          "size": 39473
+          "sha256": "6ca9a2f1fff0b7db10c1459a4978fb1da2c68c883296e844d497117a83616f11",
+          "size": 40242
         },
         {
           "path": "plugin.py",
-          "sha256": "4a451651ed0633d81cf7eb1f0f20b670bd52639ccfc46b9084e15e3798f12134",
-          "size": 18866
+          "sha256": "07852f99a460631c26ef31455eebb786d6bb611daeb3c02e0238cd0f999615ae",
+          "size": 18829
         },
         {
           "path": "telegram_bot/__init__.py",
@@ -2633,8 +2633,8 @@
         },
         {
           "path": "telegram_bot/custody.py",
-          "sha256": "b405803c414928ebac953978b0749bbe35e3d122f8a7b800a2e0bce9fe9455a5",
-          "size": 54651
+          "sha256": "422edebdfe244709305af764849a7bfa4a5d4ab15345f067cf126b19798eb552",
+          "size": 56169
         },
         {
           "path": "telegram_bot/delivery.py",
@@ -2663,8 +2663,8 @@
         },
         {
           "path": "telegram_bot/runtime.py",
-          "sha256": "bfdfcb079a3cd4b8db317ce8104b8810951e4c1acf6210ff6297679801b1c55b",
-          "size": 37567
+          "sha256": "4589508b2d0b3e3d4cd0f87ab3e99fc6e329be3f4af41c92dea6bf3c7477db98",
+          "size": 38644
         },
         {
           "path": "telegram_bot/settings.py",
@@ -2673,8 +2673,8 @@
         },
         {
           "path": "telegram_bot/tools.py",
-          "sha256": "8e11e8994d69ec134090bf8921975d8f0b6137a7facee13e090c36bd76e287e3",
-          "size": 13483
+          "sha256": "cb8a17170609fbe3c9106c82ce7ff2f6a30314e660bfb3ca49c32aeae863195a",
+          "size": 14082
         },
         {
           "path": "tests/conftest.py",
@@ -2753,8 +2753,8 @@
         },
         {
           "path": "tests/test_reactions.py",
-          "sha256": "adafd9bd3117cd254e20e25a04ef83833d7b927f126cc3a487ed6c8f27a9644c",
-          "size": 98581
+          "sha256": "656227ca31c2ced3e5cddb41f050e6b1cc4e7ec178909fbd9a17f47cf589b5a0",
+          "size": 98834
         },
         {
           "path": "tests/test_retained_custody.py",
@@ -2770,6 +2770,11 @@
           "path": "tests/test_words.py",
           "sha256": "f561446e91946c4d17b7edb1a39db926ed47ae4e0a58af3c79e6bf7a262b3e2e",
           "size": 11431
+        },
+        {
+          "path": "tests/test_worker_identity.py",
+          "sha256": "f4937bd80bf471f3421e7b820bf6b337f0c5104192eee6ad1fc07e096ee09f6c",
+          "size": 21451
         },
         {
           "path": "ui/icon.svg",

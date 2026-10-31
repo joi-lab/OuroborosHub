@@ -473,6 +473,17 @@ chat that has shown none stays one conversation. Until a group's next update aft
 version, its forum status is unknown, so such a target needs a `topic_id` even if
 the group has no topics.
 
+These rules read the records of the bot `getMe` last confirmed for the token
+configured now. The tool often runs in a pooled worker whose own runtime never
+polls, so that answer is kept in custody beside a digest of the token, never the
+token itself. Until `getMe` confirms the current token (a new token, one Telegram
+refused, or none), no record is read as this bot's. A group or forum
+target without a `topic_id` is then refused with `forum_topic_unknown`, which names
+the unconfirmed identity; nothing is sent. An explicit `topic_id` and a private
+target are kept as `resolution: unresolved`. A failed `getMe` that does not refuse
+the token leaves the last answer standing. This is separate from the status route,
+which reports only its own running process's bot.
+
 `telegram_receipt(operation="operation", ...)` then shows each outcome:
 
 | Provider answer | Receipt | Meaning |

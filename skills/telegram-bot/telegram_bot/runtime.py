@@ -30,6 +30,8 @@ _REACTION_REFUSALS = frozenset({400, 403})
 # permit another call. Any other answer, such as a 408 or an unreadable one, says nothing about the effect.
 _REACTION_NOT_DONE = frozenset({401, 404, 429})
 _REACTION_MARKER = "_provider_call_started"
+# Telegram's answer that this token names no bot: revoked or wrong (401), or malformed (404).
+_TOKEN_REFUSED = frozenset({401, 404})
 
 
 class PlaceHeld(RuntimeError):
@@ -134,6 +136,14 @@ class TelegramTransportRuntime:
             return "", "Bot identity is unconfirmed; check the transport status"
         return self._bot_id, ""
 
+    def recorded_bot(self) -> str:
+        """The bot getMe last confirmed for the token configured now, whichever process's runtime asked.
+
+        For tools, which also run in pooled workers whose runtime never starts. ``confirmed_bot``
+        stays this runtime's own answer, which the status route reports as not running there.
+        """
+        return self.store.confirmed_account(str(self.token_provider() or "").strip())
+
     def status_snapshot(self, custody: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         custody = self.store.status_snapshot() if custody is None else custody
         return {
@@ -212,9 +222,20 @@ class TelegramTransportRuntime:
             if self._client is not None and token == self._client_token:
                 return self._client
             client = self.client_factory(token)
-            await client.delete_webhook()
-            identity = await client.get_me()
-            self._bot_id = str(identity.get("id") or "unknown")
+            try:
+                await client.delete_webhook()
+                identity = await client.get_me()
+            except TelegramApiError as exc:
+                if exc.error_code in _TOKEN_REFUSED:
+                    self.store.forget_confirmed_bot(token)
+                raise
+            bot_id = str(identity.get("id") or "unknown")
+            # Before anything in memory changes: if the store refuses, the next call asks getMe again.
+            if _BOT_ID.fullmatch(bot_id):
+                self.store.record_confirmed_bot(token, bot_id)
+            else:
+                self.store.forget_confirmed_bot(token)
+            self._bot_id = bot_id
             username = str(identity.get("username") or "").strip()
             self._bot_username = username
             self._bot_label = f"@{username}" if username else self._bot_id

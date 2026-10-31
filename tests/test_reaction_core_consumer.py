@@ -5,10 +5,15 @@
 Without that variable, or with a core lacking the reaction fact, this is reported as skipped,
 never as passed. The connectors run unchanged (parser, store, workers, provider client, Host
 client); providers are scripted and core's own app answers over ASGI. Only skill-token
-authentication and inference are stubbed. Because a partial core deliberately does not advertise
-the capabilities yet, ``capable=True`` adds them to the ``/identity`` answer here: this proves the
-schema and route seam, not that a core is ready to advertise them, and not the sleeping-author or
-final-selection paths. The run is a subprocess whose HOME, data and settings are temporary.
+authentication and inference are stubbed. The connectors read ``/identity`` as one of three Hosts,
+whatever a core advertises today. ``OLD_HOST`` strips both capabilities. ``EXPLICIT_ONLY_HOST``
+strips the reaction context and leaves core's own answer on explicit completion, so its positive
+case is real. ``CAPABLE_HOST`` adds both as a labelled stand-in: it proves the schema and route
+seam, not that a core is ready to advertise them, and not the sleeping-author or final-selection
+paths. The worker tests load the skill through core's real loader in separate processes and call it
+through the real dispatch; only the LLM safety check and what ``urllib`` would reach (Telegram, and
+the Host answering the polling process) are stubbed. Every run is a subprocess whose HOME, data and
+settings are temporary.
 """
 from __future__ import annotations
 
@@ -23,6 +28,10 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 CORE_ENV = "OUROBOROS_PRESENCE_CORE_ROOT"
 TOKEN = "fixture-skill-token"
+# What each Host's /identity says about reactions, over core's own answer.
+OLD_HOST = {"drop": ("presence_reaction_context", "presence_explicit_completion"), "add": {}}
+EXPLICIT_ONLY_HOST = {"drop": ("presence_reaction_context",), "add": {}}
+CAPABLE_HOST = {"drop": (), "add": {"presence_reaction_context": 1, "presence_explicit_completion": 1}}  # a stand-in, not proof
 
 
 def _run(tmp_path, mode):
@@ -40,7 +49,7 @@ def _run(tmp_path, mode):
         "PYTHONDONTWRITEBYTECODE": "1", "PYTHONNOUSERSITE": "1",
     }
     for name in ("home", "app", "data", "repo"):
-        (tmp_path / name).mkdir()
+        (tmp_path / name).mkdir(exist_ok=True)
     run = subprocess.run([sys.executable, __file__, str(tmp_path), mode], env=env, cwd=tmp_path,
                          capture_output=True, text=True, timeout=300)
     assert run.returncode == 0, run.stdout[-4000:] + run.stderr[-4000:]
@@ -87,11 +96,30 @@ def test_telegram_reactions_through_the_real_routes(tmp_path):
     assert any("failed" in said for said in facts["actions"])
 
 
-def test_unadvertising_core_receives_no_reaction_from_either_connector(tmp_path):
-    facts = _run(tmp_path, "unadvertised")
+def test_old_core_receives_no_reaction_from_either_connector(tmp_path):
+    facts = _run(tmp_path, "old-host")
+    assert {"presence_reaction_context", "presence_explicit_completion"}.isdisjoint(facts["identity"])
     assert facts["slack_turns"] == ["Ev-m", "Ev-reply"] and facts["telegram_turns"] == ["telegram:9:1"]
     assert facts["slack_withheld"] == 4 and facts["telegram_withheld"] == 4
-    assert facts["reports"] == 0 and facts["slack_applied"] == "applied" and facts["telegram_applied"] == "applied"
+    assert facts["reports"] == 0 and facts["recorded"] == 0 and facts["actions"] == []
+    assert facts["slack_applied"] == "applied" and facts["telegram_applied"] == "applied"
+
+
+def test_explicit_completion_only_core_records_own_reactions_and_still_receives_none(tmp_path):
+    facts = _run(tmp_path, "explicit-host")
+    if facts["core_identity"].get("presence_explicit_completion") != 1:
+        pytest.skip("this core does not advertise explicit completion; that Host was not exercised")
+    assert facts["identity"].get("presence_explicit_completion") == 1 and "presence_reaction_context" not in facts["identity"]
+    # Nothing incoming: without the reaction context each stays in custody, as on an old Host.
+    assert facts["slack_turns"] == ["Ev-m", "Ev-reply"] and facts["telegram_turns"] == ["telegram:9:1"]
+    assert facts["slack_withheld"] == 4 and facts["telegram_withheld"] == 4
+    # Outgoing: three Slack and two Telegram receipts, each posted once and recorded as an action.
+    assert facts["reports"] == 5 and facts["recorded"] == 5
+    assert facts["actions"] == ["added reaction eyes, requested on message 1.0",
+                                "no change: reaction eyes was already present, requested on message 1.0",
+                                "failed: added reaction eyes, requested on message 1.0",
+                                "set reaction 👍, requested on message 7", "failed: set reaction 👍, requested on message 7"]
+    assert facts["slack_applied"] == "applied" and facts["telegram_applied"] == "applied"
 
 
 def test_declared_reads_pass_the_real_guard_where_writes_do_not(tmp_path):
@@ -111,8 +139,19 @@ def test_declared_reads_pass_the_real_guard_where_writes_do_not(tmp_path):
 
 def test_frozen_list_report_is_not_posted_to_a_core_that_does_not_advertise_it(tmp_path):
     facts = _run(tmp_path, "frozen-held")
+    assert "presence_explicit_completion" not in facts["identity"]
     assert facts["posts"] == 0 and facts["recorded"] == 0 and facts["acked"] is False
     assert facts["error"].startswith("Held:") and facts["provider_calls"] == 0 and facts["stored_shape"] == "list"
+
+
+def test_frozen_list_report_is_recorded_by_a_core_advertising_only_explicit_completion(tmp_path):
+    facts = _run(tmp_path, "frozen-explicit")
+    if facts["core_identity"].get("presence_explicit_completion") != 1:
+        pytest.skip("this core does not advertise explicit completion; that Host was not exercised")
+    assert facts["identity"].get("presence_explicit_completion") == 1 and "presence_reaction_context" not in facts["identity"]
+    assert facts["status"] == 200 and facts["posts"] == 1 and facts["recorded"] == 1 and facts["acked"] is True
+    assert facts["stored_shape"] == "list" and facts["provider_calls"] == 0
+    assert len(facts["actions"]) == 1 and "set reaction 👍" in facts["actions"][0]
 
 
 def test_frozen_list_report_is_recorded_typed_by_a_real_core_and_reads_as_an_action(tmp_path):
@@ -143,9 +182,70 @@ def test_slack_padded_row_reaches_the_connected_place_with_one_address(tmp_path)
     assert any("added reaction" in said for said in facts["actions"])
 
 
+def _refused(answer, code):
+    return answer.get("ok") is False and code in answer["error"]
+
+
+def _assert_unconfirmed(facts):
+    answers = facts["answers"]
+    assert facts["run_task"] is False and facts["requests"] == []
+    # Retained or not, nothing can be read as this bot's, and the refusal says why rather than "not retained here".
+    for label in ("plain", "plain_unretained", "forum_missing", "unobserved"):
+        assert _refused(answers[label], "forum_topic_unknown"), (label, answers[label])
+        assert "identity is unconfirmed" in answers[label]["error"]
+        assert "not retained here" not in answers[label]["error"] and "not observed yet" not in answers[label]["error"]
+    # What the caller supplies, and a private chat, stay queued with nothing claimed as proven.
+    for label in ("forum_right", "forum_wrong", "private_plain", "private_topic_missing", "private_topic_right"):
+        assert answers[label]["state"] == "queued", (label, answers[label])
+        assert facts["targets"][label] == "unresolved", label
+
+
+def test_pooled_worker_answers_from_the_bot_the_server_process_confirmed(tmp_path):
+    server = _run(tmp_path, "server:token-a")
+    assert server["run_task"] is True and server["confirmed"] == ["9", ""] and server["offset"] == 7
+    facts = _run(tmp_path, "worker:token-a")
+    # The process split itself: core loaded it here and never started its supervised task.
+    assert facts["server_process"] is False and facts["run_task"] is False and facts["live"] is True
+    assert facts["confirmed"] == ["", "Telegram bot not running"]
+    assert facts["status"]["connect"] is None and facts["status"]["connect_unavailable"] == "Telegram bot not running"
+    answers, guards = facts["answers"], facts["guards"]
+    assert set(guards.values()) == {""}  # the place guard admitted every call on its active place
+    assert set(facts["dispatched"].values()) == {True}  # and core's dispatch reached the handler each time
+    for label in ("plain", "plain_unretained", "forum_right", "forum_general", "private_plain", "private_topic_right"):
+        assert answers[label]["state"] == "queued", (label, answers[label])
+        assert facts["targets"][label] == "resolved", label
+    assert facts["queued_topics"]["forum_right"] == "5" and facts["queued_topics"]["plain"] is None
+    for label in ("forum_wrong", "forum_missing", "private_topic_missing", "plain_wrong"):
+        assert _refused(answers[label], "forum_topic_mismatch"), (label, answers[label])
+    assert "topic_id=5" in answers["forum_missing"]["error"] and "topic_id=9" in answers["private_topic_missing"]["error"]
+    assert _refused(answers["forum_unretained"], "forum_topic_unknown") and "is a forum" in answers["forum_unretained"]["error"]
+    assert _refused(answers["unobserved"], "forum_topic_unknown") and "not observed yet" in answers["unobserved"]["error"]
+    assert facts["requests"] == []  # no provider, Host or other request from the worker
+
+
+def test_pooled_worker_does_not_trust_a_changed_never_confirmed_or_refused_token(tmp_path):
+    _run(tmp_path, "server:token-a")
+    # The settings moved on and no server process has asked Telegram about this token.
+    _assert_unconfirmed(_run(tmp_path, "worker:token-new"))
+    # The server asked and Telegram refused it; the bot of the earlier token still does not answer for it.
+    assert _run(tmp_path, "server:token-refused")["confirmed"][0] == ""
+    _assert_unconfirmed(_run(tmp_path, "worker:token-refused"))
+    # The token Telegram confirmed before, until Telegram refuses that one too (revoked).
+    confirmed_again = _run(tmp_path, "worker:token-a")
+    assert confirmed_again["targets"]["plain"] == "resolved"
+    assert _refused(confirmed_again["answers"]["forum_wrong"], "forum_topic_mismatch")
+    assert _run(tmp_path, "server:token-a:revoked")["confirmed"][0] == ""
+    _assert_unconfirmed(_run(tmp_path, "worker:token-a"))
+    # A different bot's token is confirmed as that bot, whose records do not include the first bot's messages.
+    assert _run(tmp_path, "server:token-b")["confirmed"] == ["77", ""]
+    other = _run(tmp_path, "worker:token-b")
+    assert _refused(other["answers"]["plain"], "forum_topic_unknown") and "not observed yet" in other["answers"]["plain"]["error"]
+    assert "identity is unconfirmed" not in other["answers"]["plain"]["error"]
+
+
 # ---- subprocess -----------------------------------------------------------------------------
 
-def _core(root, connector, provider, account, conversation, *, capable=True):
+def _core(root, connector, provider, account, conversation, *, host=CAPABLE_HOST):
     from types import SimpleNamespace
 
     import httpx
@@ -172,7 +272,8 @@ def _core(root, connector, provider, account, conversation, *, capable=True):
 
     app = host_service.create_host_service_app(data, presence_runner=runner)
     inner = httpx.ASGITransport(app=app)
-    world = SimpleNamespace(data=data, woken=woken, statuses={}, refusals={}, turns=[], reports=0, recorded=0)
+    world = SimpleNamespace(data=data, woken=woken, statuses={}, refusals={}, turns=[], reports=0, recorded=0,
+                            core_identity={}, identity={})
 
     class Transport(httpx.AsyncBaseTransport):
         async def handle_async_request(self, request):
@@ -180,10 +281,12 @@ def _core(root, connector, provider, account, conversation, *, capable=True):
             response = await inner.handle_async_request(request)
             if path in {"/identity", "/presence/turn", "/presence/delivery"}:
                 body = await response.aread()
-                if path == "/identity" and capable:
-                    # The stand-in described in this module's docstring.
-                    answer = {**json.loads(body), "presence_reaction_context": 1, "presence_explicit_completion": 1}
-                    return httpx.Response(response.status_code, json=answer)
+                if path == "/identity":
+                    # The Host described in this module's docstring, over core's own answer.
+                    world.core_identity = json.loads(body)
+                    world.identity = {**{key: value for key, value in world.core_identity.items() if key not in host["drop"]},
+                                      **host["add"]}
+                    return httpx.Response(response.status_code, json=world.identity)
                 if path == "/presence/turn":
                     source = json.loads(request.content)["event"]["source_event_id"]
                     world.turns.append(source)
@@ -236,7 +339,7 @@ def _readback(world):
     return rows, reasons, actions, account_candidates
 
 
-def _slack(root, *, capable=True):
+def _slack(root, *, host=CAPABLE_HOST):
     import asyncio
     import sqlite3
 
@@ -248,7 +351,7 @@ def _slack(root, *, capable=True):
     from lib.slack_api import SlackClient
     from lib.store import BridgeStore
 
-    world = _core(root, "slack-bridge", "slack", "T1", "", capable=capable)
+    world = _core(root, "slack-bridge", "slack", "T1", "", host=host)
     store = BridgeStore(root / "slack-state")
     answers = [{"ok": True}, {"ok": False, "error": "already_reacted"}, {"ok": False, "error": "message_not_found"}]
 
@@ -300,7 +403,7 @@ def _slack(root, *, capable=True):
     return world, store, inbox
 
 
-def _telegram(root, *, capable=True):
+def _telegram(root, *, host=CAPABLE_HOST):
     import asyncio
     import json as _json
 
@@ -313,7 +416,7 @@ def _telegram(root, *, capable=True):
     from telegram_bot.tools import make_operation_tool
     from types import SimpleNamespace
 
-    world = _core(root, "telegram-bot", "telegram", "9", "", capable=capable)
+    world = _core(root, "telegram-bot", "telegram", "9", "", host=host)
     answers = [{"ok": True, "result": True}, {"ok": False, "error_code": 400, "description": "Bad Request: REACTION_INVALID"}]
 
     class Provider:
@@ -439,7 +542,7 @@ def _reads(root):
     return {**facts, "requests": requests}
 
 
-def _frozen(root, *, capable=True):
+def _frozen(root, *, host=CAPABLE_HOST):
     import asyncio
 
     import httpx
@@ -447,7 +550,7 @@ def _frozen(root, *, capable=True):
     from telegram_bot.host import PresenceHostClient, PresenceHostHTTPError
     from telegram_bot.runtime import TelegramTransportRuntime
 
-    world = _core(root, "telegram-bot", "telegram", "9", "", capable=capable)
+    world = _core(root, "telegram-bot", "telegram", "9", "", host=host)
 
     class HostTransport:
         status = 0
@@ -494,7 +597,7 @@ def _frozen(root, *, capable=True):
     return {"status": HostTransport.status, "posts": world.reports, "recorded": world.recorded, "acked": entry["acked"],
             "error": entry["error"],
             "stored_shape": type(entry["payload"]["message"]["reaction"]).__name__, "provider_calls": len(provider_calls),
-            "actions": actions}
+            "actions": actions, "core_identity": world.core_identity, "identity": world.identity}
 
 
 def _telegram_known(root):
@@ -635,7 +738,181 @@ def _slack_padded(root):
             "target": (report["message"].get("reaction") or {}).get("target")}
 
 
+# Telegram's answers behind the real client: getMe per token, then these messages for bot 9.
+_BOTS = {"token-a": {"id": 9, "is_bot": True, "username": "presence_bot"},
+         "token-b": {"id": 77, "is_bot": True, "username": "other_bot"}}
+_GROUP = {"id": -200, "type": "supergroup", "title": "Plain"}
+_FORUM = {"id": -100, "type": "supergroup", "title": "Forum", "is_forum": True}
+_DM_TOPICS = {"id": 55, "type": "private", "first_name": "Ann"}
+_DM_PLAIN = {"id": 56, "type": "private", "first_name": "Bob"}
+
+
+def _message(update_id, chat, message_id, topic=None):
+    return {"update_id": update_id, "message": {
+        "message_id": message_id, "date": 1, "chat": chat, "from": {"id": 55, "is_bot": False, "first_name": "Ann"},
+        "text": "words", **({"message_thread_id": topic, "is_topic_message": True} if topic else {})}}
+
+
+_UPDATES = [_message(1, _GROUP, 7), _message(2, _FORUM, 7, topic=5), _message(3, _FORUM, 8), _message(4, _DM_TOPICS, 3, topic=9),
+            _message(5, _DM_PLAIN, 4), {"update_id": 6, "my_chat_member": {
+                "chat": _GROUP, "from": {"id": 55, "is_bot": False}, "date": 1,
+                "old_chat_member": {"status": "left", "user": {"id": 9, "is_bot": True}},
+                "new_chat_member": {"status": "member", "user": {"id": 9, "is_bot": True}}}}]
+_WORKER_CALLS = {
+    "plain": ("-200", 7, None), "plain_wrong": ("-200", 7, 3), "plain_unretained": ("-200", 999, None),
+    "unobserved": ("-300", 2, None),
+    "forum_right": ("-100", 7, 5), "forum_wrong": ("-100", 7, 6), "forum_missing": ("-100", 7, None),
+    "forum_general": ("-100", 8, None), "forum_unretained": ("-100", 999, None),
+    "private_topic_right": ("55", 3, 9), "private_topic_missing": ("55", 3, None), "private_plain": ("56", 4, None),
+}
+
+
+def _scripted_network(requests, *, bots, updates=()):
+    """Everything the skill's urllib clients would send; ``requests`` lists what they asked for."""
+    import io
+    import time
+    import urllib.error
+    import urllib.request
+
+    def urlopen(request, timeout=None):
+        url = request.full_url
+        requests.append(url)
+        if "/bot" in url:
+            token, method = url.split("/bot", 1)[1].rsplit("/", 1)
+            bot = bots.get(token)
+            if bot is None:
+                body = json.dumps({"ok": False, "error_code": 401, "description": "Unauthorized"}).encode()
+                raise urllib.error.HTTPError(url, 401, "Unauthorized", {}, io.BytesIO(body))
+            if method == "getMe":
+                result = bot
+            elif method == "getUpdates":
+                offset = json.loads(request.data)["offset"]
+                time.sleep(0.02)
+                result = [update for update in updates if update["update_id"] >= offset]
+            else:
+                result = True
+            return io.BytesIO(json.dumps({"ok": True, "result": result}).encode())
+        if url.endswith("/identity"):
+            return io.BytesIO(json.dumps({"presence_delivery_version": 1, "places_version": 1}).encode())
+        body = json.dumps({"ok": False, "error": "Connect this place in Consciousness > Places.",
+                           "code": "place_not_connected", "field": "place", "disposition": "blocked"}).encode()
+        raise urllib.error.HTTPError(url, 409, "Conflict", {}, io.BytesIO(body))
+    urllib.request.urlopen = urlopen
+
+
+def _load_skill(root, token):
+    """This Hub's skill, reviewed, enabled and granted as a real install is, loaded by core's own reload_all."""
+    import shutil
+
+    from ouroboros import extension_loader
+    from ouroboros.config import load_settings
+    from ouroboros.skill_loader import SkillReviewState, find_skill, save_enabled, save_review_state, save_skill_grants
+
+    os.environ["OUROBOROS_RUNTIME_MODE"] = "advanced"
+    os.environ["OUROBOROS_HOST_SERVICE_PORT"] = "1"  # never the live Host's port, whatever the fakes miss
+    data, skills = root / "data", root / "skills"
+    Path(os.environ["OUROBOROS_SETTINGS_PATH"]).write_text(json.dumps({"TELEGRAM_PUBLIC_BOT_TOKEN": token}), encoding="utf-8")
+    if not skills.exists():
+        shutil.copytree(ROOT / "skills" / "telegram-bot", skills / "telegram-bot",
+                        ignore=shutil.ignore_patterns("tests", "__pycache__", "*.pyc", ".DS_Store"))
+        loaded = find_skill(data, "telegram-bot", repo_path=str(skills))
+        save_enabled(data, "telegram-bot", True)
+        save_review_state(data, "telegram-bot", SkillReviewState(status="pass", content_hash=loaded.content_hash))
+        save_skill_grants(data, "telegram-bot", ["TELEGRAM_PUBLIC_BOT_TOKEN"], content_hash=loaded.content_hash,
+                          requested_keys=["TELEGRAM_PUBLIC_BOT_TOKEN"], granted_permissions=["presence"],
+                          requested_permissions=["presence"])
+    errors = extension_loader.reload_all(data, load_settings, repo_path=str(skills))
+    assert errors.get("telegram-bot") is None, errors
+    return next(module for module in list(sys.modules.values()) if hasattr(module, "_make_telegram_send"))
+
+
+def _server_phase(root, token, revoked):
+    """The server process: core starts the skill's supervised task, which polls until the updates are committed."""
+    import asyncio
+    import threading
+    import time
+
+    from ouroboros import extension_loader
+    from ouroboros.event_bus import get_global_event_bus
+    from ouroboros.extension_companion import init_server_process_pid
+
+    requests = []
+    # A revoked token is the same string Telegram no longer answers for.
+    bots = {} if revoked else _BOTS
+    _scripted_network(requests, bots=bots, updates=_UPDATES if token == "token-a" else ())
+    init_server_process_pid()
+    loop = asyncio.new_event_loop()
+    threading.Thread(target=loop.run_forever, daemon=True).start()
+    get_global_event_bus().set_loop(loop)
+    plugin = _load_skill(root, token)
+    runtime = plugin._RUNTIME
+
+    def settled():
+        if token not in bots:
+            return runtime.status_snapshot()["runtime_state"] == "provider_error"
+        return runtime.confirmed_bot()[0] and (token != "token-a" or runtime.store.telegram_offset() > len(_UPDATES))
+
+    deadline = time.monotonic() + 60
+    while not settled():
+        assert time.monotonic() < deadline, requests
+        time.sleep(0.02)
+    facts = {"run_task": runtime._run_task is not None, "confirmed": list(runtime.confirmed_bot()),
+             "offset": runtime.store.telegram_offset()}
+    extension_loader.unload_extension("telegram-bot")
+    return facts
+
+
+def _worker_phase(root, token):
+    """A pooled worker: core's real reload_all, no supervised task, and each call through the real dispatch."""
+    import ast
+    import sqlite3
+    from types import SimpleNamespace
+
+    from ouroboros import extension_loader, place_guard, places as p, safety
+    from ouroboros.extension_companion import is_server_process
+    from ouroboros.extension_surface_names import extension_surface_name
+    from ouroboros.tools.extension_dispatch import _dispatch_extension_tool_result
+
+    requests = []
+    _scripted_network(requests, bots={})
+    safety.check_safety = lambda *_args, **_kwargs: (True, "")
+    data = root / "data"
+    plugin = _load_skill(root, token)
+    runtime = plugin._RUNTIME
+    connected = {place.conversation_id for place in p.load_places(data)}
+    for chat in {call[0] for call in _WORKER_CALLS.values()} - connected:
+        for account in ("9", "77"):
+            place = p.connect_place(data, connector="telegram-bot", provider="telegram", account_id=account, conversation_id=chat,
+                                    wakes=["any_message"])
+            p.edit_place(data, place.place_id, "set_state", author="owner", state="active")
+    name = extension_surface_name("telegram-bot", "telegram_operation")
+    ext_tool = extension_loader.get_tool(name)
+    ctx = SimpleNamespace(drive_root=data, task_id="pooled-task", task_metadata={}, messages=None)
+    guards, answers, dispatched, targets, topics = {}, {}, {}, {}, {}
+    for label, (chat, message, topic) in _WORKER_CALLS.items():
+        request_id = f"{label}-{os.getpid()}"
+        args = {"method": "setMessageReaction", "chat_id": chat, "message_id": message, "request_id": request_id,
+                "reaction": [{"type": "emoji", "emoji": "👍"}], **({"topic_id": topic} if topic else {})}
+        guards[label] = place_guard.dispatch_refusal(ctx, name, args, ext_tool=ext_tool)
+        result = _dispatch_extension_tool_result(ctx, name, ext_tool, args)
+        dispatched[label], answers[label] = result.meta.get("physical_dispatch"), ast.literal_eval(result.text)
+        with sqlite3.connect(runtime.store.path) as db:
+            row = db.execute("SELECT payload_json FROM outbox WHERE delivery_id=?", (f"telegram-operation:{request_id}",)).fetchone()
+        if row:
+            payload = json.loads(row[0])
+            targets[label], topics[label] = payload["_reaction_target"]["resolution"], payload.get("topic_id")
+    return {"server_process": is_server_process(), "run_task": runtime._run_task is not None,
+            "live": extension_loader.is_extension_live("telegram-bot", data, repo_path=str(root / "skills")),
+            "confirmed": list(runtime.confirmed_bot()), "status": plugin._status_payload(), "guards": guards,
+            "answers": answers, "dispatched": dispatched, "targets": targets, "queued_topics": topics, "requests": requests}
+
+
 def _drive(root: Path, mode: str) -> dict:
+    if mode.startswith("server:"):
+        _phase, token, *revoked = mode.split(":")
+        return _server_phase(root, token, bool(revoked))
+    if mode.startswith("worker:"):
+        return _worker_phase(root, mode.split(":")[1])
     if mode == "reads":
         return _reads(root)
     if mode == "telegram-known":
@@ -645,7 +922,9 @@ def _drive(root: Path, mode: str) -> dict:
     if mode == "frozen":
         return _frozen(root)
     if mode == "frozen-held":
-        return _frozen(root, capable=False)
+        return _frozen(root, host=OLD_HOST)
+    if mode == "frozen-explicit":
+        return _frozen(root, host=EXPLICIT_ONLY_HOST)
     if mode == "slack":
         world, store, inbox = _slack(root)
         rows, reasons, actions, candidates = _readback(world)
@@ -660,13 +939,17 @@ def _drive(root: Path, mode: str) -> dict:
         return {"woken": world.woken, "rows": rows, "reasons": reasons, "actions": actions, "receipts": receipts,
                 "recorded": world.recorded,
                 "candidates": sorted(row["platform_actor_id"] for row in candidates(world.data, _place(world.data, "telegram")))}
-    slack_world, slack_store, _ = _slack(root / "s" if (root / "s").mkdir() is None else root, capable=False)
-    telegram_world, runtime = _telegram(root / "t" if (root / "t").mkdir() is None else root, capable=False)
+    host = OLD_HOST if mode == "old-host" else EXPLICIT_ONLY_HOST
+    slack_world, slack_store, _ = _slack(root / "s" if (root / "s").mkdir() is None else root, host=host)
+    telegram_world, runtime = _telegram(root / "t" if (root / "t").mkdir() is None else root, host=host)
     return {
+        "core_identity": telegram_world.core_identity, "identity": telegram_world.identity,
         "slack_turns": slack_world.turns, "telegram_turns": telegram_world.turns,
         "slack_withheld": slack_store.status()["reactions_withheld"],
         "telegram_withheld": runtime.store.status_snapshot()["reactions_withheld"],
         "reports": slack_world.reports + telegram_world.reports,
+        "recorded": slack_world.recorded + telegram_world.recorded,
+        "actions": _readback(slack_world)[2] + _readback(telegram_world)[2],
         "slack_applied": slack_store.delivery_receipt("react-ok")["parts"][0]["provider_result"]["effect"],
         "telegram_applied": runtime.store.delivery_receipt("telegram-operation:set")["provider_receipt"]["effect"],
     }

@@ -13,6 +13,11 @@
 - Describe `setMessageReaction` correctly: it is not limited to own messages. Refuse
   more than one reaction and paid reactions, refuse a forum target without a known
   topic, and keep `topic_id` local.
+- Resolve a reaction's target the same way in a pooled worker as in the polling
+  process, from the bot `getMe` last confirmed for the current token, kept in custody
+  with a digest of that token. A changed, refused or never-confirmed token reads no
+  record: the refusal names the unconfirmed identity, and an explicit topic or a
+  private target stays `unresolved`.
 - Report own reactions as typed non-speech receipts only when the Host advertises
   `presence_explicit_completion: 1`, including reports frozen earlier, which wait
   unsent until then and go in the typed shape. Settle 400/403 at once, retry only

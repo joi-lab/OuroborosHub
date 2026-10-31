@@ -192,6 +192,14 @@ def _reaction_conversation(known: dict[str, Any], chat_id: str, message_id: int,
     """
     given = str(topic_id) if topic_id is not None else ""
     private = not chat_id.startswith("-")
+    if known.get("unconfirmed"):
+        # No record can be read as this bot's, including those that would prove a private chat's conversation.
+        if given or private:
+            return given, "unresolved"
+        raise ValueError(f"forum_topic_unknown: this bot's identity is unconfirmed for the current token, so its "
+                         f"records of chat {chat_id} cannot be read and the topic of message {message_id} is unknown; "
+                         "pass the topic_id from the event if you have it, or retry once the transport status shows "
+                         "the bot. Not sent.")
     if known["retained"]:
         if given != known["topic_id"]:
             where = f"topic {known['topic_id']}" if known["topic_id"] else "this chat's General conversation"
@@ -242,7 +250,7 @@ def make_operation_tool(api: Any, confirmed_account=lambda: ""):
                 parameters["reaction"] = _reaction_values_or_refuse(reaction)
                 parameters["is_big"] = bool(is_big)
                 account = confirmed_account()
-                known = store.reaction_target(account, target, message) if account else {"retained": False, "forum": None}
+                known = store.reaction_target(account, target, message) if account else {"unconfirmed": True}
                 local_topic_id, resolution = _reaction_conversation(known, target, message, local_topic_id)
                 reaction_target = {"message_id": str(message), "resolution": resolution}
                 album = known.get("media_group_id", "")

@@ -492,7 +492,8 @@ def test_never_observed_group_is_not_assumed_to_have_no_topics(tmp_path):
     commit(store, said())
     unconfirmed = tool(tmp_path, account="")(method="setMessageReaction", chat_id="-200", message_id=7,
                                              reaction=[THUMB], request_id="b")
-    assert unconfirmed["ok"] is False
+    assert unconfirmed["ok"] is False and "identity is unconfirmed" in unconfirmed["error"]
+    assert "not retained" not in unconfirmed["error"] and "not observed" not in unconfirmed["error"]
 
 
 def test_known_non_forum_and_private_targets_keep_working_without_a_topic(tmp_path):
@@ -515,7 +516,7 @@ def test_edit_keeps_its_separate_path_and_needs_no_topic(tmp_path):
     assert "_reaction_target" not in store.outbox_payload("telegram-operation:e")
 
 
-def test_registered_tool_reads_records_of_the_bot_getme_confirmed(tmp_path, monkeypatch):
+def test_registered_tool_reads_records_of_the_bot_getme_confirmed(tmp_path):
     from test_plugin import FakeApi
     skill = Path(__file__).resolve().parents[1]
     spec = importlib.util.spec_from_file_location("telegram_reactions_registered", skill / "plugin.py",
@@ -524,17 +525,19 @@ def test_registered_tool_reads_records_of_the_bot_getme_confirmed(tmp_path, monk
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     api = FakeApi(tmp_path)
+    api.get_settings = lambda _keys: {"TELEGRAM_PUBLIC_BOT_TOKEN": "fake-token"}
     module.register(api)
     [(_, operate, metadata)] = [row for row in api.tools if row[0] == "telegram_operation"]
     assert "own-message" not in metadata["description"] and "any message" in metadata["description"]
     store = CustodyStore(tmp_path / "custody.sqlite3")
     commit(store, said(chat=FORUM, topic=5, message_id=7))
     arguments = dict(method="setMessageReaction", chat_id="-100", message_id=7, reaction=[THUMB])
-    monkeypatch.setattr(module._RUNTIME, "confirmed_bot", lambda: (BOT, ""))
+    module._RUNTIME.store.record_confirmed_bot("fake-token", BOT)
     assert "topic_id=5" in operate(**arguments, request_id="a")["error"]
     # A retained record of another bot's message is not this bot's: it is simply unknown here.
-    monkeypatch.setattr(module._RUNTIME, "confirmed_bot", lambda: ("8", ""))
-    assert "forum_topic_unknown" in operate(**arguments, request_id="b")["error"]
+    module._RUNTIME.store.record_confirmed_bot("fake-token", "8")
+    refused = operate(**arguments, request_id="b")["error"]
+    assert "forum_topic_unknown" in refused and "identity" not in refused
     api.unload()
 
 

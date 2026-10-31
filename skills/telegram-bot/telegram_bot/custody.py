@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import pathlib
 import re
@@ -114,6 +115,13 @@ _UNMARKED_NO_EFFECT = re.compile(
     r"|(?:getMe|deleteWebhook) failed \(\w+\)): |RuntimeError: telegram token is unavailable\Z")
 # An inbox row kept on a Host that cannot hold it as context-only; it is never submitted later.
 REACTION_WITHHELD = "reaction_host_context_unavailable"
+# The bot getMe last confirmed, for tools in processes whose runtime does not poll: "<token digest>:<bot id>".
+# The digest ties it to that one token. The token itself is not stored, and this row is read only by confirmed_account.
+_CONFIRMED_BOT = "confirmed_bot"
+
+
+def _token_binding(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest() + ":"
 
 
 def _chat_forum(chat_type: Any, is_forum: Any, topic_id: Any = "") -> Optional[int]:
@@ -240,6 +248,26 @@ class CustodyStore:
     def telegram_offset(self) -> int:
         with self._connect() as conn:
             return self._metadata_int(conn, "telegram_offset")
+
+    def record_confirmed_bot(self, token: str, account_id: str) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "INSERT INTO metadata(key, value) VALUES(?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (_CONFIRMED_BOT, _token_binding(token) + account_id),
+            )
+
+    def forget_confirmed_bot(self, token: str) -> None:
+        """getMe no longer confirms this token. A record of another token is not this answer's to remove."""
+        with self._connect() as conn:
+            conn.execute("DELETE FROM metadata WHERE key=? AND value LIKE ?", (_CONFIRMED_BOT, _token_binding(token) + "%"))
+
+    def confirmed_account(self, token: str) -> str:
+        """The bot getMe last confirmed for exactly this token; ``""`` for any other token or none."""
+        with self._connect() as conn:
+            row = conn.execute("SELECT value FROM metadata WHERE key=?", (_CONFIRMED_BOT,)).fetchone()
+        binding = _token_binding(token)
+        return row["value"][len(binding):] if row is not None and row["value"].startswith(binding) else ""
 
     def claim_inbox(self, *, lease_sec: float = 90.0) -> Optional[InboxLease]:
         now = time.time()
