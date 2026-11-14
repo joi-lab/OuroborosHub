@@ -1354,6 +1354,17 @@ def kept(lists):
     return lists.read('draft')['draft'] or {}
 
 
+def left_draft(lists):
+    """The slot as a closed card left it. Closing clears the slot with a write of its own, still on its way
+    when the dialog hides: the slot is read once every draft write of the frame was answered, the last one
+    being that clear. A card that never cleared, or wrote its form again after the clear, never gets here."""
+    def cleared():
+        writes = lists.calls('POST', 'draft')
+        return lists.answered('POST', 'draft') == len(writes) and (not writes or writes[-1][2].get('draft') is None)
+    wait_until(cleared, 'the closed card cleared its draft')
+    return kept(lists)
+
+
 def resume(frame):
     """Continue the saved card. Like open_card, wait until it has read the task and takes input:
     while it reads, its body is inert, and a typed value would not reach the form."""
@@ -2159,7 +2170,7 @@ def test_link_steps_keep_their_order_over_every_read_of_the_task(lists, engine, 
             assert entry['details'].get('references', []) == stored
             if steps == 'add-drop':
                 assert entry['description'] == 'Дописано'
-            assert kept(lists) == {}, 'a card closed with everything saved leaves no draft'
+            assert left_draft(lists) == {}, 'a card closed with everything saved leaves no draft'
         finally:
             session.close()
 
@@ -2205,7 +2216,7 @@ def test_keep_mine_is_saved_after_an_unconfirmed_edit_that_had_applied(lists, en
             assert (last['changes'], last['expected']) == ({'description': 'Моя правка'}, {'description': 'Правка агента'})
             # The unconfirmed request, its one repeat (answered as a replay) and the owner's choice.
             assert len(edits()) == 3 and edits()[1][2] == edits()[0][2]
-            assert kept(lists) == {}
+            assert left_draft(lists) == {}
         finally:
             session.close()
 
@@ -2242,7 +2253,7 @@ def test_repeating_an_unconfirmed_edit_never_writes_over_a_change_found_meanwhil
             expect(card).to_be_hidden()
             assert lists.entry(target)['due']['raw'] == 'Завтра'
             assert (edits()[-1][2]['changes'], edits()[-1][2]['expected']) == ({'due': 'Завтра'}, {'due': 'Через неделю'})
-            assert len(edits()) == 3 and kept(lists) == {}
+            assert len(edits()) == 3 and left_draft(lists) == {}
         finally:
             session.close()
 
@@ -2457,7 +2468,7 @@ def test_one_address_changed_here_and_elsewhere_is_asked_about_and_a_cancelled_l
                 entry = lists.entry(target)
                 assert entry['details']['references'] == theirs, 'the link added elsewhere stays'
                 assert entry['description'] == 'Дописано'
-                assert kept(lists) == {}
+                assert left_draft(lists) == {}
                 return
             expect(asked).to_contain_text('изменили в другом месте')
             expect(asked.locator('.theirs')).to_have_text(f'«Подпись агента» — {url}')
@@ -2486,7 +2497,7 @@ def test_one_address_changed_here_and_elsewhere_is_asked_about_and_a_cancelled_l
                 expect(card).to_be_hidden()
                 assert len(lists.calls('POST', 'edit')) == sent, 'nothing was left to save'
                 assert lists.entry(target)['details']['references'] == theirs
-            assert kept(lists) == {}
+            assert left_draft(lists) == {}
         finally:
             session.close()
 
@@ -2539,7 +2550,7 @@ def test_links_that_share_one_address_are_removed_one_by_one_over_every_read(lis
             assert lists.entry(target)['details']['references'] == stays
             (edit,) = lists.calls('POST', 'edit')
             assert edit[2]['changes'] == {'details': {'references': stays}}
-            assert kept(lists) == {}
+            assert left_draft(lists) == {}
         finally:
             session.close()
 
@@ -2578,7 +2589,7 @@ def test_links_of_one_address_changed_here_and_elsewhere_are_asked_about_togethe
                 expect(card).to_be_hidden()
                 assert not lists.calls('POST', 'edit'), 'nothing was left to save'
                 assert lists.entry(target)['details']['references'] == [second, third]
-            assert kept(lists) == {}
+            assert left_draft(lists) == {}
         finally:
             session.close()
 
@@ -2641,7 +2652,7 @@ def test_a_link_change_taken_back_after_its_unconfirmed_write_is_not_what_stays_
             assert sent[2]['request_id'] != sent[0]['request_id']
             assert sent[2]['changes'] == {'details': {'references': start}}
             assert sent[2]['expected'] == {'details': {'references': theirs if trigger == 'elsewhere' else [mine]}}
-            assert kept(lists) == {}
+            assert left_draft(lists) == {}
         finally:
             session.close()
 
@@ -2697,7 +2708,7 @@ def test_a_link_value_taken_while_an_earlier_write_is_unconfirmed_is_what_stays_
                 assert len(sent) == 3 and sent[2]['request_id'] != sent[0]['request_id']
                 assert sent[2]['changes'] == {'details': {'references': [theirs]}}
                 assert sent[2]['expected'] == {'details': {'references': carried}}
-            assert kept(lists) == {}
+            assert left_draft(lists) == {}
         finally:
             session.close()
 
@@ -2748,7 +2759,7 @@ def test_a_link_stored_twice_and_put_back_after_its_unconfirmed_removal_is_not_l
             assert sent[2]['request_id'] != sent[0]['request_id']
             assert sent[2]['changes'] == {'details': {'references': [*rest, twin]}}
             assert sent[2]['expected'] == {'details': {'references': rest}}
-            assert kept(lists) == {}
+            assert left_draft(lists) == {}
         finally:
             session.close()
 
@@ -2768,6 +2779,6 @@ def test_a_new_task_keeps_its_title_exactly_as_typed(lists, engine):
             expect(card).to_be_hidden()
             assert [call[2]['text'] for call in lists.calls('POST', 'add')] == [title]
             assert not lists.calls('POST', 'edit'), 'the created title is not edited afterwards'
-            assert on_board(lists, title) == 1 and kept(lists) == {}
+            assert on_board(lists, title) == 1 and left_draft(lists) == {}
         finally:
             session.close()
